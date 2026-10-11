@@ -25,9 +25,10 @@ const EYE = {
   width: 46,
   height: 74,
   // Between the facing edges, not between the centres. Wide enough that the two eyes
-  // read as separate eyes rather than as one split shape — at the old 16 they sat
-  // almost close enough to touch.
-  gap: 24,
+  // read as separate eyes rather than as one split shape, without pushing the pair out
+  // toward the edges of the face — at 44 they start to look like they belong to a
+  // different face.
+  gap: 38,
   cy: 112, // above the orb's midpoint, so the face reads as upper-centred
 };
 

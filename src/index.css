@@ -106,10 +106,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   place-items: center;
   flex: 0 0 auto;
   width: 258px;
-  /* Only 5px taller than the 190px that held the old 128px orb. The orb grew by 16,
-     so its breathing room is a little tighter than before rather than the stage growing
-     by the full amount — on a short viewport this row is the first thing to run out. */
-  height: 195px;
+  /* Still well short of tracking the orb's growth: this row is the first thing to run
+     out on a short viewport, so the avatar absorbs the extra size out of its own
+     breathing room rather than pushing the tagline and status off the bottom. */
+  height: 202px;
   isolation: isolate;
   animation: avatar-materialize .88s cubic-bezier(.2, .75, .25, 1) .62s both;
 }
@@ -137,8 +137,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 .avatar-backlight, .listen-ring { position: absolute; top: 50%; left: 50%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
 .avatar-backlight {
   z-index: -1;
-  width: 248px;
-  height: 248px;
+  width: 275px;
+  height: 275px;
   background: radial-gradient(circle, rgba(204, 68, 0, .22) 0%, rgba(204, 68, 0, .11) 35%, rgba(204, 68, 0, .035) 59%, transparent 76%);
   filter: blur(24px);
   opacity: .82;
@@ -162,8 +162,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   display: block;
   /* The visible orb is 222/280 of this box. The ring and backlight below are sized
      against that ratio, so they stay just outside the orb rather than under it. */
-  width: 144px;
-  height: 144px;
+  width: 160px;
+  height: 160px;
   overflow: visible;
   filter: drop-shadow(0 5px 13px rgba(0, 0, 0, .18));
   animation: orb-float 6.2s ease-in-out infinite;
@@ -207,8 +207,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 }
 .listen-ring {
   z-index: 0;
-  width: 122px;
-  height: 122px;
+  width: 136px;
+  height: 136px;
   border: 1px solid rgba(255, 245, 229, .7);
   opacity: 0;
   box-shadow: 0 0 18px rgba(255, 106, 26, .24), inset 0 0 16px rgba(255, 245, 229, .12);

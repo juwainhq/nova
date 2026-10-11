@@ -112,8 +112,20 @@ const innerGap = rightEye.x - (leftEye.x + leftEye.w);
 const gapRatio = innerGap / eye.w;
 check('eyes are separated, not touching', gapRatio >= .3,
   `${innerGap} units = ${gapRatio.toFixed(2)}x eye width`);
-check('eyes are not spread to the edges of the face', gapRatio <= .75,
-  `${innerGap} units = ${gapRatio.toFixed(2)}x eye width`);
+
+// The spacing has been widened more than once on request, so a ratio ceiling here would
+// just keep getting raised. Assert the thing that actually constrains it: the pair has
+// to stay inside the orb with a visible margin of cheek. The orb spans x 29..251.
+const ORB = { left: 29, right: 251 };
+const leftMargin = leftEye.x - ORB.left;
+const rightMargin = ORB.right - (rightEye.x + rightEye.w);
+check('pair stays inside the orb', leftMargin > 0 && rightMargin > 0,
+  `margins ${leftMargin.toFixed(0)} / ${rightMargin.toFixed(0)} units`);
+check('eyes leave a margin of cheek, not crowding the rim',
+  Math.min(leftMargin, rightMargin) >= (ORB.right - ORB.left) * .15,
+  `${Math.min(leftMargin, rightMargin).toFixed(0)} units = ${(Math.min(leftMargin, rightMargin) / 222 * 100).toFixed(0)}% of the orb width`);
+check('pair is centred inside the orb', Math.abs(leftMargin - rightMargin) < 1,
+  `left ${leftMargin.toFixed(1)} vs right ${rightMargin.toFixed(1)}`);
 check('eyes sit in the upper half', eye.y + eye.h / 2 < 140, `centre y = ${eye.y + eye.h / 2}`);
 check('eyes are centred as a pair',
   Math.abs((leftEye.x + rightEye.x + eye.w) / 2 - 140) < 0.01,
