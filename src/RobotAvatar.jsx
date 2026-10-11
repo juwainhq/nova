@@ -7,28 +7,25 @@ import { APP_NAME } from './brand.js';
 // so the eye markup is layered to let each kind of motion compose without fighting:
 //
 //   .robot-eye   — the outermost group; state transforms (the happy lift) apply here
-//   .eye-tilt    — the resting lean, a plain presentation attribute
+//   .eye-drift   — slow independent rise and settle, so the eyes have some weight
 //   .eye-scale   — size: grow, squint, droop; a transitioned static transform
 //   .eye-lid     — blinking, the only animated scaleY, plus iris glow
 //
 // Separate elements keep a blink from overriding a size change: nested transforms
 // multiply, whereas sharing one element would make the animation win outright.
 //
-// The lean is a presentation attribute rather than a CSS rule on .robot-eye on
-// purpose: CSS `transform` overrides the attribute, so `.is-happy .robot-eye` would
-// silently straighten the eyes.
+// The eyes stand perfectly upright. An earlier version leaned them a few degrees the
+// same way, and it read as a squint rather than as poise at this size.
 
 // Eye geometry, in viewBox units on a 280-wide canvas. The pair is the face's focal
-// point: each pill is a quarter of the avatar's width, and the two together with the
-// narrow gap between them span a little over half of it.
+// point: each pill is about a fifth of the avatar's width, and the two together with
+// the gap between them span a little under half of it. Larger than this and they stop
+// looking like eyes and start looking like goggles.
 const EYE = {
-  width: 58,
-  height: 92,
+  width: 46,
+  height: 74,
   gap: 16, // between the facing edges, not between the centres
   cy: 112, // above the orb's midpoint, so the face reads as upper-centred
-  // Both eyes lean the same way, which is what gives the pair its attitude. 5 degrees
-  // was invisible at the 128px display size; 14 tips them over. 10 reads at both.
-  lean: 10,
 };
 
 // A gap is measured between the facing edges, so each centre sits half a gap plus
@@ -54,33 +51,30 @@ function Eye({ side, cx }) {
   const radius = EYE.width / 2;
   return (
     <g className={`robot-eye robot-eye-${side}`}>
-      <g className="eye-tilt" transform={`rotate(${EYE.lean} ${cx} ${EYE.cy})`}>
-        <g className="eye-drift">
-          <g className="eye-scale">
-            <g className="eye-lid">
-              {/* A capsule: corner radius equal to half the width, so both ends are
-                  true semicircles. The vertical gradient is the inner shadow — the
-                  well is dark where it turns away from the light at the top and lifts
-                  toward the bottom, which is what stops a solid dark shape reading as
-                  flat. */}
-              <rect
-                className="eye-iris"
-                x={x}
-                y={y}
-                width={EYE.width}
-                height={EYE.height}
-                rx={radius}
-                ry={radius}
-                fill="url(#eyeWell)"
-              />
-              {/* No highlight. A gleam this size reads as a pupil and makes the eye
-                  look like a ball; the depth comes from the well gradient instead. */}
-            </g>
+      <g className="eye-drift">
+        <g className="eye-scale">
+          <g className="eye-lid">
+            {/* A capsule: corner radius equal to half the width, so both ends are
+                true semicircles. The vertical gradient is the inner shadow — the well
+                is dark where it turns away from the light at the top and lifts toward
+                the bottom, which is what stops a solid dark shape reading as flat. */}
+            <rect
+              className="eye-iris"
+              x={x}
+              y={y}
+              width={EYE.width}
+              height={EYE.height}
+              rx={radius}
+              ry={radius}
+              fill="url(#eyeWell)"
+            />
+            {/* No highlight. A gleam this size reads as a pupil and makes the eye look
+                like a ball; the depth comes from the well gradient instead. */}
           </g>
-          {/* Inside the drift layer, so a blink and a drift never fight: the crescent
-              has to travel with the eye it replaces. */}
-          <path className="eye-crescent" d={crescentPath(cx)} stroke="#2A1C13" strokeWidth={EYE.width * 0.1} strokeLinecap="round" />
         </g>
+        {/* Inside the drift layer, so a blink and a drift never fight: the crescent
+            has to travel with the eye it replaces. */}
+        <path className="eye-crescent" d={crescentPath(cx)} stroke="#2A1C13" strokeWidth={EYE.width * 0.1} strokeLinecap="round" />
       </g>
     </g>
   );

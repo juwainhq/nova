@@ -68,9 +68,8 @@ check('has no mouthBloom filter', !/mouthBloom/.test(markup));
 check('keeps the orb body', markup.includes('class="blob-shape"'));
 check('has exactly two eyes', (markup.match(/class="robot-eye robot-eye-/g) || []).length === 2);
 check('has a left and a right eye', /robot-eye-left/.test(markup) && /robot-eye-right/.test(markup));
-check('lays eyes out as lean > drift > size > blink',
-  (markup.match(/class="eye-tilt"/g) || []).length === 2
-  && (markup.match(/class="eye-drift"/g) || []).length === 2
+check('lays eyes out as drift > size > blink',
+  (markup.match(/class="eye-drift"/g) || []).length === 2
   && (markup.match(/class="eye-scale"/g) || []).length === 2
   && (markup.match(/class="eye-lid"/g) || []).length === 2);
 check('includes a crescent shape per eye', (markup.match(/class="eye-crescent"/g) || []).length === 2);
@@ -97,8 +96,13 @@ check('both eyes are the same size',
 
 const eye = irisRects[0] ?? { x: 0, y: 0, w: 0, h: 0, rx: 0 };
 check('eyes are tall pills, not dots', eye.h > eye.w * 1.3, `h/w = ${(eye.h / eye.w).toFixed(2)}`);
-check('eyes are large — at least a quarter of the orb width', eye.w >= 52,
-  `${eye.w} units of a ~222-unit orb`);
+// The pair should carry the face without becoming goggles. Measured against an orb
+// spanning ~222 units, so this is roughly 19-24% of the width per eye.
+const eyeShareOfOrb = eye.w / 222;
+check('eyes are large enough to carry the face', eyeShareOfOrb >= .17,
+  `${eye.w}/222 = ${(eyeShareOfOrb * 100).toFixed(1)}% of the orb width`);
+check('eyes are not oversized', eyeShareOfOrb <= .24,
+  `${eye.w}/222 = ${(eyeShareOfOrb * 100).toFixed(1)}% of the orb width`);
 
 // A true capsule: corner radius is exactly half the width, so both ends are semicircles.
 check('eyes are true capsules', eye.rx === eye.w / 2, `rx ${eye.rx} vs half-width ${eye.w / 2}`);
@@ -112,19 +116,17 @@ check('eyes are centred as a pair',
   Math.abs((leftEye.x + rightEye.x + eye.w) / 2 - 140) < 0.01,
   `midpoint ${(leftEye.x + rightEye.x + eye.w) / 2}`);
 
-// Both eyes lean the same way, which is what the reference does and what gives the
-// pair its attitude; opposed signs would read as a squint instead.
-const leans = [...markup.matchAll(/class="eye-tilt" transform="rotate\((-?[\d.]+) /g)].map((m) => +m[1]);
-check('both eyes lean the same way', leans.length === 2 && leans[0] === leans[1] && leans[0] !== 0,
-  `rotate(${leans.join(', ')})`);
-// The lean must stay a presentation attribute, because a CSS `transform` on the base
-// .robot-eye rule would win over the attribute and silently straighten the eyes.
-// State rules (`.is-happy .robot-eye`) legitimately set one, so only the bare rule is
-// checked. `transform-box` and `transform-origin` do not count — they set the box.
+// The eyes must stand perfectly upright. An earlier version leaned both of them a few
+// degrees the same way and it read as a squint, so no group carries a rotation and the
+// base .robot-eye rule sets no transform for a state rule to inherit.
+check('eyes are perfectly upright', !/rotate\(/.test(markup));
+// `.is-happy .robot-eye` legitimately sets one, so only the bare rule is checked.
+// `transform-box` and `transform-origin` do not count — they set the box, not the pose.
 const baseRuleSetsTransform = [...cssCode.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(([, selector, body]) =>
   selector.split(',').map((part) => part.trim()).includes('.robot-eye')
   && /(^|[\s;])transform:/.test(body));
-check('lean is a presentation attribute, not overridable CSS', !baseRuleSetsTransform);
+check('no state rule can tilt the eyes', !baseRuleSetsTransform);
+check('no stale tilt layer in the stylesheet', !/\.eye-tilt/.test(cssCode));
 
 // ------------------------------------------------------------- inner shadow
 check('inner shadow gradient exists for the eye well', /id="eyeWell"/.test(markup));
@@ -244,7 +246,7 @@ check('reduced motion is still honoured', /@media \(prefers-reduced-motion: redu
 // A sheet of every state, built from the real CSS and the real rendered markup, so
 // the motion can be reviewed without a microphone, a model or a network.
 const STATES = [
-  ['idle', 'IDLE', 'float · eye drift · blink every 4.6s'],
+  ['idle', 'IDLE', 'float · upright eyes · drift · blink every 4.6s'],
   ['is-listening', 'LISTENING', 'bigger + brighter · 5° tilt · ring'],
   ['is-thinking', 'THINKING', 'side to side · one squint · −3% · wobble'],
   ['is-speaking', 'SPEAKING', 'wider · rapid blinks · +5% · word beat'],
