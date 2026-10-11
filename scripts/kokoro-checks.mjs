@@ -79,7 +79,9 @@ export async function verifyKokoro(check) {
   check('kokoro chunks: every character is spoken, in order', chunks.join('').replace(/\s+/g, '') === long.replace(/\s+/g, ''));
   check('kokoro chunks: ordinary sentences keep whole words', words(splitSpeechText(long.split(' Visit ')[0]).join(' ')) === words(long.split(' Visit ')[0]));
   check('kokoro chunks: a short first chunk starts speaking sooner', chunks[0].length <= KOKORO_FIRST_CHUNK_CHARS);
-  check('kokoro chunks: short replies stay one natural chunk', splitSpeechText('Hi there! How are you?').length === 1);
+  const shortReply = splitSpeechText('Hi there! How are you? I am well.');
+  check('kokoro chunks: the first sentence is alone so speech starts sooner; the rest joins one chunk', shortReply.length === 2
+    && shortReply[0] === 'Hi there!' && shortReply[1] === 'How are you? I am well.');
   check('kokoro chunks: decimals and domains do not create false sentence breaks', splitSpeechText('Version 3.5 of example.com is out.').length === 1);
   check('kokoro chunks: list lines are kept and marker-only/empty text is dropped', words(splitSpeechText('Ideas:\n- Tea\n- A walk\n-\n').join(' ')) === 'Ideas: - Tea - A walk'
     && splitSpeechText('  \n - ').length === 0);
@@ -303,8 +305,9 @@ export async function verifyKokoro(check) {
   loading.clock.tick(KOKORO_CHUNK_TIMEOUT_MS * 3);
   finishLoading(false);
   await flush();
-  check('kokoro session: if loading fails, the whole reply goes to the fallback', loading.events.result?.status === 'failed' && loading.events.result.reason === 'load'
-    && loading.events.result.remaining === loading.chunks.join(' '));
+  // Nothing was taken from the stream, so the whole reply is still there for the fallback.
+  check('kokoro session: if loading fails, nothing is taken and the reply stays for the fallback', loading.events.result?.status === 'failed' && loading.events.result.reason === 'load'
+    && loading.events.result.remaining === '' && loading.engine.jobs.length === 0);
 
   const blocked = session({ audio: { suspended: true, rejectResume: true } });
   await flush();
@@ -364,7 +367,9 @@ export async function verifyKokoro(check) {
   };
 
   const app = await kokoroUi();
-  check('kokoro App: loads on app load and shows Bella under the avatar while loading', label(app) === 'Bella · Kokoro AI · loading' && app.workers.length === 0);
+  check('kokoro App: loads on app load and shows Bella under the avatar while loading', label(app) === 'Bella · Kokoro AI' && app.workers.length === 0);
+  check('kokoro App: a tiny "warming up..." indicator shows while Kokoro loads', app.find('kokoro-warmup')?.props.children === 'warming up...'
+    && app.find('kokoro-warmup')?.props.role === 'status');
   app.clock.tick();
   await app.settle();
   check('kokoro App: a module worker starts loading Kokoro', app.workers.length === 1 && app.workers[0].options?.type === 'module'
@@ -373,9 +378,9 @@ export async function verifyKokoro(check) {
   app.flush();
   check('kokoro App: the label settles on the Kokoro voice once ready', label(app) === 'Bella · Kokoro AI');
   await ask(app);
-  const [chunk] = generateMessages(app);
-  check('kokoro App: replies go through Kokoro with af_bella, not Web Speech', chunk?.voice === 'af_bella' && words(chunk.text) === words(ANSWER)
-    && app.utterances.length === 0);
+  const [chunk, rest] = generateMessages(app);
+  check('kokoro App: replies go through Kokoro with af_bella, not Web Speech', chunk?.voice === 'af_bella' && rest?.voice === 'af_bella'
+    && words(generateMessages(app).map((message) => message.text).join(' ')) === words(ANSWER) && app.utterances.length === 0);
   check('kokoro App: generation shows as thinking, not speaking', atStage(app, 'thinking'));
   await reply(app, chunk);
   const context = kokoroContext(app);
@@ -384,7 +389,8 @@ export async function verifyKokoro(check) {
   app.clock.tick(50);
   check('kokoro App: eyes pulse from the audio while it plays', app.avatarElement.style.getPropertyValue('--audio-pulse') === '1.000'
     && app.avatarElement.classList.contains('speech-boundary-active'));
-  context.sources[0].finish();
+  await reply(app, rest);
+  context.sources.forEach((source) => source.finish());
   await app.settle();
   check('kokoro App: playback end stops the pulse, finishes speaking and publishes cards', atStage(app, 'ready')
     && app.avatarElement.style.getPropertyValue('--audio-pulse') === '' && !app.avatarElement.classList.contains('speech-boundary-active')
@@ -407,8 +413,9 @@ export async function verifyKokoro(check) {
   panel.find('test-voice-button').props.onClick();
   app.flush();
   await app.settle();
-  const preview = generateMessages(app).at(-1);
-  check('kokoro settings: Test Voice previews the unsaved voice with the sample phrase', preview?.voice === 'af_sarah' && preview.text === TTS_TEST_TEXT);
+  const preview = generateMessages(app).slice(2);
+  check('kokoro settings: Test Voice previews the unsaved voice with the sample phrase', preview.length > 0 && preview.every((message) => message.voice === 'af_sarah')
+    && preview.map((message) => message.text).join(' ') === TTS_TEST_TEXT);
   panel.nodes().find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
   app.flush();
   check('kokoro settings: saving persists the Kokoro voice and updates the label', app.storage.getItem(KOKORO_VOICE_KEY) === 'af_sarah'
@@ -418,7 +425,7 @@ export async function verifyKokoro(check) {
   check('kokoro App: unmount terminates the worker and clears every timer', app.workers[0].terminated && app.clock.pending === 0);
 
   const saved = await createAppHarness({ kokoro: true, storage: createStorageDouble({ [KOKORO_VOICE_KEY]: 'bf_emma' }) });
-  check('kokoro App: a saved Kokoro voice survives reload', label(saved) === 'Emma · Kokoro AI · loading');
+  check('kokoro App: a saved Kokoro voice survives reload', label(saved) === 'Emma · Kokoro AI');
   saved.unmount();
 
   const failed = await kokoroUi();

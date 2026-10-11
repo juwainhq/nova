@@ -33,8 +33,15 @@ import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
   createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
 } from './kokoro.js';
+import { createSpeechStream, textSpeechStream } from './speech-stream.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
+// Short replies for a fast first word. NOVA calls Ollama's OpenAI-compatible
+// endpoint, which has no `num_predict` field (it would be silently ignored).
+// Ollama maps `max_tokens` onto its native `num_predict` option. Without explicit
+// values that endpoint also defaults temperature and top_p to 1.0.
+const OLLAMA_NUM_PREDICT = 80;
+const OLLAMA_SAMPLING = Object.freeze({ max_tokens: OLLAMA_NUM_PREDICT, temperature: 0.7, top_p: 0.9 });
 
 // Safety net for engines that lose an utterance's end event, never start a queued
 // one, or wedge mid-reply (Chrome's long network-voice bug). Without it NOVA stays
@@ -171,7 +178,9 @@ function MicIcon({ stopped = false }) {
   );
 }
 
-async function readChatCompletionStream(response) {
+// Reads the SSE stream. `onDelta` gets each piece of text; `onChunk` runs after
+// each network chunk, so speech can start while the rest is still generating.
+async function readChatCompletionStream(response, { onDelta = () => {}, onChunk = () => {} } = {}) {
   if (!response.body) throw new Error(OLLAMA_REPLY_ERRORS.noStream);
 
   const reader = response.body.getReader();
@@ -180,6 +189,7 @@ async function readChatCompletionStream(response) {
   let answer = '';
   let readerDone = false;
   let streamDone = false;
+  let finishReason = null;
 
   const consumeLine = (line) => {
     const trimmed = line.trim();
@@ -199,7 +209,8 @@ async function readChatCompletionStream(response) {
     }
     if (chunk.error) throw ollamaError(chunk.error.message || OLLAMA_REPLY_ERRORS.interrupted);
     const delta = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content;
-    if (typeof delta === 'string') answer += delta;
+    if (typeof delta === 'string') { answer += delta; onDelta(delta); }
+    finishReason = chunk.choices?.[0]?.finish_reason || finishReason;
   };
 
   while (!readerDone && !streamDone) {
@@ -213,13 +224,14 @@ async function readChatCompletionStream(response) {
       buffer = buffer.slice(newline + 1);
       newline = buffer.indexOf('\n');
     }
+    if (!streamDone) onChunk();
   }
 
   if (!streamDone && buffer.trim()) consumeLine(buffer);
   if (streamDone && !readerDone) await reader.cancel().catch(() => {});
   const completeAnswer = answer.trim();
   if (!completeAnswer) throw new Error(OLLAMA_REPLY_ERRORS.emptyReply);
-  return completeAnswer;
+  return { answer: completeAnswer, finishReason };
 }
 
 // Web Speech voices load asynchronously: Chrome returns an empty list on the first
@@ -676,9 +688,9 @@ function App() {
   const kokoroAudioRef = useRef(null);
   const preferredVoice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
   const kokoroVoiceName = `${kokoroVoice(settings.kokoroVoice).name} · Kokoro AI`;
-  // No live percentage here: the label is announced, and progress lives in Settings.
+  // Warm-up shows as its own tiny indicator; download progress lives in Settings.
   const activeVoiceName = speechVoiceName || (kokoroActive
-    ? `${kokoroVoiceName}${kokoroStatus.state === 'loading' ? ' · loading' : ''}`
+    ? kokoroVoiceName
     : speechAvailable
       ? (preferredVoice ? preferredVoice.name || 'Unnamed voice' : 'Browser default')
       : "Voice isn’t available here");
@@ -861,6 +873,8 @@ function App() {
     const intent = parseMemoryIntent(prompt);
     const imageQuery = intent ? null : imageSearchQuery(prompt);
 
+    let speech = null;
+    let stream = null;
     try {
       let answer;
       if (intent) {
@@ -914,14 +928,27 @@ function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
-          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true }),
+          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true, ...OLLAMA_SAMPLING }),
         });
         if (!result.ok) {
           const payload = await result.json().catch(() => ({}));
           throw ollamaError(payload.error?.message, result.status);
         }
-        answer = await readChatCompletionStream(result);
-        if (controller.signal.aborted) return;
+        // Speak the first complete sentence while the rest is still generating.
+        const replyStream = createSpeechStream();
+        stream = replyStream;
+        const startSpeaking = () => {
+          if (!speech && replyStream.pending && !controller.signal.aborted) speech = speakRef.current?.(replyStream) ?? null;
+        };
+        const reply = await readChatCompletionStream(result, {
+          onDelta: (delta) => replyStream.push(delta),
+          onChunk: () => { replyStream.flush(); startSpeaking(); },
+        });
+        if (controller.signal.aborted) { replyStream.cancel(); return; }
+        // At the token limit the last sentence is unfinished: it isn't spoken or kept.
+        replyStream.end({ cutOff: reply.finishReason === 'length' });
+        answer = replyStream.text || reply.answer;
+        startSpeaking();
         conversationRef.current = [
           ...conversation,
           { role: 'user', content: prompt },
@@ -930,12 +957,15 @@ function App() {
       }
       if (controller.signal.aborted) return;
       setLastResponse(answer);
-      const speechCompleted = await speakRef.current?.(answer);
+      // A stream with nothing speakable still finishes through the speaker (as "completed").
+      const speechCompleted = await (stream ? (speech ?? speakRef.current?.(stream)) : speakRef.current?.(answer));
       if (!controller.signal.aborted) {
         celebrate();
         if (speechCompleted) showRichResponse(richResponse(answer, imageQuery), richVersion);
       }
     } catch (error) {
+      // A reply that fails or is canceled mid-stream stops speaking right away.
+      if (stream && !stream.ended) stream.cancel();
       if (controller.signal.aborted) return;
       dismissRichResponse(true);
       try {
@@ -956,8 +986,12 @@ function App() {
 
   // Resolve only when speech ends, not when it is queued. Otherwise standby
   // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
-  const speakBrowser = useCallback((text, selectedVoiceKey, preview) => {
+  // A streamed reply is spoken as it arrives: each utterance takes everything that
+  // is ready, and the next one starts when it ends. Stage stays "speaking" between them.
+  const speakBrowser = useCallback((input, selectedVoiceKey, preview) => {
+    const source = typeof input === 'string' ? textSpeechStream(input) : input;
     if (typeof window.speechSynthesis?.speak !== 'function' || typeof SpeechSynthesisUtterance !== 'function') {
+      source.detach();
       setStage('ready');
       notify("I can’t speak aloud in this browser. Turn on Show last response in Settings to read my replies, or try Chrome or Edge.");
       return Promise.resolve(true); // Silent browsers can still use the visual reply.
@@ -967,30 +1001,27 @@ function App() {
     speechFinishRef.current?.(false);
     window.speechSynthesis.cancel();
     return new Promise((resolve) => {
-      const utterance = new SpeechSynthesisUtterance(text);
+      const synth = window.speechSynthesis;
       const avatarElement = avatarContainerRef.current;
+      const voice = resolveVoice(voices, selectedVoiceKey) || defaultVoice(voices);
       let speechPulseTimer;
       let watchdogTimer;
-      let started = false;
+      let current = null;
+      let first = true;
       let finished = false;
 
-      const voice = resolveVoice(voices, selectedVoiceKey) || defaultVoice(voices);
-      if (voice) {
-        utterance.voice = voice;
-        if (voice.lang) utterance.lang = voice.lang;
-      }
-      utterance.rate = TTS.rate;
-      utterance.pitch = TTS.pitch;
-      utterance.volume = TTS.volume;
-
+      const clearPulse = () => {
+        window.clearTimeout(speechPulseTimer);
+        avatarElement?.classList.remove('speech-boundary-active');
+        avatarElement?.style.removeProperty('--audio-pulse');
+      };
       const finishSpeech = (resume = true, completed = false) => {
         if (finished) return;
         finished = true;
-        window.clearTimeout(speechPulseTimer);
         window.clearTimeout(watchdogTimer);
-        if (utteranceRef.current === utterance) utteranceRef.current = null;
-        avatarElement?.classList.remove('speech-boundary-active');
-        avatarElement?.style.removeProperty('--audio-pulse');
+        clearPulse();
+        source.detach();
+        if (current && utteranceRef.current === current) utteranceRef.current = null;
         if (speechFinishRef.current === finishSpeech) {
           speechFinishRef.current = null;
           voiceTestRef.current = false;
@@ -1000,68 +1031,106 @@ function App() {
         if (resume) setStage('ready');
         resolve(completed);
       };
-      utterance.onstart = () => { if (!finished) { started = true; setStage('speaking'); } };
-      // No word events: neutral eye light/scale, with the CSS speaking bounce intact.
-      utterance.onboundary = (event) => {
-        if (finished || (event.name && event.name !== 'word') || !avatarElement) return;
-        avatarElement.classList.add('speech-boundary-active');
-        const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
-        avatarElement.style.setProperty('--audio-pulse', Math.min(1, 0.65 + wordLength * 0.035).toFixed(3));
-        window.clearTimeout(speechPulseTimer);
-        speechPulseTimer = window.setTimeout(() => {
-          avatarElement.style.setProperty('--audio-pulse', '0');
-        }, 125);
-      };
-      utterance.onend = () => finishSpeech(true, true);
-      utterance.onerror = () => {
+
+      const speakNext = () => {
         if (finished) return;
-        finishSpeech();
-        if (preview) notify("I couldn’t play that voice just now. Check your connection, or try another voice.");
+        const text = source.poll();
+        if (text === undefined) { // The model is still writing the next sentence.
+          source.wait().then(speakNext);
+          return;
+        }
+        if (text === null) { finishSpeech(true, true); return; }
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        if (voice) {
+          utterance.voice = voice;
+          if (voice.lang) utterance.lang = voice.lang;
+        }
+        utterance.rate = TTS.rate;
+        utterance.pitch = TTS.pitch;
+        utterance.volume = TTS.volume;
+        current = utterance;
+        const live = () => !finished && current === utterance;
+        const next = () => {
+          window.clearTimeout(watchdogTimer);
+          clearPulse();
+          speakNext();
+        };
+        let started = false;
+        utterance.onstart = () => { if (live()) { started = true; setStage('speaking'); } };
+        // No word events: neutral eye light/scale, with the CSS speaking bounce intact.
+        utterance.onboundary = (event) => {
+          if (!live() || (event.name && event.name !== 'word') || !avatarElement) return;
+          avatarElement.classList.add('speech-boundary-active');
+          const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
+          avatarElement.style.setProperty('--audio-pulse', Math.min(1, 0.65 + wordLength * 0.035).toFixed(3));
+          window.clearTimeout(speechPulseTimer);
+          speechPulseTimer = window.setTimeout(() => {
+            avatarElement.style.setProperty('--audio-pulse', '0');
+          }, 125);
+        };
+        utterance.onend = () => { if (live()) next(); };
+        utterance.onerror = () => {
+          if (!live()) return;
+          finishSpeech();
+          if (preview) notify("I couldn’t play that voice just now. Check your connection, or try another voice.");
+        };
+        // The stuck-speech watchdog runs per utterance, so a pause while the model
+        // writes the next sentence is never mistaken for a lost end event.
+        const ceiling = speechCeilingMs(text);
+        let heard = false;
+        let quiet = 0;
+        let elapsed = 0;
+        const giveUp = (completed) => {
+          finishSpeech(true, completed);
+          synth.cancel(); // Purge a wedged/stale queue; late events are ignored.
+        };
+        const watch = () => {
+          watchdogTimer = window.setTimeout(() => {
+            if (!live()) return;
+            elapsed += SPEECH_CHECK_MS;
+            if (synth.speaking === true) heard = true;
+            quiet = synth.speaking || synth.pending ? 0 : quiet + 1;
+            if (heard && quiet >= 2) { // Spoke, but its end event was lost.
+              if (source.ended && !source.pending) return giveUp(true);
+              synth.cancel();
+              return next();
+            }
+            if (started && !heard) return; // Flags aren't reliable here; trust the events.
+            if (elapsed < ceiling && (heard || quiet < 10)) return watch();
+            giveUp(heard); // Wedged mid-reply, or a queued utterance that never started.
+            if (!heard) notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
+          }, SPEECH_CHECK_MS);
+        };
+        utteranceRef.current = utterance;
+        if (first) {
+          first = false;
+          // Publish only once speech is configured, and freeze the actual utterance's
+          // name even if voiceschanged updates the automatic pick while it is queued.
+          setSpeechVoiceName(voice ? voice.name || 'Unnamed voice' : 'Browser default');
+          setStage('speaking'); // Also covers an engine's queue before onstart.
+        }
+        try {
+          synth.speak(utterance);
+          if (live() && typeof synth.speaking === 'boolean') watch();
+        } catch {
+          finishSpeech();
+          notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
+        }
       };
-      const synth = window.speechSynthesis;
-      const ceiling = speechCeilingMs(text);
-      let heard = false;
-      let quiet = 0;
-      let elapsed = 0;
-      const giveUp = (completed) => {
-        finishSpeech(true, completed);
-        synth.cancel(); // Purge a wedged/stale queue; late events are ignored.
-      };
-      const watch = () => {
-        watchdogTimer = window.setTimeout(() => {
-          if (finished) return;
-          elapsed += SPEECH_CHECK_MS;
-          if (synth.speaking === true) heard = true;
-          quiet = synth.speaking || synth.pending ? 0 : quiet + 1;
-          if (heard && quiet >= 2) return giveUp(true); // Spoke, but its end event was lost.
-          if (started && !heard) return; // Flags aren't reliable here; trust the events.
-          if (elapsed < ceiling && (heard || quiet < 10)) return watch();
-          giveUp(heard); // Wedged mid-reply, or a queued utterance that never started.
-          if (!heard) notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
-        }, SPEECH_CHECK_MS);
-      };
+
       speechFinishRef.current = finishSpeech;
-      utteranceRef.current = utterance;
-      // Publish only after configuration succeeds, and freeze the actual utterance's
-      // name even if voiceschanged updates the automatic pick while it is queued.
-      setSpeechVoiceName(voice ? voice.name || 'Unnamed voice' : 'Browser default');
+      source.onCancel = () => { finishSpeech(false); synth.cancel(); };
       voiceTestRef.current = preview;
       setVoiceTestPlaying(preview);
-      setStage('speaking'); // Also covers an engine's queue before onstart.
-      try {
-        window.speechSynthesis.speak(utterance);
-        if (!finished && typeof synth.speaking === 'boolean') watch();
-      } catch {
-        finishSpeech();
-        notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
-      }
+      speakNext();
     });
   }, [notify, voices]);
 
   // One reply through Kokoro: generation shows as "thinking"; "speaking" starts
   // with real audio. The eye pulse follows the audio's loudness on the AudioContext
   // clock and clears the moment playback ends or is canceled.
-  const speakKokoro = useCallback((text, engine, audio, kokoroVoiceId, selectedVoiceKey, preview) => {
+  const speakKokoro = useCallback((source, engine, audio, kokoroVoiceId, selectedVoiceKey, preview) => {
     voiceListenerRef.current?.setMode(null);
     speechFinishRef.current?.(false);
     window.speechSynthesis?.cancel();
@@ -1094,7 +1163,7 @@ function App() {
       setVoiceTestPlaying(preview);
       setStage('thinking');
       session = speakWithKokoro({
-        engine, getContext: audio.get, text, voice: voice.id, timers: window,
+        engine, getContext: audio.get, source, voice: voice.id, timers: window,
         onWaiting: () => notify("My Kokoro voice is still loading. I’ll speak as soon as it’s ready."),
         onBlocked: () => notify("Tap anywhere or press a key so I can talk out loud."),
         onStart: () => { if (!finished) setStage('speaking'); },
@@ -1109,6 +1178,7 @@ function App() {
           }
         },
       });
+      source.onCancel = () => finishSpeech(false);
       session.done.then((result) => {
         if (finished) return;
         if (result.status === 'failed') {
@@ -1116,7 +1186,8 @@ function App() {
           finished = true;
           release();
           if (result.reason !== 'load') notify("My Kokoro voice hit a snag, so I’ll use the browser voice for the rest of this reply.");
-          speakBrowserRef.current(result.remaining, selectedVoiceKey, preview).then(resolve);
+          source.unshift(result.remaining); // The rest of a streamed reply follows it.
+          speakBrowserRef.current(source, selectedVoiceKey, preview).then(resolve);
           return;
         }
         if (result.status === 'blocked') notify("I couldn’t play audio without a tap first. Turn on Show last response in Settings to read my replies.");
@@ -1128,13 +1199,20 @@ function App() {
 
   speakBrowserRef.current = speakBrowser;
 
-  // Kokoro is the voice; Web Speech is used only when Kokoro couldn't load (or,
-  // for the rest of one reply, when Kokoro fails mid-reply).
-  const speakAnswer = useCallback((text, selectedVoiceKey = settings.voiceKey, preview = false, kokoroVoiceId = settings.kokoroVoice) => {
+  // Kokoro is the voice. Web Speech is the fallback when Kokoro couldn't load, and
+  // for any reply whose first sentence arrives while Kokoro is still warming up
+  // (the next reply uses Kokoro once it's ready). A voice test waits for Kokoro,
+  // because it is testing that voice. Also used for the rest of one reply if
+  // Kokoro fails mid-reply. `input` is text or a speech stream.
+  const speakAnswer = useCallback((input, selectedVoiceKey = settings.voiceKey, preview = false, kokoroVoiceId = settings.kokoroVoice) => {
+    const source = typeof input === 'string' ? textSpeechStream(input) : input;
     const engine = kokoroRef.current;
     const audio = kokoroAudioRef.current;
-    if (engine && audio && engine.state !== 'failed') return speakKokoro(text, engine, audio, kokoroVoiceId, selectedVoiceKey, preview);
-    return speakBrowser(text, selectedVoiceKey, preview);
+    const browserVoice = typeof window.speechSynthesis?.speak === 'function' && typeof SpeechSynthesisUtterance === 'function';
+    if (engine && audio && (engine.state === 'ready' || (engine.state === 'loading' && (preview || !browserVoice)))) {
+      return speakKokoro(source, engine, audio, kokoroVoiceId, selectedVoiceKey, preview);
+    }
+    return speakBrowser(source, selectedVoiceKey, preview);
   }, [settings, speakKokoro, speakBrowser]);
 
   // Both refs are refreshed on every render, so callbacks that outlive a render still
@@ -1165,6 +1243,7 @@ function App() {
     const engine = createKokoroEngine({
       createWorker: () => browserKokoroWorker(window),
       timers: window,
+      voice: settings.kokoroVoice, // Warmed up with the saved voice.
       onStatus: (status) => {
         setKokoroStatus(status);
         if (status.state === 'failed') notify("I couldn’t load my Kokoro voice, so I’ll use your browser’s voice for now.");
@@ -1362,6 +1441,8 @@ function App() {
             </div>
           </div>
           <p className="active-voice-label" title={activeVoiceName} aria-label={`Active voice: ${activeVoiceName}`} aria-live="polite" aria-atomic="true">{activeVoiceName}</p>
+          {/* Kokoro loads once per page, so this only appears while the page first warms up. */}
+          {kokoroStatus.state === 'loading' && <p className="kokoro-warmup" role="status">warming up...</p>}
           {connection === 'offline' && (
             <div className="avatar-offline-display" role="status" aria-live="polite">
               <span>{OLLAMA_UNREACHABLE}</span>

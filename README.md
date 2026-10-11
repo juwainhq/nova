@@ -100,7 +100,17 @@ NOVA’s base system prompt lives in **`src/personality.js`** and uses this word
 >
 > You speak like a kind and smart friend — encouraging, patient, and never condescending. You keep responses conversational and natural, like you're talking not reading. You're enthusiastic but calm. You never use sarcasm unless the user is clearly joking first. When you don't know something, you say so honestly and helpfully. You remember things the user tells you and refer back to them naturally. Keep responses concise for voice — 2-3 sentences max unless the user asks for more detail.
 
-Every normal chat request starts with that prompt, followed by the fresh quoted memory context. Memory stays user-provided data, not extra personality instructions. The earlier “warm and witty,” local-only claim, and unconditional short-response instructions are removed. There is no mechanical three-sentence cutoff: requested detail can still be spoken in full.
+Every normal chat request starts with that prompt, followed by the fresh quoted memory context. Memory stays user-provided data, not extra personality instructions. The earlier “warm and witty,” local-only claim, and unconditional short-response instructions are removed.
+
+**Reply length and sampling.** For a fast first word, every chat request also sends:
+
+| Request field | Value | Why |
+| --- | --- | --- |
+| `max_tokens` | `80` | Ollama's `num_predict`: at most ~80 tokens (about 2–3 spoken sentences) |
+| `temperature` | `0.7` | steadier wording (Ollama's OpenAI-compatible endpoint otherwise uses 1.0) |
+| `top_p` | `0.9` | trims unlikely tokens (otherwise 1.0) |
+
+NOVA uses Ollama's OpenAI-compatible `/v1/chat/completions`. That endpoint has no `num_predict` field and silently ignores unknown fields, but it maps `max_tokens` onto the native `num_predict` option ([`openai/openai.go`](https://github.com/ollama/ollama/blob/main/openai/openai.go)). So `max_tokens: 80` is how the 80-token limit is actually applied. The cap holds even when someone asks for more detail. When a reply hits it (`finish_reason: "length"`), the unfinished last sentence is neither spoken nor kept in the transcript or history, unless it is the only text. To allow longer answers, raise `OLLAMA_NUM_PREDICT` in `src/App.jsx`.
 
 The same friendly tone carries through the app’s built-in copy:
 
@@ -125,14 +135,26 @@ NOVA speaks with **Kokoro TTS** (`kokoro-js`, the 82M-parameter Kokoro model), g
 
 **Why `kokoro.web.js`, not `kokoro.min.js`:** the package has no `kokoro.min.js`. jsDelivr would generate one from `dist/kokoro.js`, which imports bare Node packages (`@huggingface/transformers`, `phonemizer`, `fs/promises`) that a browser cannot resolve. `kokoro.web.js` is the package's self-contained browser build and jsDelivr's default file. The version is pinned rather than `@latest`, so a new release can't silently break NOVA. To upgrade, change `KOKORO_VERSION` in `src/kokoro.js`.
 
-**Loading.** Kokoro starts loading as soon as the app opens, inside a module **Web Worker**, so inference never blocks recognition, timers, or the avatar. The first load downloads about 115 MB: about 2 MB for the library, 22 MB for the ONNX Runtime WebAssembly from jsDelivr, and roughly 90 MB for the quantized model from Hugging Face. Each voice adds a small style file on first use. After that, the browser usually serves them from its cache. While loading, the label below the avatar reads **Bella · Kokoro AI · loading**, and Settings shows the download percentage. A reply that arrives mid-load says so and waits for Kokoro instead of switching voices.
+**Loading.** Kokoro starts loading as soon as the app opens, inside a module **Web Worker**, so inference never blocks recognition, timers, or the avatar. The first load downloads about 115 MB: about 2 MB for the library, 22 MB for the ONNX Runtime WebAssembly from jsDelivr, and roughly 90 MB for the quantized model from Hugging Face. Each voice adds a small style file on first use. After that, the browser usually serves them from its cache. Once the model is loaded, the worker generates one short phrase silently (“Hi.”) with the saved voice. That fetches the voice file, starts the phonemizer and warms the ONNX session, so the first real reply isn't the slow one.
 
-**Speaking a reply.**
+While this happens, a tiny pulsing **warming up...** appears under the voice label. It is removed as soon as Kokoro is ready (or has failed) and doesn't come back for that page. Settings shows the download percentage. If a reply's first sentence arrives while Kokoro is still warming up, that reply is spoken **at once with the Web Speech fallback**, and the next reply uses Kokoro once it is ready. A voice test is the exception: it waits for Kokoro, since it is testing that voice.
 
-1. The reply is split at sentence boundaries into chunks of up to 240 characters. The first chunk is kept to about 140 characters so speech starts sooner. Kokoro truncates long input, so this keeps every word of longer, detailed replies.
-2. The worker generates chunks in order on one model session. Each chunk is scheduled back-to-back on the AudioContext clock while the next one generates.
-3. NOVA shows **“Let me think...”** while the first chunk generates, and switches to **“Talking with you.”** when real audio is scheduled.
-4. The reply ends when the last audio buffer actually finishes. Then rich cards appear and wake-word standby resumes.
+**Speaking a reply — streamed.** NOVA doesn't wait for Ollama to finish:
+
+1. Ollama's tokens stream in (`src/speech-stream.js`). After each network chunk, any completed sentence goes straight to the voice. A sentence is complete at `.`, `?`, `!` or `…` followed by a space, or at a line break. Decimals (`3.5`), `1.` list markers, initials/`U.S.`, `e.g.` and titles like `Dr.` don't count. A missed boundary only delays speech slightly; it never changes the words.
+2. **Kokoro:** the first sentence is generated as its own chunk, and a long one is cut at a comma within 100 characters, because nothing is heard until it's ready. Text that arrives while a chunk is generating is batched into the next one (up to 240 characters; Kokoro truncates longer input). Each chunk is scheduled back-to-back on the AudioContext clock, so sentences play gaplessly while later ones generate. If playback catches up with the model, NOVA waits, still in the speaking state.
+3. **Web Speech fallback:** each utterance speaks everything that's ready, and the next starts when it ends. The stuck-speech watchdog runs per utterance, so a pause while the model writes isn't mistaken for a lost end event.
+4. NOVA shows **“Let me think...”** until the first audio, then **“Talking with you.”** The reply ends when its last sentence actually finishes playing. Then rich cards appear (built from the whole reply) and wake-word standby resumes.
+5. If the stream breaks or is canceled mid-reply, speech stops right away, queued Kokoro generation is canceled, and the usual connection message appears.
+
+Replies that are already complete, such as memory answers, image searches and the voice test, use the same path all at once. Their first sentence is still generated alone.
+
+**Latency.** The target is the first word within about 1–2 seconds of you finishing speaking. What's left is roughly:
+- Ollama's time to its first sentence: prompt processing plus a few tokens; a cold model load adds seconds.
+- Kokoro generating that one sentence on WebAssembly: CPU-bound, so faster on newer machines.
+- About 50ms of scheduling.
+
+None of this has been timed on real hardware here.
 
 Kokoro uses its natural speed (`1`). The Web Speech rate/pitch values below apply only to the fallback.
 
@@ -154,15 +176,16 @@ Kokoro uses its natural speed (`1`). The Web Speech rate/pitch values below appl
 | Situation | What happens |
 | --- | --- |
 | Kokoro can't load: CDN blocked, no module worker/WebAssembly/Web Audio, a load error, a worker crash, or no download activity for 60s | “I couldn’t load my Kokoro voice…”; every reply uses the **Web Speech fallback** below, and Settings shows the browser-voice list |
-| One chunk fails or takes over 45s to generate | Unplayed text, starting with the chunk still audible, finishes with Web Speech; Kokoro stays on for later replies |
+| Kokoro is still warming up when a reply's first sentence arrives | That reply uses Web Speech at once; the next reply uses Kokoro once it's ready |
+| One chunk fails or takes over 45s to generate | Unplayed text, starting with the chunk still audible, and the rest of the stream finish with Web Speech; Kokoro stays on for later replies |
 | Audio is blocked until a tap or key press (autoplay rules) | NOVA asks for a tap and plays when allowed; after 20s it gives up, and cards/transcript stay available |
 | The audio context never reports `ended` | The reply finishes 3s after its scheduled audio |
 
-Model quality, speed and download size depend on the device and connection. Generation on WebAssembly is CPU-bound, so slower machines take longer before speaking. The checks (`scripts/kokoro-checks.mjs`) use worker and Web Audio doubles. The bundled library was inspected to run in a worker and to fetch its runtime from jsDelivr. The real model, voice quality and timing have not been tested in a browser here.
+Model quality, speed and download size depend on the device and connection. Generation on WebAssembly is CPU-bound, so slower machines take longer before speaking. The checks (`scripts/kokoro-checks.mjs`, `scripts/streaming-checks.mjs`) use worker, Web Audio and streamed-response doubles. The bundled library was inspected to run in a worker and to fetch its runtime from jsDelivr. The real model, voice quality and timing have not been tested in a browser here.
 
 ### Web Speech fallback
 
-Used only when Kokoro can't load (or, for the rest of one reply, when Kokoro fails mid-reply). This is the browser's own `speechSynthesis` with NOVA's earlier voice logic. Local voices keep working offline, while a voice marked `network` depends on the browser's speech service.
+Used when Kokoro can't load, for a reply that starts while Kokoro is still warming up, or for the rest of one reply when Kokoro fails mid-reply. This is the browser's own `speechSynthesis` with NOVA's earlier voice logic. Local voices keep working offline, while a voice marked `network` depends on the browser's speech service.
 
 | Parameter | Value | Effect |
 | --- | --- | --- |

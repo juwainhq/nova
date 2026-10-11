@@ -7,6 +7,8 @@
 // file for kokoro-js). dist/kokoro.js — and jsDelivr's generated kokoro.min.js —
 // import bare Node packages ("@huggingface/transformers", "fs/promises") and cannot
 // load in a page. The version is pinned so a new release can't silently break NOVA.
+import { textSpeechStream as textSource } from './speech-stream.js';
+
 export const KOKORO_VERSION = '1.2.1';
 export const KOKORO_CDN_URL = `https://cdn.jsdelivr.net/npm/kokoro-js@${KOKORO_VERSION}/dist/kokoro.web.js`;
 export const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
@@ -25,7 +27,10 @@ export const KOKORO_LOAD_IDLE_MS = 60000; // No download/progress activity at al
 export const KOKORO_CHUNK_TIMEOUT_MS = 45000; // One chunk's generation.
 export const KOKORO_UNLOCK_WAIT_MS = 20000; // Autoplay-blocked audio waiting for a tap.
 export const KOKORO_CHUNK_CHARS = 240; // Well inside Kokoro's 510-token truncation limit.
-export const KOKORO_FIRST_CHUNK_CHARS = 140; // A shorter first chunk starts speaking sooner.
+export const KOKORO_FIRST_CHUNK_CHARS = 100; // A shorter first chunk starts speaking sooner.
+// Generated once right after loading. It fetches the voice file, starts the
+// phonemizer and warms the ONNX session, so the first real reply isn't the slow one.
+export const KOKORO_WARMUP_TEXT = 'Hi.';
 export const PULSE_FRAME_MS = 50;
 const POLL_MS = 250;
 
@@ -39,6 +44,8 @@ export function kokoroVoiceLabel(voice) {
 
 // generate() truncates long input, so replies are split at sentence boundaries,
 // then packed into chunks. Every word is kept; only whitespace is normalized.
+// The first chunk is the first sentence alone, held to `firstMax` (split at a
+// comma or space if needed), because nothing is heard until it has been generated.
 export function splitSpeechText(text, max = KOKORO_CHUNK_CHARS, firstMax = KOKORO_FIRST_CHUNK_CHARS) {
   const source = String(text || '');
   const sentences = [];
@@ -49,15 +56,15 @@ export function splitSpeechText(text, max = KOKORO_CHUNK_CHARS, firstMax = KOKOR
     start = end;
   }
   sentences.push(source.slice(start));
-  const fit = (piece) => {
+  const fit = (piece, first) => {
     const parts = [];
     let rest = piece;
-    while (rest.length > max) {
-      const head = rest.slice(0, max + 1);
+    for (let limit = first ? firstMax : max; rest.length > limit; limit = max) {
+      const head = rest.slice(0, limit + 1);
       let cut = -1;
       for (const match of head.matchAll(/[,;:]\s/g)) cut = match.index + 1;
-      if (cut < max * 0.4) cut = head.lastIndexOf(' ');
-      if (cut <= 0) cut = max; // One enormous token, such as a URL.
+      if (cut < limit * 0.4) cut = head.lastIndexOf(' ');
+      if (cut <= 0) cut = limit; // One enormous token, such as a URL.
       parts.push(rest.slice(0, cut).trim());
       rest = rest.slice(cut).trim();
     }
@@ -66,9 +73,10 @@ export function splitSpeechText(text, max = KOKORO_CHUNK_CHARS, firstMax = KOKOR
   };
   const chunks = [];
   for (const piece of sentences.map((sentence) => sentence.replace(/\s+/g, ' ').trim())
-    .filter((sentence) => /[\p{L}\p{N}]/u.test(sentence)).flatMap(fit)) {
+    .filter((sentence) => /[\p{L}\p{N}]/u.test(sentence)).flatMap((sentence, index) => fit(sentence, index === 0))) {
     const last = chunks[chunks.length - 1];
-    if (last && last.length + 1 + piece.length <= (chunks.length === 1 ? firstMax : max)) chunks[chunks.length - 1] = `${last} ${piece}`;
+    // Nothing joins the first chunk: its generation time is the wait before speech.
+    if (last && chunks.length > 1 && last.length + 1 + piece.length <= max) chunks[chunks.length - 1] = `${last} ${piece}`;
     else chunks.push(piece);
   }
   return chunks;
@@ -128,8 +136,12 @@ self.onmessage = (event) => {
   if (data.type === 'load' && !loading) {
     loading = import(data.url)
       .then(({ KokoroTTS }) => KokoroTTS.from_pretrained(data.model, { dtype: data.dtype, device: data.device, progress_callback: progress }))
-      .then((model) => { tts = model; self.postMessage({ type: 'ready' }); },
-        (error) => { self.postMessage({ type: 'load-error', message: describe(error) }); });
+      .then(async (model) => {
+        tts = model;
+        // Warm-up is best effort: a real generation error is reported per request.
+        if (data.warmup) { try { await tts.generate(data.warmup, { voice: data.voice }); } catch {} }
+        self.postMessage({ type: 'ready' });
+      }, (error) => { self.postMessage({ type: 'load-error', message: describe(error) }); });
     queue = loading;
   } else if (data.type === 'cancel') {
     canceled.add(data.group);
@@ -158,7 +170,9 @@ const abortError = () => Object.assign(new Error('Kokoro speech was canceled.'),
 
 // Worker client. `ready` resolves true/false and never rejects; any load failure,
 // stall or worker crash moves to 'failed' so the app can use its Web Speech fallback.
-export function createKokoroEngine({ createWorker, timers = globalThis, onStatus = () => {}, idleMs = KOKORO_LOAD_IDLE_MS }) {
+export function createKokoroEngine({
+  createWorker, timers = globalThis, onStatus = () => {}, idleMs = KOKORO_LOAD_IDLE_MS, voice = DEFAULT_KOKORO_VOICE,
+}) {
   let worker = null;
   let state = 'loading';
   let progress = null;
@@ -217,7 +231,10 @@ export function createKokoroEngine({ createWorker, timers = globalThis, onStatus
       worker.onmessage = receive;
       worker.onerror = (event) => { event?.preventDefault?.(); fail(); };
       worker.onmessageerror = fail;
-      worker.postMessage({ type: 'load', url: KOKORO_CDN_URL, model: KOKORO_MODEL_ID, dtype: KOKORO_DTYPE, device: KOKORO_DEVICE });
+      worker.postMessage({
+        type: 'load', url: KOKORO_CDN_URL, model: KOKORO_MODEL_ID, dtype: KOKORO_DTYPE, device: KOKORO_DEVICE,
+        warmup: KOKORO_WARMUP_TEXT, voice: kokoroVoice(voice).id,
+      });
       armIdle();
     } catch { fail(); }
   };
@@ -272,17 +289,21 @@ export function createKokoroAudio(AudioContext) {
   };
 }
 
-// Speaks one reply: chunks are generated in order and scheduled back-to-back on
-// the AudioContext clock while later chunks generate. `done` resolves with
-//   completed — the last buffer actually finished playing
+// Speaks one reply from a speech stream (see speech-stream.js) or plain `text`.
+// Text is split into chunks as it arrives. Each chunk is sent to the worker
+// immediately, and the audio is scheduled back-to-back on the AudioContext clock
+// while later chunks generate. `done` resolves with
+//   completed — the reply ended and its last buffer actually finished playing
 //   failed    — load/generation/audio failure; `remaining` is the unplayed text
+//               already taken from the stream (the rest is still in the stream)
 //   blocked   — autoplay never allowed audio; nothing was heard
 //   stopped   — canceled by the app
 export function speakWithKokoro({
-  engine, getContext, text, voice, timers = globalThis, speed = 1,
+  engine, getContext, text, source = textSource(text), voice, timers = globalThis, speed = 1,
   onWaiting = () => {}, onBlocked = () => {}, onStart = () => {}, onPulse = () => {},
 }) {
-  const chunks = splitSpeechText(text);
+  const chunks = [];
+  const requests = [];
   const group = engine.group();
   const sources = [];
   const segments = [];
@@ -304,19 +325,39 @@ export function speakWithKokoro({
     settled = true;
     for (const timer of [pulseTimer, ceilingTimer, chunkTimer, waitTimer]) timers.clearTimeout(timer);
     wake?.();
-    for (const source of sources) {
-      source.onended = null;
-      try { source.stop(); } catch { /* Already finished. */ }
-      try { source.disconnect(); } catch { /* Already detached. */ }
+    source.detach();
+    for (const item of sources) {
+      item.onended = null;
+      try { item.stop(); } catch { /* Already finished. */ }
+      try { item.disconnect(); } catch { /* Already detached. */ }
     }
     engine.cancel(group);
     onPulse(null);
     resolveDone(result);
   };
-  // Unplayed text, starting with the chunk that is still audible (if any).
+  // Unplayed text taken so far, starting with the chunk that is still audible (if any).
   const remainingFrom = (index) => {
     const audible = context ? segments.findIndex((segment) => segment.end > context.currentTime) : -1;
     return chunks.slice(audible === -1 ? index : audible).join(' ');
+  };
+  // Takes everything the stream has ready and starts generating it right away.
+  // Resolves false once the reply has ended and every chunk has been requested.
+  const take = async () => {
+    for (;;) {
+      if (settled) return false;
+      const next = source.poll();
+      if (next === null) return false;
+      if (next !== undefined) {
+        for (const chunk of splitSpeechText(next, KOKORO_CHUNK_CHARS, chunks.length ? KOKORO_CHUNK_CHARS : KOKORO_FIRST_CHUNK_CHARS)) {
+          const request = engine.generate(chunk, voice, group, speed);
+          request.catch(() => {});
+          chunks.push(chunk);
+          requests.push(request);
+        }
+        return true;
+      }
+      await source.wait();
+    }
   };
   const sleep = (ms) => new Promise((resolve) => {
     wake = resolve;
@@ -340,18 +381,18 @@ export function speakWithKokoro({
   const schedule = ({ samples, sampleRate }) => {
     const buffer = context.createBuffer(1, samples.length, sampleRate);
     buffer.getChannelData(0).set(samples);
-    const source = context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(context.destination);
+    const node = context.createBufferSource();
+    node.buffer = buffer;
+    node.connect(context.destination);
     const start = Math.max(context.currentTime + 0.05, nextAt);
     nextAt = start + samples.length / sampleRate;
     segments.push({ start, end: nextAt, levels: speechEnvelope(samples, sampleRate) });
-    source.onended = () => {
+    node.onended = () => {
       ended += 1;
       if (allScheduled && ended === sources.length) settleWith({ status: 'completed' });
     };
-    sources.push(source);
-    source.start(start);
+    sources.push(node);
+    node.start(start);
   };
   const waitForAudio = async () => {
     try { context.resume()?.catch?.(() => {}); } catch { /* Gesture required. */ }
@@ -364,13 +405,18 @@ export function speakWithKokoro({
   };
 
   (async () => {
-    if (!chunks.length) return settleWith({ status: 'completed' });
     if (engine.state === 'loading') onWaiting();
-    if (!(await engine.ready)) return settleWith({ status: 'failed', reason: 'load', remaining: chunks.join(' ') });
+    if (!(await engine.ready)) return settleWith({ status: 'failed', reason: 'load', remaining: '' });
+    let more = await take();
     if (settled) return undefined;
-    const requests = chunks.map((chunk) => engine.generate(chunk, voice, group, speed));
-    requests.forEach((request) => request.catch(() => {}));
-    for (let index = 0; index < chunks.length; index += 1) {
+    if (!chunks.length) return settleWith({ status: 'completed' });
+    for (let index = 0; ; index += 1) {
+      // Pick up anything that arrived while the previous chunk was generating.
+      while (more && (index >= chunks.length || source.pending)) {
+        more = await take();
+        if (settled) return undefined;
+      }
+      if (index >= chunks.length) break;
       let audio;
       try { audio = await withTimeout(requests[index]); } catch {
         return settleWith({ status: 'failed', reason: 'generate', remaining: remainingFrom(index) });
@@ -378,7 +424,7 @@ export function speakWithKokoro({
       if (settled) return undefined;
       if (!context) {
         context = getContext();
-        if (!context) return settleWith({ status: 'failed', reason: 'audio', remaining: chunks.join(' ') });
+        if (!context) return settleWith({ status: 'failed', reason: 'audio', remaining: remainingFrom(index) });
         if (context.state !== 'running' && !(await waitForAudio())) return settleWith({ status: 'blocked' });
         if (settled) return undefined;
       }

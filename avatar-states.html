@@ -239,6 +239,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 .is-offline .avatar-backlight { opacity: .38; }
 
 .active-voice-label { max-width: min(420px, 86vw); margin: 4px 0 0; color: var(--muted); font: 9px/1.4 var(--mono); opacity: .8; overflow-wrap: anywhere; }
+/* Zero height: it sits in the gap above the tagline, so hiding it never shifts the layout. */
+.kokoro-warmup { height: 0; margin: 2px 0 0; overflow: visible; color: var(--muted); font: 8px/1.4 var(--mono); letter-spacing: .08em; animation: warmup-breathe 1.8s ease-in-out infinite; }
+@keyframes warmup-breathe { 0%, 100% { opacity: .35; } 50% { opacity: .75; } }
+@media (prefers-reduced-motion: reduce) { .kokoro-warmup { animation: none; opacity: .6; } }
 
 .tagline {
   max-width: min(760px, 90vw);
@@ -559,6 +563,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   .app-shell { --topbar-height: 52px; --dock-height: 76px; padding-bottom: 4px; }
   .avatar-container { height: 116px; --avatar-size: 108px; }
   .tagline { margin-top: 10px; font-size: clamp(24px, 5vh, 34px); }
+  .kokoro-warmup { margin-top: 1px; font-size: 7px; line-height: 1.1; }
   .status-word { margin-top: 8px; }
   .response-transcript { max-height: 64px; margin-top: 8px; }
   .response-transcript p { max-height: 44px; }
@@ -571,6 +576,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   .app-shell { --topbar-height: 44px; --dock-height: 66px; padding-bottom: 2px; }
   .avatar-container { height: 92px; --avatar-size: 92px; }
   .tagline { margin-top: 7px; font-size: clamp(22px, 5vh, 29px); }
+  .kokoro-warmup { margin-top: 0; line-height: 1; }
   .status-word { margin-top: 6px; }
   .response-transcript { max-height: 45px; margin-top: 6px; }
   .response-transcript p { max-height: 30px; margin-top: 3px; }

@@ -15,6 +15,7 @@ import { verifyVoices } from './voice-checks.mjs';
 import { verifyPersonality } from './personality-checks.mjs';
 import { verifyRich } from './rich-checks.mjs';
 import { verifyKokoro } from './kokoro-checks.mjs';
+import { verifyStreaming } from './streaming-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -136,7 +137,7 @@ const viteConfig = await readFile(resolve(root, 'vite.config.js'), 'utf8');
 check('app has no ElevenLabs code', !/elevenlabs/i.test(app));
 check('app has no API key handling', !/xi-api-key|apiKey/.test(app));
 check('dev proxy no longer forwards ElevenLabs', !/elevenlabs/i.test(viteConfig));
-check('app speaks through the Web Speech API', /speechSynthesis\.speak/.test(app));
+check('app speaks through the Web Speech API', /speechSynthesis\.speak|synth\.speak\(utterance\)/.test(app) && /const synth = window\.speechSynthesis/.test(app));
 check('app takes its name from the brand module', /import \{ APP_NAME \} from '\.\/brand\.js'/.test(app));
 check('system prompt carries the brand name', /You are \$\{APP_NAME\}/.test(personality));
 check('system prompt asks for a warm personality', /a warm, friendly, and genuinely helpful/.test(personality));
@@ -654,6 +655,7 @@ deniedUi.unmount();
 // Voice preview/selection and memory use the same compiled App fixture.
 await verifyRich(check);
 await verifyKokoro(check);
+await verifyStreaming(check);
 await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);
