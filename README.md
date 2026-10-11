@@ -1,6 +1,6 @@
 # NOVA — Voice Intelligence
 
-A local, voice-first AI assistant with a calm warm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and speech output through the browser's built-in Web Speech API.
+A warm, voice-first personal assistant with a calm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and speech output through the browser's built-in Web Speech API.
 
 > **Renamed from ARIA.** The assistant, package, and standalone download are now NOVA. Saved settings are picked up automatically — `readSetting` falls back to the older `aria.*` keys once, then writes the `nova.*` names from then on, so your voice, model, and endpoint choices survive the upgrade. The standalone file changed from `aria.html` to `nova.html`; an older copy keeps working, it just is not updated.
 >
@@ -55,14 +55,14 @@ Press Space from the main view to toggle the microphone. Microphone access requi
 
 ## Wake word
 
-NOVA attempts to start continuous microphone recognition as soon as the page loads. A dim microphone in the bottom-left corner means it is in **wake word standby**. Say **“hey nova”** for a brief crescent-eyed double bounce, followed by brighter, larger listening eyes. The status changes immediately to **LISTENING**, with a short, soft two-note chime. Ask your question after the cue, or say the wake phrase and question in one utterance — “hey nova, what time is it?” works too.
+NOVA attempts to start continuous microphone recognition as soon as the page loads. A dim microphone in the bottom-left corner means it is in **wake word standby**. Say **“hey nova”** for a brief crescent-eyed double bounce, followed by brighter, larger listening eyes. The status changes immediately to **“I’m listening.”**, with a short, soft two-note chime. Ask your question after the cue, or say the wake phrase and question in one utterance — “hey nova, what time is it?” works too.
 
 Standby requests final transcripts only, with one recognition alternative, and discards everything except the wake phrase. Unrelated background speech is not saved or sent to Ollama. Full question input uses interim results as well. Recognition pauses while NOVA thinks and speaks, then automatically returns to standby **after speech actually finishes** (or an error is handled). A wake without a question returns to standby after 15 seconds of silence. Opening settings or hiding the tab also suspends listening; returning to the idle main view resumes it.
 
 ### Browser limits and permissions
 
 - Microphone permission and a secure browser context (HTTPS or localhost) are still required. If automatic startup is blocked, allow microphone access and use the mic button once to retry. The mic button and Space shortcut still work without a wake phrase.
-- If the browser has no continuous recognition support, NOVA displays **“Wake word not supported — use the mic button”**. Manual recognition remains available if the browser supports it. Normal engine time limits trigger delayed restarts; permission failures and repeated service failures do not cause an endless retry loop.
+- If the browser has no continuous recognition support, NOVA says **“I can’t listen for ‘hey nova’ in this browser. Try the mic button instead.”**. Manual recognition remains available if the browser supports it. Normal engine time limits trigger delayed restarts; permission failures and repeated service failures do not cause an endless retry loop.
 - The Web Speech API has **no low-power mode or guaranteed offline recognition**. Final-only standby reduces app-side work, but power consumption and recognition processing are controlled by the browser. Some browsers send microphone audio to a network speech service, even though NOVA discards unrelated transcripts locally. This is not a dedicated on-device wake-word engine.
 - The chime is synthesized locally through Web Audio, with no audio download. Browser autoplay rules may silence it until the first click, tap, or key interaction. A blocked chime does not prevent waking, and is not queued to play later.
 
@@ -90,6 +90,26 @@ Settings has a **Memory** section with every saved fact, individual **Delete** b
 The store accepts up to 100 facts of 500 characters each. Full/blocked storage and corrupt data are reported rather than falsely claiming a save or silently erasing data. Explicitly clearing all memory can reset an unreadable store.
 
 **Privacy and scope:** local storage is not encrypted; don't use it for secrets. Facts are sent to the Ollama endpoint you configured whenever you chat. Persistence belongs to this browser profile and page origin — a different browser, deployment, or `file://` copy may have a separate store. Clearing browser site data removes the memories. They are not embedded in a downloaded `nova.html`, and deleting them cannot erase anything a backend may already have logged.
+
+## Personality and conversation
+
+NOVA’s base system prompt lives in **`src/personality.js`** and uses this wording:
+
+> You are NOVA, a warm, friendly, and genuinely helpful personal AI assistant.
+>
+> You speak like a kind and smart friend — encouraging, patient, and never condescending. You keep responses conversational and natural, like you're talking not reading. You're enthusiastic but calm. You never use sarcasm unless the user is clearly joking first. When you don't know something, you say so honestly and helpfully. You remember things the user tells you and refer back to them naturally. Keep responses concise for voice — 2-3 sentences max unless the user asks for more detail.
+
+Every normal chat request starts with that prompt, followed by the fresh quoted memory context. Memory stays user-provided data, not extra personality instructions. The earlier “warm and witty,” local-only claim, and unconditional short-response instructions are removed. There is no mechanical three-sentence cutoff: requested detail can still be spoken in full.
+
+The same friendly tone carries through the app’s built-in copy:
+
+- Startup: **“Waking up...”**; ready: **“Ready when you are.”**
+- Listening: **“I’m listening.”**; thinking: **“Let me think...”**; speaking: **“Talking with you.”**
+- Remembering: **“Got it!”**, followed by the saved detail; forgetting confirms removal without repeating the deleted fact.
+- Connection trouble: **“Hmm, I can't reach Ollama right now. Is it running?”**
+- Browser, microphone, storage, download, and voice-test messages explain a helpful next step without blame or raw error codes. HTTP/model failures keep actionable advice for installing a model, checking the endpoint, or allowing the page to connect.
+
+The base prompt guides the model; it cannot guarantee that every model follows the tone or sentence limit perfectly. Browserless tests verify the exact outgoing prompt and built-in messages, not the naturalness of a real model or voice.
 
 ## Voice output
 
@@ -125,7 +145,7 @@ A saved manual selection takes precedence over Automatic. `nova.tts.voice` store
 
 **Test Voice** previews the current dropdown choice **without saving**, saying exactly **“Hey, I'm Nova. Ready when you are.”** It uses the same rate, pitch, voice resolution, and word-boundary animation as replies. **Stop test**, changing the dropdown, saving/closing settings, and unmounting all cancel a preview safely. Testing pauses recognition and never sends a chat request, modifies memory, or creates a response transcript. It is disabled during a pending/spoken answer so it cannot interrupt a real reply; Ollama does not need to be running to test speech.
 
-A tiny voice-name label below the avatar shows the current speaker while an utterance is queued/playing, then the saved/automatic choice at rest. Late voice-loading events cannot falsely rename an utterance already in progress. If the engine exposes no voices yet, the label honestly says **Browser default**; if speech synthesis is missing, it says **Speech unavailable** and testing is disabled.
+A tiny voice-name label below the avatar shows the current speaker while an utterance is queued/playing, then the saved/automatic choice at rest. Late voice-loading events cannot falsely rename an utterance already in progress. If the engine exposes no voices yet, the label honestly says **Browser default**; if speech synthesis is missing, it says **Voice isn’t available here** and testing is disabled.
 
 Two caveats worth knowing:
 
@@ -166,7 +186,7 @@ Reduced motion disables float, gaze, blinks, jumps, pulsing light and rings whil
 
 `npm run verify:avatar` renders the real SVG through React and checks pixel geometry, symmetry, radial colors, fixed pivots, exact timing, scale bounds, reduced motion and orb/ring/backlight sizing at all three viewport sizes. It also generates **`avatar-states.html`**, a real-CSS state sheet with a happy/wake replay button. Each cell has unique SVG definition IDs so its gradient colors cannot accidentally resolve to another state. The sheet holds a clearly labelled sample speech pulse; it does not generate audio.
 
-`npm run verify:speech` checks all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
+`npm run verify:speech` checks the exact personality prompt and friendly statuses/error copy, all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
 
 `build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
 

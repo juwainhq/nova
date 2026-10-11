@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
 import { APP_NAME } from './brand.js';
 import {
+  OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT,
+  friendlyOllamaError, ollamaError,
+} from './personality.js';
+import {
   MEMORY_KEY, describeMemoryFact, forgetFact, memoryPrompt, parseMemoryIntent,
   readMemoryStore, rememberFact, writeMemoryStore,
 } from './memory.js';
@@ -84,7 +88,7 @@ function endpointWarning(value) {
   const trimmed = (value || '').trim();
   if (!trimmed) return '';
   if (!/^https?:\/\/\S+$/i.test(trimmed)) {
-    return 'Enter a full URL starting with http:// or https://';
+    return "Try a full address starting with http:// or https://.";
   }
   return '';
 }
@@ -94,36 +98,34 @@ function ConnectionHelp() {
   const originsCommand = ollamaOriginsCommand();
   return (
     <details className="field-help">
-      <summary>Can’t connect? Enable CORS on your Ollama server</summary>
+      <summary>Need a hand connecting to Ollama?</summary>
       <div className="field-help-body">
         <p>
-          Ollama only accepts browser requests from a fixed list of origins, so it rejects
-          this page until you allow it. Plain <code>http</code> is not the obstacle: browsers
-          treat <code>http://localhost</code> as a secure origin, so this page may call it
-          directly. A <code>file://</code> copy sends <code>Origin: null</code> instead, which
-          no default entry matches — use the setting below for that.
+          If Ollama won’t connect, we may need to allow this page in its CORS settings.
+          Plain <code>http</code> isn’t the problem: browsers treat <code>http://localhost</code>
+          as a secure origin. A <code>file://</code> copy sends <code>Origin: null</code>,
+          which Ollama doesn’t allow by default. The command below can help.
         </p>
         <ol>
           <li>
-            <span>Restart Ollama allowing this page’s origin.</span>
+            <span>Try restarting Ollama with this command to allow this page:</span>
             <code className="field-help-command">{originsCommand}</code>
           </li>
           <li>
             <span>
               {STANDALONE_BUILD
-                ? 'A single-file copy cannot know its own origin, so it needs the wildcard above.'
-                : `Narrower than the wildcard: the exact value for this page is ${originsCommand.split('=')[1]?.split(' ollama')[0] || 'this page’s origin'}.`}
+                ? "For a single-file copy, use the wildcard above because the file has no fixed origin."
+                : `For this hosted page, we can allow just ${originsCommand.split('=')[1]?.split(' ollama')[0] || 'this page’s origin'} instead of every origin.`}
             </span>
           </li>
           <li>
-            <span>Or, if you cannot restart it, install a CORS-unblocking browser extension.</span>
+            <span>If you can’t restart Ollama, you’ll need a trusted relay that allows this page’s origin.</span>
           </li>
         </ol>
         <p className="field-help-note">
-          Recent Chrome additionally asks for permission before a public site may reach your
-          local network — allow it when prompted. Hosting Ollama behind HTTPS (a reverse proxy
-          or a tunnel such as ngrok or a Cloudflare tunnel) also works and needs no CORS
-          opening, but exposes your machine to anyone holding the URL.
+          Chrome may also ask for local network access; allow it if you’d like this page
+          to connect to your Ollama. An HTTPS relay or tunnel can help too, but make sure
+          it allows this page’s origin and has access controls before sharing its URL.
         </p>
       </div>
     </details>
@@ -155,7 +157,7 @@ function MicIcon({ stopped = false }) {
 }
 
 async function readChatCompletionStream(response) {
-  if (!response.body) throw new Error('Ollama did not return a response stream.');
+  if (!response.body) throw new Error(OLLAMA_REPLY_ERRORS.noStream);
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -178,9 +180,9 @@ async function readChatCompletionStream(response) {
     try {
       chunk = JSON.parse(data);
     } catch {
-      throw new Error('Ollama returned an invalid streaming response.');
+      throw new Error(OLLAMA_REPLY_ERRORS.invalidStream);
     }
-    if (chunk.error) throw new Error(chunk.error.message || 'Ollama returned a streaming error.');
+    if (chunk.error) throw ollamaError(chunk.error.message || OLLAMA_REPLY_ERRORS.interrupted);
     const delta = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content;
     if (typeof delta === 'string') answer += delta;
   };
@@ -201,7 +203,7 @@ async function readChatCompletionStream(response) {
   if (!streamDone && buffer.trim()) consumeLine(buffer);
   if (streamDone && !readerDone) await reader.cancel().catch(() => {});
   const completeAnswer = answer.trim();
-  if (!completeAnswer) throw new Error('Ollama returned an empty response.');
+  if (!completeAnswer) throw new Error(OLLAMA_REPLY_ERRORS.emptyReply);
   return completeAnswer;
 }
 
@@ -231,7 +233,7 @@ async function fetchOllamaModels(endpoint, signal) {
   const response = await fetch(`${endpoint}/models`, { signal });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error?.message || `Ollama returned ${response.status}.`);
+    throw ollamaError(payload.error?.message, response.status);
   }
   const payload = await response.json();
   return Array.isArray(payload.data) ? payload.data : [];
@@ -297,7 +299,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
     const controller = new AbortController();
     testControllerRef.current = controller;
     setTestStatus('checking');
-    setTestMessage('Checking the configured Ollama endpoint…');
+    setTestMessage("Let's see if Ollama is ready...");
     try {
       const models = await fetchOllamaModels(ollamaEndpoint(draft), controller.signal);
       const requestedModel = draft.model.trim() || OLLAMA_MODEL;
@@ -306,13 +308,13 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
       onConnectionChange('connected', hasOllamaModel(models, savedModel));
       setTestStatus(installed ? 'success' : 'warning');
       setTestMessage(installed
-        ? 'Ollama is responding and the selected model is available.'
-        : `Ollama is responding, but “${requestedModel}” is not installed.`);
+        ? "All set! Ollama's ready and your model is available."
+        : `We’re connected! I can’t find “${requestedModel}” yet — try installing it in Ollama.`);
     } catch (error) {
       if (error.name === 'AbortError') return;
       onConnectionChange('offline', false);
       setTestStatus('error');
-      setTestMessage(error.message || 'Could not reach Ollama.');
+      setTestMessage(friendlyOllamaError(error, draft.model.trim() || OLLAMA_MODEL));
     }
   };
 
@@ -321,14 +323,14 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   // verified against the parsed document before it is offered as a download.
   const downloadStandalone = async () => {
     setDownloadStatus('working');
-    setDownloadMessage('Preparing the standalone file…');
+    setDownloadMessage("Getting your copy ready...");
     try {
       const response = await fetch(STANDALONE_PAGE, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`The standalone file returned ${response.status}.`);
+      if (!response.ok) throw new Error("I couldn’t find that download right now.");
       const markup = await response.text();
       const parsed = new DOMParser().parseFromString(markup, 'text/html');
       if (parsed.querySelectorAll('script').length !== 1) {
-        throw new Error('This is not the standalone build. Serve the repository, or download it from the GitHub Pages site.');
+        throw new Error("I couldn’t find the offline copy here. Try downloading nova.html from the GitHub Pages site.");
       }
       const url = URL.createObjectURL(new Blob([markup], { type: 'text/html' }));
       const link = document.createElement('a');
@@ -339,10 +341,10 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 10000);
       setDownloadStatus('success');
-      setDownloadMessage(`Saved ${STANDALONE_FILENAME}. Open it in Chrome, then allow the local network prompt.`);
-    } catch (error) {
+      setDownloadMessage(`Your ${STANDALONE_FILENAME} download is ready. Open it in Chrome and allow local network access if asked.`);
+    } catch {
       setDownloadStatus('error');
-      setDownloadMessage(error.message || 'The standalone file could not be downloaded.');
+      setDownloadMessage("I couldn’t download your offline copy just now. Try again, or get nova.html from the GitHub Pages site.");
     }
   };
 
@@ -357,12 +359,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const savedVoiceMissing = Boolean(draft.voiceKey) && voiceCount > 0 && !resolveVoice(voices, draft.voiceKey);
   const draftModel = draft.model.trim() || OLLAMA_MODEL;
   const connectionLabel = connection === 'checking'
-    ? 'Checking connection…'
+    ? "Let's see if Ollama is ready..."
     : connection === 'offline'
-      ? 'Ollama is offline'
+      ? "Ollama isn't connected yet"
       : modelAvailable === false && draftModel === settings.model
-        ? 'Ollama is online · model not found'
-        : 'Ollama is online';
+        ? "We're connected — let's find your model."
+        : "Ollama's ready!";
 
   return (
     <div className="settings-panel-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -397,7 +399,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   setTestMessage('');
                 }}
               />
-              <p className="field-hint">Used for local responses. Default: {OLLAMA_MODEL}</p>
+              <p className="field-hint">This is the Ollama model I’ll chat with. The default is {OLLAMA_MODEL}.</p>
             </div>
 
             <div className="settings-field">
@@ -421,8 +423,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               <p className={`field-hint ${endpointWarning(draft.ollamaUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
                 {endpointWarning(draft.ollamaUrl)
                   || (standalone
-                    ? 'This standalone copy is opened from a file on your disk, so it calls Ollama directly. Keep the default unless Ollama listens elsewhere.'
-                    : 'Leave blank to use the local Vite proxy. On a hosted page, point this at a backend the browser can reach.')}
+                    ? "Keep the default if Ollama is running on this computer, or enter the address you’d like me to use."
+                    : "Leave this blank when using the local Vite server. On a hosted page, use an Ollama address your browser can reach.")}
               </p>
               <ConnectionHelp />
             </div>
@@ -442,7 +444,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 }}
               >
                 <option value="">{voiceCount ? `Automatic — ${autoVoice?.name || 'browser default'}`
-                  : speechAvailable ? 'No voices available yet — browser default' : 'No voices available in this browser'}</option>
+                  : speechAvailable ? "Voices are still loading — browser default" : "No voices here yet"}</option>
                 {naturalVoices.length > 0 && (
                   <optgroup label="Natural / Online">
                     {naturalVoices.map((voice) => (
@@ -460,15 +462,15 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               </select>
               <p className="field-hint" aria-live="polite">
                 {voiceCount
-                  ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} from this ${standalone ? 'device' : 'browser'}. Natural / Online first, basic voices separate. “network” voices need a connection.`
-                  : speechAvailable ? 'The voice list is still empty. The browser default can speak while voices load.'
-                    : 'No speech voices are available in this browser.'}
+                  ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Natural / Online voices are at the top; “network” voices need a connection.`
+                  : speechAvailable ? "Your voices are still loading. We can use the browser default for now."
+                    : "I can’t find a voice to use in this browser."}
               </p>
               <p className={`field-hint ${savedVoiceMissing ? 'field-hint-error' : ''}`}>
                 {savedVoiceMissing && selectedVoice
-                  ? `Your saved voice is no longer installed. Falling back to ${describeVoice(selectedVoice)}.`
+                  ? `I can’t find your saved voice here, so I’m using ${describeVoice(selectedVoice)} for now.`
                   : selectedVoice
-                    ? `Selected: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
+                    ? `Your voice: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
                     : `Browser default · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
               </p>
               <div className="voice-preview">
@@ -476,8 +478,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 {voiceTestPlaying && <button className="text-button voice-test-stop" type="button" onClick={onStopVoiceTest}>Stop test</button>}
               </div>
               <p className="field-hint">
-                {!speechAvailable ? 'Speech synthesis is not supported in this browser.'
-                  : voiceTestDisabled && !voiceTestPlaying ? `Wait until ${APP_NAME} finishes answering to test a voice.`
+                {!speechAvailable ? "I can’t speak aloud in this browser. You can try Chrome or Edge instead."
+                  : voiceTestDisabled && !voiceTestPlaying ? "Let me finish this reply, then we can try a voice."
                   : `Preview: “${TTS_TEST_TEXT}”`}
               </p>
             </div>
@@ -487,7 +489,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             <label className="settings-toggle-row" htmlFor="show-transcript">
               <span className="settings-toggle-copy">
                 <span className="config-title">Show last response</span>
-                <span className="config-detail">Display a transcript below {APP_NAME}</span>
+                <span className="config-detail">Read my last reply below {APP_NAME}</span>
               </span>
               <input
                 id="show-transcript"
@@ -504,11 +506,11 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             <section className="settings-memory" aria-labelledby="memory-title">
               <div className="settings-test-heading">
                 <h3 ref={memoryHeadingRef} id="memory-title" className="field-label" tabIndex={-1}>Memory</h3>
-                <span className="config-detail">{memoryError && !memories.length ? 'Unavailable' : `${memories.length} saved ${memories.length === 1 ? 'fact' : 'facts'}`}</span>
+                <span className="config-detail">{memoryError && !memories.length ? "Not ready yet" : `${memories.length} saved ${memories.length === 1 ? 'memory' : 'memories'}`}</span>
               </div>
               <p className="field-hint">
-                Facts stay in this browser and are shared with your configured Ollama endpoint when you chat.
-                Memory changes are saved immediately, even if you cancel other settings.
+                I keep your memories in this browser and share them with your chosen Ollama endpoint when we chat.
+                Memory changes are saved right away, even if you cancel other settings.
               </p>
               {memoryError && <p className="field-hint field-hint-error" role="status" aria-live="polite">{memoryError}</p>}
               {memories.length ? (
@@ -521,13 +523,13 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   ))}
                 </ul>
               ) : !memoryError && (
-                <p className="field-hint">No saved memories yet. Say “remember” followed by a fact.</p>
+                <p className="field-hint">We haven’t saved any memories yet. Tell me something you’d like me to remember.</p>
               )}
-              {confirmClearMemory && <p className="field-hint" role="status">Clear every saved fact? This cannot be undone.</p>}
+              {confirmClearMemory && <p className="field-hint" role="status">Would you like to clear all your saved memories? We can’t undo this.</p>}
               <div className="memory-actions">
                 {confirmClearMemory ? (
                   <>
-                    <button className="test-ollama-button" type="button" onClick={() => { if (onClearMemory()) { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); } }}>Confirm clear all</button>
+                    <button className="test-ollama-button" type="button" onClick={() => { if (onClearMemory()) { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); } }}>Yes, clear all</button>
                     <button className="text-button" type="button" onClick={() => { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); }}>Keep memories</button>
                   </>
                 ) : (
@@ -545,12 +547,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   <span className="config-detail">{connectionLabel}</span>
                 </div>
                 <button className="test-ollama-button" type="button" onClick={testOllama} disabled={testStatus === 'checking'}>
-                  {testStatus === 'checking' ? 'Testing…' : 'Test Ollama'}
+                  {testStatus === 'checking' ? "Checking..." : 'Test Ollama'}
                 </button>
               </div>
               <p className={`test-result test-result-${testStatus}`} role="status" aria-live="polite">
                 <i />
-                {testMessage || 'Ping the local endpoint and check the selected model.'}
+                {testMessage || "Let’s check that Ollama and your chosen model are ready."}
               </p>
             </div>
 
@@ -560,8 +562,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               <span className="field-label">Offline copy <span>OPTIONAL</span></span>
               {standalone ? (
                 <p className="field-hint">
-                  You are already running the standalone file, so it works straight from your disk.
-                  Ollama still has to accept this file’s origin — expand the CORS help above.
+                  You’re already using the single-file copy, so there’s nothing else to download.
+                  If Ollama won’t connect, the connection help above can walk you through its CORS settings.
                 </p>
               ) : (
                 <>
@@ -571,11 +573,11 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                     onClick={downloadStandalone}
                     disabled={downloadStatus === 'working'}
                   >
-                    {downloadStatus === 'working' ? 'Preparing…' : `Download ${STANDALONE_FILENAME}`}
+                    {downloadStatus === 'working' ? "Getting it ready..." : `Download ${STANDALONE_FILENAME}`}
                   </button>
                   <p className={`field-hint ${downloadStatus === 'error' ? 'field-hint-error' : ''}`} role="status" aria-live="polite">
                     {downloadMessage
-                      || 'One self-contained HTML file with no build step. Open it in Chrome and it calls Ollama directly.'}
+                      || "Keep a copy on your computer with no build step. Open it in Chrome to connect to Ollama directly."}
                   </p>
                 </>
               )}
@@ -619,7 +621,7 @@ function App() {
   const preferredVoice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
   const activeVoiceName = speechVoiceName || (speechAvailable
     ? (preferredVoice ? preferredVoice.name || 'Unnamed voice' : 'Browser default')
-    : 'Speech unavailable');
+    : "Voice isn’t available here");
   const moodTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const settingsTriggerRef = useRef(null);
@@ -726,16 +728,16 @@ function App() {
   const deleteSavedMemory = useCallback((fact) => {
     const current = refreshMemories();
     if (current.error) { notify(current.error); return false; }
-    if (!current.facts.includes(fact)) { notify('That fact is no longer saved.'); return false; }
+    if (!current.facts.includes(fact)) { notify("That memory is already gone, so there’s nothing more to remove."); return false; }
     const result = commitMemories(current.facts.filter((saved) => saved !== fact));
-    notify(result.ok ? 'Memory deleted.' : result.error);
+    notify(result.ok ? "All right, I’ve removed that memory." : result.error);
     return result.ok;
   }, [refreshMemories, commitMemories, notify]);
 
   const clearSavedMemories = useCallback(() => {
     // Explicit confirmation also lets a user reset an unreadable/corrupt store.
     const result = commitMemories([]);
-    notify(result.ok ? 'All saved memory cleared.' : result.error);
+    notify(result.ok ? "All right, your saved memories are cleared." : result.error);
     return result.ok;
   }, [commitMemories, notify]);
 
@@ -759,26 +761,26 @@ function App() {
         if (currentMemory.error) answer = currentMemory.error;
         else if (intent.type === 'list') {
           answer = currentMemory.facts.length
-            ? `I remember these facts about you: ${currentMemory.facts.map(describeMemoryFact).join('; ')}.`
-            : 'I do not have any saved memories yet. Say “remember” followed by a fact.';
+            ? `Here’s what I remember about you: ${currentMemory.facts.map(describeMemoryFact).join('; ')}.`
+            : "We haven’t saved any memories yet. What would you like me to remember?";
         } else if (intent.type === 'remember') {
           const result = rememberFact(currentMemory.facts, intent.fact);
           if (result.status === 'error') answer = result.error;
-          else if (result.status === 'unchanged') answer = `I already remember: ${describeMemoryFact(intent.fact)}.`;
+          else if (result.status === 'unchanged') answer = `I’ve got that in mind already: ${describeMemoryFact(intent.fact)}.`;
           else {
             const saved = commitMemories(result.facts, false);
             answer = saved.ok
-              ? `${result.status === 'updated' ? 'Updated my memory' : "I'll remember"}: ${describeMemoryFact(result.fact)}.`
+              ? `Got it! ${result.status === 'updated' ? 'I’ll remember the update' : 'I’ll keep that in mind'}: ${describeMemoryFact(result.fact)}.`
               : saved.error;
           }
         } else if (intent.type === 'forget') {
           const result = forgetFact(currentMemory.facts, intent.query);
           if (result.status === 'error') answer = result.error;
-          else if (result.status === 'missing') answer = `I do not have a saved fact matching “${result.query}”. You can review memories in Settings.`;
-          else if (result.status === 'ambiguous') answer = `More than one fact matches “${result.query}”. Please be more specific, or delete it in Settings.`;
+          else if (result.status === 'missing') answer = `I couldn’t find a saved memory about “${result.query}”. We can take a look together in Settings.`;
+          else if (result.status === 'ambiguous') answer = `I found a few memories about “${result.query}”. Which one would you like me to forget?`;
           else {
             const saved = commitMemories(result.facts, false);
-            answer = saved.ok ? `Forgot: ${describeMemoryFact(result.fact)}.` : saved.error;
+            answer = saved.ok ? "All right, I’ve removed that from your saved memories." : saved.error;
           }
         }
       }
@@ -787,7 +789,7 @@ function App() {
         const messages = [
           {
             role: 'system',
-            content: `You are ${APP_NAME}. ${memoryPrompt(currentMemory.facts)}\nYou are a warm and witty local AI assistant. You run 100% locally on the user's machine. Keep responses under 3 sentences. Be helpful, kind, and efficient.`,
+            content: `${SYSTEM_PROMPT}\n\n${memoryPrompt(currentMemory.facts)}`,
           },
           ...conversation,
           { role: 'user', content: prompt },
@@ -800,7 +802,7 @@ function App() {
         });
         if (!result.ok) {
           const payload = await result.json().catch(() => ({}));
-          throw new Error(payload.error?.message || `Ollama returned ${result.status}.`);
+          throw ollamaError(payload.error?.message, result.status);
         }
         answer = await readChatCompletionStream(result);
         if (controller.signal.aborted) return;
@@ -826,10 +828,7 @@ function App() {
         setModelAvailable(false);
       }
       setStage('ready');
-      const detail = error.message === 'Failed to fetch'
-        ? `I could not reach Ollama at ${(settings.ollamaUrl || '').trim() || 'localhost:11434'}. Check that it is running and that its CORS settings accept this page — open Settings for the exact command.`
-        : `I couldn't get a response from Ollama. ${error.message}`;
-      notify(detail);
+      notify(friendlyOllamaError(error, settings.model || OLLAMA_MODEL));
     } finally {
       if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
@@ -840,7 +839,7 @@ function App() {
   const speakAnswer = useCallback((text, selectedVoiceKey = settings.voiceKey, preview = false) => {
     if (typeof window.speechSynthesis?.speak !== 'function' || typeof SpeechSynthesisUtterance !== 'function') {
       setStage('ready');
-      notify('This browser has no speech synthesis, so replies will stay silent.');
+      notify("I can’t speak aloud in this browser. Turn on Show last response in Settings to read my replies, or try Chrome or Edge.");
       return Promise.resolve();
     }
 
@@ -893,7 +892,7 @@ function App() {
       utterance.onerror = () => {
         if (finished) return;
         finishSpeech();
-        if (preview) notify('Voice preview could not play. Check your browser’s voice service or connection.');
+        if (preview) notify("I couldn’t play that voice just now. Check your connection, or try another voice.");
       };
       speechFinishRef.current = finishSpeech;
       // Publish only after configuration succeeds, and freeze the actual utterance's
@@ -906,7 +905,7 @@ function App() {
         window.speechSynthesis.speak(utterance);
       } catch {
         finishSpeech();
-        notify('Speech could not start in this browser.');
+        notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
       }
     });
   }, [notify, settings, voices]);
@@ -922,7 +921,7 @@ function App() {
     void speakRef.current?.(TTS_TEST_TEXT, key, true)?.catch(() => {
       stopVoiceTest();
       setStage('ready');
-      notify('Voice preview could not start in this browser.');
+      notify("I couldn’t start that voice preview. Try another voice in Settings.");
     });
   }, [notify, settingsOpen, stage, stopVoiceTest]);
 
@@ -964,20 +963,20 @@ function App() {
       onQuestion: (text) => promptRef.current?.(text),
       onInputEnd: (reason) => {
         setStage('ready');
-        if (reason === 'no-speech') notify('I did not hear a question. Say “hey nova” or tap the microphone and try again.');
+        if (reason === 'no-speech') notify("I didn’t catch a question. Say “hey nova” or tap the mic when you’re ready to try again.");
       },
       onError: (error, mode) => {
         if (error === 'not-allowed' || error === 'service-not-allowed') {
-          setWakeMessage('Microphone access is blocked — allow it, then use the mic button to retry.');
+          setWakeMessage("I need microphone permission to hear you. Allow it in your browser, then tap the mic button.");
         } else if (mode === 'standby') {
-          setWakeMessage('Wake word paused — use the mic button to retry.');
+          setWakeMessage("I’m having trouble listening right now. Tap the mic button when you’re ready to try again.");
         }
         if (mode === 'question') {
           notify(error === 'not-allowed' || error === 'service-not-allowed'
-            ? 'Microphone access is blocked. Allow it in your browser settings and try again.'
+            ? "I need microphone permission to hear you. Allow it in your browser settings, then we can try again."
             : error === 'no-speech'
-              ? 'I did not hear anything. Tap the microphone and try again.'
-              : `Speech recognition stopped: ${error}.`);
+              ? "I didn’t catch that. Tap the mic and give it another try when you’re ready."
+              : "I had trouble hearing you just now. Tap the mic to try again.");
         }
       },
     });
@@ -1016,7 +1015,7 @@ function App() {
     }
     if (stage !== 'ready') return;
     if (!voiceListenerRef.current?.available) {
-      notify('Speech recognition is not supported in this browser. Try a recent version of Chrome or Edge.');
+      notify("I can’t use the microphone in this browser. Try a recent version of Chrome or Edge so we can talk.");
       return;
     }
     window.speechSynthesis?.cancel();
@@ -1040,12 +1039,8 @@ function App() {
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [settingsOpen, stage]);
 
-  const statusText = {
-    ready: `${APP_NAME} READY`,
-    listening: `${APP_NAME} LISTENING`,
-    thinking: `${APP_NAME} THINKING`,
-    speaking: `${APP_NAME} SPEAKING`,
-  }[stage];
+  const statusText = stage === 'ready' && connection === 'checking'
+    ? STATUS_TEXT.starting : STATUS_TEXT[stage];
 
   const avatarActivity = { listening: 'is-listening', thinking: 'is-thinking', speaking: 'is-speaking' }[stage] || '';
   const avatarMood = stage === 'ready'
@@ -1065,13 +1060,13 @@ function App() {
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
-      notify('Settings could not be saved in this browser.');
+      notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
       return;
     }
     stopVoiceTest();
     setSettings(updatedSettings);
     setSettingsOpen(false);
-    notify('Settings saved.');
+    notify("All set! Your settings are saved.");
   };
 
   const closeSettings = useCallback(() => { stopVoiceTest(); setSettingsOpen(false); }, [stopVoiceTest]);
@@ -1107,15 +1102,15 @@ function App() {
           <p className="active-voice-label" title={activeVoiceName} aria-label={`Active voice: ${activeVoiceName}`} aria-live="polite" aria-atomic="true">{activeVoiceName}</p>
           {connection === 'offline' && (
             <div className="avatar-offline-display" role="status" aria-live="polite">
-              <span>{APP_NAME} OFFLINE —</span>
-              <span>{(settings.ollamaUrl || '').trim() ? 'Check your Ollama endpoint' : 'Start Ollama to connect'}</span>
+              <span>{OLLAMA_UNREACHABLE}</span>
+              <span>Open Settings if you’d like a hand connecting.</span>
             </div>
           )}
-          <h1 className="tagline">Your voice, your world.</h1>
+          <h1 className="tagline">What’s on your mind?</h1>
           <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
           {settings.showTranscript && lastResponse && (
-            <div className="response-transcript" role="region" aria-label="Last response transcript" aria-live="polite">
-              <span>LAST RESPONSE</span>
+            <div className="response-transcript" role="region" aria-label="My last reply" aria-live="polite">
+              <span>My last reply</span>
               <p>{lastResponse}</p>
             </div>
           )}
@@ -1124,7 +1119,7 @@ function App() {
 
       <footer className="control-dock">
         {wakeStandby && stage === 'ready' && !settingsOpen && (
-          <div className="wake-indicator" role="status" aria-label={`Wake word standby — say “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” to wake ${APP_NAME}`}>
+          <div className="wake-indicator" role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
             <MicIcon />
           </div>
         )}

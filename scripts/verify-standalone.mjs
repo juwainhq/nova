@@ -94,6 +94,12 @@ check('voice selector is bound to nova-voice', /nova-voice/.test(html));
 check('includes the browser memory store', script.includes('nova.memory'));
 check('includes remembered facts in the system prompt', script.includes('Here is what you know about the user:'));
 check('ships the memory settings controls', script.includes('Clear all memory') && script.includes('memory-list'));
+check('ships the friendly personality and conditional voice brevity rules', script.includes('a warm, friendly, and genuinely helpful personal AI assistant.')
+  && script.includes('You never use sarcasm unless the user is clearly joking first.')
+  && script.includes('2-3 sentences max unless the user asks for more detail.'));
+check('ships warm startup and connection messages', script.includes('Waking up...')
+  && script.includes("Hmm, I can't reach Ollama right now. Is it running?"));
+check('does not ship obsolete personality or robotic status copy', !/warm and witty|100% locally|NOVA READY|Query processed\.|Initializing\.\.\./.test(script));
 
 // Guards the `</script>` escaping: a mangled inline script would otherwise still
 // satisfy every structural check above.

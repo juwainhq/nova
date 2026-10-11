@@ -9,6 +9,7 @@ const googleVoice = voice('Google US English', { localService: false });
 const basicVoice = voice('Samantha', { default: true });
 const allVoices = [basicVoice, googleVoice, guyVoice, ariaVoice];
 const panelNode = (ui) => ui.nodes().find((node) => node.props.onTestVoice && node.props.onClose);
+const atStage = (ui, stage) => ui.find('status-word')?.props.className.split(' ').includes(`status-word-${stage}`);
 const label = (ui) => ui.find('active-voice-label')?.props.children;
 const sample = "Hey, I'm Nova. Ready when you are.";
 
@@ -70,7 +71,7 @@ export async function verifyVoices(check) {
     && ui.storage.getItem('nova.memory') === null && !ui.requests.some((request) => request.url.endsWith('/chat/completions')));
   check('queued preview sets the real speaker label and provides a Stop test action', label(ui) === basicVoice.name
     && panel.find('test-voice-button').props.disabled && Boolean(panel.find('voice-test-stop'))
-    && ui.find('status-word').props.children === 'NOVA SPEAKING');
+    && atStage(ui, 'speaking'));
   const starts = ui.recognition.instances[0].starts.length;
   ui.clock.tick(10000);
   ui.flush();
@@ -99,7 +100,7 @@ export async function verifyVoices(check) {
   choose(panel, guyVoice.voiceURI);
   ui.flush();
   syncPanel(ui, panel);
-  check('changing the dropdown cancels the previous preview and clears its signal', ui.find('status-word').props.children === 'NOVA READY'
+  check('changing the dropdown cancels the previous preview and clears its signal', atStage(ui, 'ready')
     && ui.avatarElement.style.getPropertyValue('--audio-pulse') === '' && !panel.find('voice-test-stop')
     && ui.cancellations === beforeChange + 1);
   test(ui, panel);
@@ -110,12 +111,12 @@ export async function verifyVoices(check) {
   oldPreview.onboundary({ name: 'word', charLength: 10 });
   ui.flush();
   check('stale preview callbacks cannot change the new voice, stage or brightness', label(ui) === guyVoice.name
-    && ui.find('status-word').props.children === 'NOVA SPEAKING' && ui.avatarElement.style.getPropertyValue('--audio-pulse') === '');
+    && atStage(ui, 'speaking') && ui.avatarElement.style.getPropertyValue('--audio-pulse') === '');
   const beforeStop = ui.cancellations;
   panel.find('voice-test-stop').props.onClick();
   ui.flush();
   syncPanel(ui, panel);
-  check('Stop test releases the preview without leaving the UI speaking', ui.find('status-word').props.children === 'NOVA READY'
+  check('Stop test releases the preview without leaving the UI speaking', atStage(ui, 'ready')
     && !panel.find('voice-test-stop') && label(ui) === ariaVoice.name && ui.cancellations === beforeStop + 1);
 
   test(ui, panel);
@@ -124,10 +125,10 @@ export async function verifyVoices(check) {
   ui.flush();
   syncPanel(ui, panel);
   check('preview engine errors release the controls and report an honest failure', !panel.find('test-voice-button').props.disabled
-    && ui.find('toast')?.props.children.some((node) => typeof node?.props?.children === 'string' && /Voice preview could not play/.test(node.props.children)));
+    && ui.find('toast')?.props.children.some((node) => typeof node?.props?.children === 'string' && /couldn.t play that voice/.test(node.props.children)));
   ui.speechThrows = true;
   test(ui, panel);
-  check('synchronous speech startup failure cannot strand preview state', ui.find('status-word').props.children === 'NOVA READY' && !panel.find('voice-test-stop'));
+  check('synchronous speech startup failure cannot strand preview state', atStage(ui, 'ready') && !panel.find('voice-test-stop'));
   ui.speechThrows = false;
 
   // Saving an active preview must stop it too. Previewing itself never saved it.
@@ -141,7 +142,7 @@ export async function verifyVoices(check) {
   savingPreview.onend();
   ui.flush();
   check('Save stops the preview and rejects its late callbacks', ui.cancellations === beforeSave + 1
-    && ui.find('status-word').props.children === 'NOVA READY');
+    && atStage(ui, 'ready'));
   check('Save persists the selected URI and updates the preferred voice label', ui.storage.getItem('nova.tts.voice') === guyVoice.voiceURI && label(ui) === guyVoice.name);
   const saved = await createAppHarness({ voices: [], storage: ui.storage });
   saved.updateVoices(allVoices);
@@ -175,7 +176,7 @@ export async function verifyVoices(check) {
   closingPreview.onstart();
   closingPreview.onend();
   ui.flush();
-  check('late callbacks from a closed preview cannot change the current stage', ui.find('status-word').props.children === 'NOVA READY');
+  check('late callbacks from a closed preview cannot change the current stage', atStage(ui, 'ready'));
 
   const unmountPanel = await openSettings(ui);
   test(ui, unmountPanel);
@@ -207,12 +208,12 @@ export async function verifyVoices(check) {
   for (const options of [{ speech: false }, { missingSynthesis: true }]) {
     const unsupported = await createAppHarness(options);
     const unsupportedPanel = await openSettings(unsupported);
-    check(`missing speech API (${Object.keys(options)[0]}): honest label and disabled preview`, label(unsupported) === 'Speech unavailable'
+    check(`missing speech API (${Object.keys(options)[0]}): honest label and disabled preview`, label(unsupported) === 'Voice isn’t available here'
       && unsupportedPanel.find('test-voice-button').props.disabled);
     panelNode(unsupported).props.onTestVoice('');
     unsupported.flush();
     check(`missing speech API (${Object.keys(options)[0]}): no utterance or stuck speaking stage`, unsupported.utterances.length === 0
-      && unsupported.find('status-word').props.children === 'NOVA READY');
+      && atStage(unsupported, 'ready'));
     unsupported.unmount();
     unsupportedPanel.unmount();
   }
@@ -252,7 +253,7 @@ export async function verifyVoices(check) {
   normal.flush();
   busyPanel.unmount();
   check('closing settings and forced test clicks cannot cancel a normal reply', normal.cancellations === beforeCancel && normal.utterances.length === 1
-    && normal.find('status-word').props.children === 'NOVA SPEAKING');
+    && atStage(normal, 'speaking'));
   answer.onend();
   await normal.settle();
   check('a completed normal reply adopts the new preferred voice for future speech', label(normal) === ariaVoice.name);

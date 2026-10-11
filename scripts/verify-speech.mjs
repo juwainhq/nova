@@ -12,9 +12,11 @@ import { promisify } from 'node:util';
 import { createAppHarness, createAudioDouble, createClock, createRecognitionDouble } from './speech-test-fixtures.mjs';
 import { verifyMemory } from './memory-checks.mjs';
 import { verifyVoices } from './voice-checks.mjs';
+import { verifyPersonality } from './personality-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
+const atStage = (ui, stage) => ui.find('status-word')?.props.className.split(' ').includes(`status-word-${stage}`);
 
 const problems = [];
 const checks = [];
@@ -123,19 +125,20 @@ check('a stored choice survives a rename by URI', resolveVoice(MACHINE, 'Samanth
 check('labels an offline voice as offline', voiceOptionLabel(voice('Samantha', 'en-US')).includes('offline'));
 check('labels a network voice as network', voiceOptionLabel(voice('Google US English', 'en-US', { localService: false })).includes('network'));
 check('describes the selection for the panel', describeVoice(chosen) === `${chosen.name} · en-US · needs network`, describeVoice(chosen));
-check('describes a missing voice safely', describeVoice(null) === 'No voice available');
+check('describes a missing voice safely', describeVoice(null) === 'No voice here yet');
 
 // ------------------------------------------------------------- no ElevenLabs
 const app = await readFile(resolve(root, 'src/App.jsx'), 'utf8');
+const personality = await readFile(resolve(root, 'src/personality.js'), 'utf8');
 const viteConfig = await readFile(resolve(root, 'vite.config.js'), 'utf8');
 check('app has no ElevenLabs code', !/elevenlabs/i.test(app));
 check('app has no API key handling', !/xi-api-key|apiKey/.test(app));
 check('dev proxy no longer forwards ElevenLabs', !/elevenlabs/i.test(viteConfig));
 check('app speaks through the Web Speech API', /speechSynthesis\.speak/.test(app));
 check('app takes its name from the brand module', /import \{ APP_NAME \} from '\.\/brand\.js'/.test(app));
-check('system prompt carries the brand name', /You are \$\{APP_NAME\}/.test(app));
-check('system prompt asks for a warm personality', /warm and witty/.test(app));
-check('status messages carry the brand name', /ready: `\$\{APP_NAME\} READY`/.test(app));
+check('system prompt carries the brand name', /You are \$\{APP_NAME\}/.test(personality));
+check('system prompt asks for a warm personality', /a warm, friendly, and genuinely helpful/.test(personality));
+check('status messages are conversational rather than machine codes', personality.includes('Ready when you are.') && personality.includes('Talking with you.'));
 check('settings written under the old name are adopted', /LEGACY_STORAGE_PREFIX/.test(app));;
 check('app sends the specified parameters', /utterance\.rate = TTS\.rate/.test(app)
   && /utterance\.pitch = TTS\.pitch/.test(app)
@@ -223,11 +226,11 @@ check('legacy name selections normalize to the dropdown URI', /<option value="Sa
 
 // A voice that has since been uninstalled must be reported, not silently swapped.
 const missingPanel = await renderPanel(MACHINE, 'Ghost-uri');
-check('a missing saved voice is reported', /no longer installed/i.test(missingPanel));
+check('a missing saved voice is reported', /can’t find your saved voice/i.test(missingPanel));
 
 // An empty list must degrade gracefully rather than render a broken control.
 const emptyPanel = await renderPanel([], '');
-check('panel survives an empty voice list', /<select[^>]*id="nova-voice"/.test(emptyPanel) && /No voices available/.test(emptyPanel));
+check('panel survives an empty voice list', /<select[^>]*id="nova-voice"/.test(emptyPanel) && /Voices are still loading/.test(emptyPanel));
 
 // ----------------------------------------------------------- wake word / modes
 check('wake phrase follows the brand', WAKE_WORD === 'hey nova');
@@ -236,7 +239,7 @@ check('wake parser preserves a same-utterance question', parseWakeWord('Hey, Nov
 check('wake parser tolerates repeated whitespace', parseWakeWord('hey   nova, hello')?.question === 'hello');
 check('wake parser rejects partial and lookalike names', ['hey novation', 'hey supernova', 'heynova', 'hey no va'].every((text) => parseWakeWord(text) === null));
 check('wake parser ignores unrelated and empty text', parseWakeWord('good morning') === null && parseWakeWord(undefined) === null);
-check('unsupported message is the specified wording', WAKE_UNSUPPORTED_MESSAGE === 'Wake word not supported — use the mic button');
+check('unsupported wake message is friendly and honest', WAKE_UNSUPPORTED_MESSAGE === 'I can’t listen for “hey nova” in this browser. Try the mic button instead.');
 
 function listenerHarness(options = {}) {
   const clock = createClock();
@@ -448,7 +451,7 @@ ui.window.dispatch('pointerdown');
 await ui.settle();
 mic.result('Hey Nova');
 ui.flush();
-check('wake changes status to LISTENING and enables listening eyes', ui.find('status-word')?.props.children === 'NOVA LISTENING' && ui.find('avatar-container')?.props.className.includes('is-listening'));
+check('wake changes status to LISTENING and enables listening eyes', atStage(ui, 'listening') && ui.find('avatar-container')?.props.className.includes('is-listening'));
 check('wake hides the standby icon and plays the chime', !ui.find('wake-indicator') && ui.audio.instances[0]?.oscillators.length === 2);
 check('wake immediately starts the matching crescent/double-jump pose', ui.find('avatar-container')?.props.className.includes('is-waking'));
 ui.clock.tick(799);
@@ -457,17 +460,17 @@ check('wake flourish lasts through 799ms', ui.find('avatar-container')?.props.cl
 ui.clock.tick(1);
 ui.flush();
 check('wake flourish ends at 800ms without ending listening', !ui.find('avatar-container')?.props.className.includes('is-waking')
-  && ui.find('avatar-container')?.props.className.includes('is-listening') && ui.find('status-word')?.props.children === 'NOVA LISTENING');
+  && ui.find('avatar-container')?.props.className.includes('is-listening') && atStage(ui, 'listening'));
 mic.end();
 ui.clock.tick(150);
 mic.result('How are you?');
 ui.flush();
-check('a question enters thinking and disables the mic button', ui.find('status-word')?.props.children === 'NOVA THINKING' && ui.find('mic-button')?.props.disabled);
+check('a question enters thinking and disables the mic button', atStage(ui, 'thinking') && ui.find('mic-button')?.props.disabled);
 mic.end();
 await ui.settle();
 const reply = ui.utterances[0];
 check('App speaks the answer with the selected browser voice and parameters', reply?.voice?.name === 'Samantha' && reply.rate === .92 && reply.pitch === .88 && reply.volume === 1);
-check('queued speech stays speaking, not happy or standby', ui.find('status-word')?.props.children === 'NOVA SPEAKING' && !ui.find('wake-indicator') && !ui.find('avatar-container')?.props.className.includes('is-happy'));
+check('queued speech stays speaking, not happy or standby', atStage(ui, 'speaking') && !ui.find('wake-indicator') && !ui.find('avatar-container')?.props.className.includes('is-happy'));
 const beforeSpeechEnd = mic.starts.length;
 ui.clock.tick(10000);
 ui.flush();
@@ -604,7 +607,7 @@ unsupportedUi.utterances[0]?.onerror();
 await unsupportedUi.settle();
 unsupportedUi.clock.tick();
 unsupportedUi.flush();
-check('speech error releases the UI without claiming wake support', unsupportedUi.find('status-word')?.props.children === 'NOVA READY' && !unsupportedUi.find('wake-indicator'));
+check('speech error releases the UI without claiming wake support', atStage(unsupportedUi, 'ready') && !unsupportedUi.find('wake-indicator'));
 unsupportedUi.unmount();
 
 const silentUi = await createAppHarness({ speech: false });
@@ -634,10 +637,11 @@ deniedUi.recognition.instances[0].error('not-allowed');
 deniedUi.recognition.instances[0].end();
 await deniedUi.settle();
 deniedUi.clock.tick(60000);
-check('App explains denied microphone permission without repeated prompts', deniedUi.find('wake-message')?.props.children.includes('Microphone access is blocked') && deniedUi.recognition.instances[0].starts.length === 1 && !deniedUi.find('wake-indicator'));
+check('App explains denied microphone permission without repeated prompts', deniedUi.find('wake-message')?.props.children.includes('I need microphone permission') && deniedUi.recognition.instances[0].starts.length === 1 && !deniedUi.find('wake-indicator'));
 deniedUi.unmount();
 
 // Voice preview/selection and memory use the same compiled App fixture.
+await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);
 

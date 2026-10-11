@@ -136,12 +136,12 @@ export async function verifyMemory(check, renderPanel) {
   await send(second, 'How should I introduce myself?');
   const firstRequest = JSON.parse(posts(second)[0].options.body);
   check('new conversations inject all remembered facts into the system prompt', firstRequest.messages[0].role === 'system'
-    && firstRequest.messages[0].content.startsWith('You are NOVA.') && firstRequest.messages[0].content.includes(JSON.stringify(initialFacts)));
+    && firstRequest.messages[0].content.startsWith('You are NOVA,') && firstRequest.messages[0].content.includes(JSON.stringify(initialFacts)));
   check('memory does not create extra API message roles', firstRequest.messages.filter((message) => message.role === 'system').length === 1);
   await send(second, 'Tell me more');
   check('every subsequent chat request refreshes the remembered-fact context', JSON.parse(posts(second)[1].options.body).messages[0].content.includes(JSON.stringify(initialFacts)));
   const forgotten = await send(second, 'forget my name');
-  check('voice forgetting persists deletion and confirms it locally', !readMemoryStore(shared).facts.includes(initialFacts[0]) && forgotten.text.startsWith('Forgot:') && posts(second).length === 2);
+  check('voice forgetting persists deletion and confirms it locally', !readMemoryStore(shared).facts.includes(initialFacts[0]) && forgotten.text === 'All right, I’ve removed that from your saved memories.' && posts(second).length === 2);
   second.chatAnswer = 'Let us start fresh.';
   await send(second, 'What should we discuss next?');
   check('deleted facts cannot linger in the prompt through chat history', !JSON.stringify(JSON.parse(posts(second).at(-1).options.body).messages).includes('Juwain'));
@@ -170,13 +170,13 @@ export async function verifyMemory(check, renderPanel) {
   check('deleting a focused memory restores focus to the surviving Memory heading', memoryFocus === 1);
   panelUi.findButton('Clear all memory').props.onClick();
   panelUi.flush();
-  check('clear all requires explicit confirmation before deleting data', readMemoryStore(settingsStorage).facts.length === 2 && Boolean(panelUi.findButton('Confirm clear all')));
+  check('clear all requires explicit confirmation before deleting data', readMemoryStore(settingsStorage).facts.length === 2 && Boolean(panelUi.findButton('Yes, clear all')));
   panelUi.findButton('Keep memories').props.onClick();
   panelUi.flush();
   check('cancelling clear all preserves facts', readMemoryStore(settingsStorage).facts.length === 2 && Boolean(panelUi.findButton('Clear all memory')));
   panelUi.findButton('Clear all memory').props.onClick();
   panelUi.flush();
-  panelUi.findButton('Confirm clear all').props.onClick();
+  panelUi.findButton('Yes, clear all').props.onClick();
   settingsApp.flush();
   panelUi.flush();
   panelUi.updatePanel(getPanel(settingsApp).props);
@@ -198,17 +198,17 @@ export async function verifyMemory(check, renderPanel) {
   const safeMarkup = await renderPanel([], '', ['<img src=x onerror=alert(1)>']);
   check('stored memory text is escaped by React rather than interpreted as HTML', safeMarkup.includes('&lt;img') && !safeMarkup.includes('<img src=x'));
   const emptyMarkup = await renderPanel([], '', []);
-  check('empty Memory settings show a useful message', emptyMarkup.includes('No saved memories yet.'));
-  const unreadableMarkup = await renderPanel([], '', [], 'Saved memory could not be read.');
-  check('unreadable memory is not falsely presented as an empty store', unreadableMarkup.includes('Unavailable')
-    && unreadableMarkup.includes('Saved memory could not be read.') && !unreadableMarkup.includes('No saved memories yet.'));
+  check('empty Memory settings show a useful message', emptyMarkup.includes('We haven’t saved any memories yet.'));
+  const unreadableMarkup = await renderPanel([], '', [], 'I couldn’t read your saved memories.');
+  check('unreadable memory is not falsely presented as an empty store', unreadableMarkup.includes('Not ready yet')
+    && unreadableMarkup.includes('I couldn’t read your saved memories.') && !unreadableMarkup.includes('We haven’t saved any memories yet.'));
 
   const ambiguousStorage = createStorageDouble({ [MEMORY_KEY]: JSON.stringify(orangeFacts) });
   const ambiguousUi = await createAppHarness({ storage: ambiguousStorage });
   ambiguousUi.clock.tick();
   await ambiguousUi.settle();
   const ambiguousReply = await send(ambiguousUi, 'forget orange');
-  check('App refuses ambiguous voice deletion without changing storage', ambiguousReply.text.includes('More than one fact') && same(readMemoryStore(ambiguousStorage).facts, orangeFacts));
+  check('App refuses ambiguous voice deletion without changing storage', ambiguousReply.text.includes('Which one would you like me to forget?') && same(readMemoryStore(ambiguousStorage).facts, orangeFacts));
   ambiguousUi.unmount();
 
   const brokenStorage = createStorageDouble({ [MEMORY_KEY]: '{damaged' });
@@ -216,7 +216,7 @@ export async function verifyMemory(check, renderPanel) {
   brokenUi.clock.tick();
   await brokenUi.settle();
   const brokenReply = await send(brokenUi, 'remember my name is Juwain');
-  check('App reports corrupt memory without overwriting it or claiming a save', brokenReply.text.includes('could not be read') && brokenStorage.getItem(MEMORY_KEY) === '{damaged');
+  check('App reports corrupt memory without overwriting it or claiming a save', brokenReply.text.includes('couldn’t read your saved memories') && brokenStorage.getItem(MEMORY_KEY) === '{damaged');
   brokenUi.find('settings-trigger').props.onClick();
   brokenUi.flush();
   check('explicit settings clear can recover a corrupt memory store', Boolean(getPanel(brokenUi).props.memoryError)
@@ -229,15 +229,15 @@ export async function verifyMemory(check, renderPanel) {
   quotaUi.clock.tick();
   await quotaUi.settle();
   const failedSave = await send(quotaUi, 'remember my favorite color is orange');
-  check('App honestly reports a failed save and retains prior memories', failedSave.text.includes('could not be saved') && same(readMemoryStore(quotaStorage).facts, [initialFacts[0]]));
+  check('App honestly reports a failed save and retains prior memories', failedSave.text.includes('couldn’t save that change') && same(readMemoryStore(quotaStorage).facts, [initialFacts[0]]));
   const failedDelete = await send(quotaUi, 'forget my name');
-  check('failed voice deletion does not pretend the fact was forgotten', failedDelete.text.includes('could not be saved') && same(readMemoryStore(quotaStorage).facts, [initialFacts[0]]));
+  check('failed voice deletion does not pretend the fact was forgotten', failedDelete.text.includes('couldn’t save that change') && same(readMemoryStore(quotaStorage).facts, [initialFacts[0]]));
   quotaUi.find('settings-trigger').props.onClick();
   quotaUi.flush();
   check('failed clear preserves data and displays a settings error', !getPanel(quotaUi).props.onClearMemory()
     && readMemoryStore(quotaStorage).facts.length === 1);
   quotaUi.flush();
-  check('settings expose storage failures accessibly', getPanel(quotaUi).props.memoryError.includes('could not be saved'));
+  check('settings expose storage failures accessibly', getPanel(quotaUi).props.memoryError.includes('couldn’t save that change'));
   quotaUi.unmount();
 
   const syncedStorage = createStorageDouble({ [MEMORY_KEY]: JSON.stringify(initialFacts) });

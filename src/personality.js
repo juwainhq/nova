@@ -1,0 +1,58 @@
+import { APP_NAME } from './brand.js';
+
+// The requested voice-first personality, separate from per-request memory data.
+export const SYSTEM_PROMPT = `You are ${APP_NAME}, a warm, friendly, and genuinely helpful personal AI assistant.
+
+You speak like a kind and smart friend — encouraging, patient, and never condescending. You keep responses conversational and natural, like you're talking not reading. You're enthusiastic but calm. You never use sarcasm unless the user is clearly joking first. When you don't know something, you say so honestly and helpfully. You remember things the user tells you and refer back to them naturally. Keep responses concise for voice — 2-3 sentences max unless the user asks for more detail.`;
+
+export const STATUS_TEXT = {
+  starting: 'Waking up...',
+  ready: 'Ready when you are.',
+  listening: "I'm listening.",
+  thinking: 'Let me think...',
+  speaking: 'Talking with you.',
+};
+
+export const OLLAMA_UNREACHABLE = "Hmm, I can't reach Ollama right now. Is it running?";
+export const OLLAMA_REPLY_ERRORS = {
+  noStream: "I didn't get a reply from Ollama this time. Let's try again.",
+  invalidStream: "I had trouble reading that reply. Let's give it another try.",
+  interrupted: "I couldn't finish reading that reply. Let's try again.",
+  emptyReply: "Ollama didn't send a reply this time. Let's try again.",
+};
+
+// Keep HTTP details for troubleshooting without showing raw backend/browser errors
+// in NOVA's conversation. Neither API behavior nor retry/cancellation changes.
+export function ollamaError(detail, status) {
+  const error = new Error(detail || OLLAMA_REPLY_ERRORS.noStream);
+  error.status = status;
+  return error;
+}
+
+export function friendlyOllamaError(error, model = '') {
+  const detail = String(error?.message || '');
+  if (/\bmodel\b[\s\S]*(?:not\s+found|does\s+not\s+exist|not\s+installed)/i.test(detail)) {
+    const name = model ? `“${model}”` : 'that model';
+    return `I couldn't find ${name} in Ollama. Try installing it, or choose another model in Settings.`;
+  }
+  if (error?.status === 401 || error?.status === 403) {
+    return "Ollama isn't letting this page connect yet. Let's check the connection permissions in Settings.";
+  }
+  if (error?.status === 404) {
+    return "I couldn't find Ollama at that address. Let's check the endpoint in Settings.";
+  }
+  if (error?.status === 429) {
+    return "Ollama needs a little more time. Let's try again in a moment.";
+  }
+  if (error?.status >= 500) {
+    return "Ollama ran into a problem just now. Let's give it a moment and try again.";
+  }
+  if (error?.status === 400) {
+    return "Ollama couldn't use those settings. Let's check the model and endpoint in Settings.";
+  }
+  if (Object.values(OLLAMA_REPLY_ERRORS).includes(detail)) return detail;
+  if (error?.name === 'TypeError' || /failed to fetch|fetch failed|network|load failed/i.test(detail)) {
+    return OLLAMA_UNREACHABLE;
+  }
+  return OLLAMA_REPLY_ERRORS.noStream;
+}

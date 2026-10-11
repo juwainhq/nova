@@ -90,7 +90,7 @@ export function resolveVoice(voices, key) {
 
 // "Samantha · en-US · offline" — offline matters, since that is when it still works.
 export function describeVoice(voice) {
-  if (!voice) return 'No voice available';
+  if (!voice) return 'No voice here yet';
   const parts = [voice.name || 'Unnamed'];
   if (voice.lang) parts.push(voice.lang);
   parts.push(voice.localService ? 'offline' : 'needs network');
@@ -103,7 +103,7 @@ export function voiceOptionLabel(voice) {
 }
 
 export const WAKE_WORD = `hey ${APP_NAME.toLowerCase()}`;
-export const WAKE_UNSUPPORTED_MESSAGE = 'Wake word not supported — use the mic button';
+export const WAKE_UNSUPPORTED_MESSAGE = `I can’t listen for “${WAKE_WORD}” in this browser. Try the mic button instead.`;
 const wakePattern = new RegExp(`\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b[\\s,.!?:;—-]*`, 'i');
 
 // Keep the user's question, including its punctuation, but never send the wake

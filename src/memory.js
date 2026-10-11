@@ -27,9 +27,9 @@ const slotFor = (fact) => PROFILE_FACTS.find(([, pattern]) => pattern.test(fact)
 
 export function rememberFact(facts, value) {
   const fact = normalizeMemoryFact(value);
-  if (!fact) return { facts, status: 'error', error: 'Tell me the fact you would like me to remember.' };
+  if (!fact) return { facts, status: 'error', error: "What would you like me to remember?" };
   if (fact.length > MAX_MEMORY_LENGTH) {
-    return { facts, status: 'error', error: `A memory can be at most ${MAX_MEMORY_LENGTH} characters. Please shorten that fact.` };
+    return { facts, status: 'error', error: `That’s a little longer than I can save. Could you keep it to ${MAX_MEMORY_LENGTH} characters or fewer?` };
   }
   if (facts.some((saved) => identity(saved) === identity(fact))) return { facts, status: 'unchanged' };
   const slot = slotFor(fact);
@@ -38,41 +38,41 @@ export function rememberFact(facts, value) {
     return { facts: facts.map((saved, i) => i === index ? fact : saved), status: 'updated', fact };
   }
   if (facts.length >= MAX_MEMORIES) {
-    return { facts, status: 'error', error: `Memory is full (${MAX_MEMORIES} facts). Delete a fact in Settings before adding another.` };
+    return { facts, status: 'error', error: `I can save up to ${MAX_MEMORIES} memories, and we’ve filled those spots. You can remove one in Settings to make room for this.` };
   }
   return { facts: [...facts, fact], status: 'added', fact };
 }
 
 export function readMemoryStore(storage = browserStorage()) {
   try {
-    if (!storage) return { facts: [], error: 'Memory storage is unavailable in this browser.' };
+    if (!storage) return { facts: [], error: "I can’t access this browser’s storage right now. Check your browser settings so I can keep memories for you." };
     const raw = storage.getItem(MEMORY_KEY);
     if (raw === null) return { facts: [], error: '' };
     const values = JSON.parse(raw);
     if (!Array.isArray(values) || values.length > MAX_MEMORIES || values.some((value) =>
       typeof value !== 'string' || !normalizeMemoryFact(value) || normalizeMemoryFact(value).length > MAX_MEMORY_LENGTH)) {
-      throw new Error('Invalid memory store');
+      throw new Error("I couldn’t read these saved memories.");
     }
     // Adopt harmless whitespace/case duplicates and keep the latest profile value.
     // Reading never rewrites the stored data; malformed data is not silently erased.
     const facts = values.reduce((saved, fact) => rememberFact(saved, fact).facts, []);
     return { facts, error: '' };
   } catch {
-    return { facts: [], error: 'Saved memory could not be read. Clear all memory in Settings to reset it, or retry if storage is blocked.' };
+    return { facts: [], error: "I couldn’t read your saved memories, so I’ve left them untouched. Try allowing browser storage, or use Clear all memory in Settings if you’d like to reset them." };
   }
 }
 
 export function writeMemoryStore(facts, storage = browserStorage()) {
   try {
-    if (!storage) throw new Error('Storage unavailable');
+    if (!storage) throw new Error("I can’t access browser storage right now.");
     if (!Array.isArray(facts) || facts.length > MAX_MEMORIES || facts.some((fact) =>
       typeof fact !== 'string' || !normalizeMemoryFact(fact) || normalizeMemoryFact(fact).length > MAX_MEMORY_LENGTH)) {
-      throw new Error('Invalid memories');
+      throw new Error("I couldn’t save these memories.");
     }
     storage.setItem(MEMORY_KEY, JSON.stringify(facts.map(normalizeMemoryFact)));
     return { ok: true, error: '' };
   } catch {
-    return { ok: false, error: 'Memory could not be saved in this browser. Storage may be full or blocked; nothing was changed.' };
+    return { ok: false, error: "I couldn’t save that change, so your memories are still as they were. Your browser’s storage may be full or blocked." };
   }
 }
 
@@ -96,7 +96,7 @@ export function parseMemoryIntent(value) {
 
 export function forgetFact(facts, value) {
   const query = normalizeMemoryFact(value);
-  if (!query) return { facts, status: 'error', error: 'Tell me which fact to forget.' };
+  if (!query) return { facts, status: 'error', error: "Which memory would you like me to forget?" };
   const exact = facts.filter((fact) => identity(fact) === identity(query));
   const words = (text) => identity(text).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   const needle = words(query);

@@ -222,6 +222,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
   let effects = [];
   let tree;
   let chatError = false;
+  let fetchOverride = null;
   let chatAnswer = 'Hello! I am here to help.';
   let deferChat = false;
   let speechThrows = false;
@@ -256,11 +257,12 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     SpeechSynthesisUtterance: speech ? class { constructor(text) { this.text = text; } } : undefined,
     fetch: async (url, options) => {
       requests.push({ url, options });
+      if (fetchOverride) return fetchOverride(url, options);
       if (url.endsWith('/models')) {
         if (modelsOffline) throw new Error('Model server offline');
         return { ok: true, json: async () => ({ data: [{ id: 'mistral:7b-instruct-q4_K_M' }] }) };
       }
-      if (chatError) throw new Error('Test model failure');
+      if (chatError) throw chatError === true ? new Error('Test model failure') : chatError;
       const data = JSON.stringify({ choices: [{ delta: { content: chatAnswer } }] });
       const response = new Response(`data: ${data}\n\ndata: [DONE]\n\n`);
       if (deferChat) return new Promise((done) => pendingChats.push({ options, resolve: () => done(response) }));
@@ -331,6 +333,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
       if (emit) window.speechSynthesis?.dispatch('voiceschanged');
       flush();
     },
+    set fetchOverride(value) { fetchOverride = value; },
     set chatError(value) { chatError = value; },
     set chatAnswer(value) { chatAnswer = value; },
     set deferChat(value) { deferChat = value; },
