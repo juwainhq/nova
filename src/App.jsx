@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
+import {
+  TTS,
+  TTS_VOICE_KEY,
+  defaultVoice,
+  describeVoice,
+  groupVoices,
+  listVoices,
+  resolveVoice,
+  voiceKey,
+  voiceOptionLabel,
+} from './speech.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
-const DEFAULT_ELEVENLABS_VOICE = '21m00Tcm4TlvDq8ikWAM';
 
 // Replaced at build time by scripts/build-standalone.mjs. The standalone file is
 // opened from a file:// URL, where there is no origin server, so the Vite proxy
@@ -11,10 +21,6 @@ const STANDALONE_BUILD = typeof __ARIA_STANDALONE__ !== 'undefined' && __ARIA_ST
 
 function defaultOllamaUrl() {
   return STANDALONE_BUILD ? 'http://localhost:11434' : '';
-}
-
-function defaultElevenLabsUrl() {
-  return STANDALONE_BUILD ? 'https://api.elevenlabs.io' : '';
 }
 
 // What the operator must allow for this page's origin to reach their Ollama.
@@ -36,14 +42,13 @@ function trimTrailingSlashes(url) {
   return url.trim().replace(/\/+$/, '');
 }
 
-// Same-origin Vite proxy paths. They only resolve when the app is served by the
-// local Vite dev/preview server; static hosts (GitHub Pages) have no backend.
-const OLLAMA_PROXY_PATH = '/api/ollama';
-const ELEVENLABS_PROXY_PATH = '/api/elevenlabs';
-
 // The standalone single-file build, published beside index.html at the site root.
 const STANDALONE_PAGE = './aria.html';
 const STANDALONE_FILENAME = 'aria.html';
+
+// Same-origin Vite proxy path. It only resolves when the app is served by the local
+// Vite dev/preview server; static hosts (GitHub Pages) have no backend.
+const OLLAMA_PROXY_PATH = '/api/ollama';
 
 // Ollama exposes an OpenAI-compatible API under `/v1`. Without a custom URL we
 // keep using the Vite proxy so the browser stays same-origin in local dev.
@@ -51,11 +56,6 @@ function ollamaEndpoint(settings) {
   const custom = trimTrailingSlashes(settings.ollamaUrl || '');
   if (!custom) return OLLAMA_PROXY_PATH;
   return /\/v1$/i.test(custom) ? custom : `${custom}/v1`;
-}
-
-function elevenLabsEndpoint(settings) {
-  const custom = trimTrailingSlashes(settings.elevenlabsUrl || '');
-  return custom || ELEVENLABS_PROXY_PATH;
 }
 
 function endpointWarning(value) {
@@ -183,54 +183,26 @@ async function readChatCompletionStream(response) {
   return completeAnswer;
 }
 
-async function attachAvatarAudioMeter(audio, avatarElement) {
-  const AudioContextType = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextType || !avatarElement) return () => {};
+// Web Speech voices load asynchronously: Chrome returns an empty list on the first
+// call and then fires `voiceschanged`. Re-read on that event, and once more on a
+// short timer for engines that never fire it.
+function useSpeechVoices() {
+  const [voices, setVoices] = useState(listVoices);
 
-  let context;
-  let frame = 0;
-  let active = true;
-  try {
-    context = new AudioContextType();
-    if (context.state === 'suspended') await context.resume();
-    const source = context.createMediaElementSource(audio);
-    const analyser = context.createAnalyser();
-    analyser.fftSize = 128;
-    analyser.smoothingTimeConstant = 0.78;
-    source.connect(analyser);
-    analyser.connect(context.destination);
-
-    const frequencies = new Uint8Array(analyser.frequencyBinCount);
-    avatarElement.classList.add('audio-meter-active');
-    const update = () => {
-      if (!active) return;
-      analyser.getByteFrequencyData(frequencies);
-      const highIndex = Math.min(42, frequencies.length);
-      let total = 0;
-      for (let index = 2; index < highIndex; index += 1) total += frequencies[index];
-      const average = total / Math.max(1, highIndex - 2);
-      const level = Math.max(0, Math.min(1, (average - 5) / 58));
-      // Drives eye glow and the body's per-word swell; the mouth is gone.
-      avatarElement.style.setProperty('--audio-pulse', (0.12 + level * 0.88).toFixed(3));
-      frame = window.requestAnimationFrame(update);
-    };
-    update();
-
+  useEffect(() => {
+    const synth = window.speechSynthesis;
+    if (!synth) return undefined;
+    const refresh = () => setVoices(listVoices());
+    refresh();
+    synth.addEventListener?.('voiceschanged', refresh);
+    const timer = window.setTimeout(refresh, 500);
     return () => {
-      if (!active) return;
-      active = false;
-      window.cancelAnimationFrame(frame);
-      avatarElement.classList.remove('audio-meter-active');
-      avatarElement.style.removeProperty('--audio-pulse');
-      context?.close().catch(() => {});
+      synth.removeEventListener?.('voiceschanged', refresh);
+      window.clearTimeout(timer);
     };
-  } catch {
-    active = false;
-    avatarElement.classList.remove('audio-meter-active');
-    avatarElement.style.removeProperty('--audio-pulse');
-    context?.close().catch(() => {});
-    return () => {};
-  }
+  }, []);
+
+  return voices;
 }
 
 async function fetchOllamaModels(endpoint, signal) {
@@ -248,12 +220,10 @@ function hasOllamaModel(models, model) {
   return models.some((entry) => entry.id === requestedModel || entry.id?.startsWith(`${requestedModel}:`));
 }
 
-function SettingsPanel({ settings, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef }) {
+// Exported so scripts/verify-speech.mjs can render the panel and inspect the
+// voice selector it produces.
+export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef }) {
   const [draft, setDraft] = useState(settings);
-  const [voiceOptions, setVoiceOptions] = useState([]);
-  const [voiceLoading, setVoiceLoading] = useState(false);
-  const [voiceError, setVoiceError] = useState('');
-  const [voiceRefresh, setVoiceRefresh] = useState(0);
   const [testStatus, setTestStatus] = useState('idle');
   const [testMessage, setTestMessage] = useState('');
   const [downloadStatus, setDownloadStatus] = useState('idle');
@@ -289,47 +259,6 @@ function SettingsPanel({ settings, connection, modelAvailable, standalone, onClo
       openerRef.current?.focus();
     };
   }, [onClose, openerRef]);
-
-  useEffect(() => {
-    const apiKey = draft.apiKey.trim();
-    const controller = new AbortController();
-    setVoiceOptions([]);
-    setVoiceError('');
-
-    if (!apiKey) {
-      setVoiceLoading(false);
-      return () => controller.abort();
-    }
-
-    setVoiceLoading(true);
-    const timer = window.setTimeout(async () => {
-      try {
-        const response = await fetch(`${elevenLabsEndpoint(draft)}/v1/voices`, {
-          headers: { 'xi-api-key': apiKey },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.detail?.message || payload.detail?.status || `ElevenLabs returned ${response.status}.`);
-        }
-        const payload = await response.json();
-        const voices = Array.isArray(payload.voices)
-          ? payload.voices.filter((voice) => voice?.voice_id && voice?.name)
-          : [];
-        setVoiceOptions(voices);
-        if (!voices.length) setVoiceError('No voices were returned for this API key.');
-      } catch (error) {
-        if (error.name !== 'AbortError') setVoiceError(error.message || 'Could not load ElevenLabs voices.');
-      } finally {
-        if (!controller.signal.aborted) setVoiceLoading(false);
-      }
-    }, 350);
-
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [draft.apiKey, draft.elevenlabsUrl, voiceRefresh]);
 
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -390,10 +319,15 @@ function SettingsPanel({ settings, connection, modelAvailable, standalone, onClo
     }
   };
 
-  const voiceIsListed = voiceOptions.some((voice) => voice.voice_id === draft.voiceId);
-  const fallbackVoiceLabel = !draft.apiKey.trim()
-    ? (draft.voiceId === DEFAULT_ELEVENLABS_VOICE ? 'Default voice · add a key to browse' : 'Saved voice · add a key to browse')
-    : voiceLoading ? 'Loading saved voice…' : 'Current selection';
+  const { english: englishVoices, others: otherVoices } = groupVoices(voices);
+  // Until the user picks one, the dropdown reflects the voice the app would choose.
+  const autoVoice = defaultVoice(voices);
+  const selectedKey = resolveVoice(voices, draft.voiceKey) ? draft.voiceKey : voiceKey(autoVoice);
+  const selectedVoice = resolveVoice(voices, selectedKey) || autoVoice;
+  // A saved voice can vanish if the user uninstalls it; say so rather than silently
+  // switching under them.
+  const voiceCount = voices.length;
+  const savedVoiceMissing = Boolean(draft.voiceKey) && voiceCount > 0 && !resolveVoice(voices, draft.voiceKey);
   const draftModel = draft.model.trim() || OLLAMA_MODEL;
   const connectionLabel = connection === 'checking'
     ? 'Checking connection…'
@@ -469,65 +403,41 @@ function SettingsPanel({ settings, connection, modelAvailable, standalone, onClo
             <div className="settings-divider" />
 
             <div className="settings-field">
-              <label className="field-label" htmlFor="eleven-key">ElevenLabs API key <span>OPTIONAL</span></label>
-              <input
-                id="eleven-key"
-                className="settings-input"
-                type="password"
-                autoComplete="off"
-                placeholder="Paste your API key"
-                value={draft.apiKey}
-                onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))}
-              />
-              <p className="field-hint">Saved only in this browser. Leave blank to use device speech.</p>
-            </div>
-
-            <div className="settings-field">
-              <div className="field-label-row">
-                <label className="field-label" htmlFor="voice-id">ElevenLabs voice</label>
-                <button
-                  className="settings-inline-button"
-                  type="button"
-                  disabled={!draft.apiKey.trim() || voiceLoading}
-                  onClick={() => setVoiceRefresh((current) => current + 1)}
-                >
-                  {voiceLoading ? 'Loading…' : 'Refresh'}
-                </button>
-              </div>
+              <label className="field-label" htmlFor="aria-voice">ARIA Voice</label>
               <select
-                id="voice-id"
+                id="aria-voice"
                 className="settings-select"
-                value={draft.voiceId}
-                onChange={(event) => setDraft((current) => ({ ...current, voiceId: event.target.value }))}
+                value={selectedKey}
+                disabled={!voiceCount}
+                onChange={(event) => setDraft((current) => ({ ...current, voiceKey: event.target.value }))}
               >
-                {draft.voiceId && !voiceIsListed && <option value={draft.voiceId}>{fallbackVoiceLabel}</option>}
-                {!draft.voiceId && <option value="">Use default voice</option>}
-                {voiceOptions.map((voice) => (
-                  <option key={voice.voice_id} value={voice.voice_id}>{voice.name}</option>
-                ))}
+                {!voiceCount && <option value="">No voices available in this browser</option>}
+                {englishVoices.length > 0 && (
+                  <optgroup label="English">
+                    {englishVoices.map((voice) => (
+                      <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {otherVoices.length > 0 && (
+                  <optgroup label="Other languages">
+                    {otherVoices.map((voice) => (
+                      <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
-              <p className={`field-hint ${voiceError ? 'field-hint-error' : ''}`} aria-live="polite">
-                {voiceError || (voiceLoading ? 'Loading voices from ElevenLabs…' : voiceOptions.length ? `${voiceOptions.length} voices available.` : 'Add an API key to browse your voices.')}
+              <p className="field-hint" aria-live="polite">
+                {voiceCount
+                  ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} from this ${standalone ? 'device' : 'browser'}, best first. “offline” voices need no connection.`
+                  : 'This browser exposes no speech voices yet. Reopen the panel if the list is still loading.'}
               </p>
-            </div>
-
-            <div className="settings-field">
-              <label className="field-label" htmlFor="eleven-url">ElevenLabs endpoint <span>OPTIONAL</span></label>
-              <input
-                id="eleven-url"
-                className="settings-input"
-                type="url"
-                inputMode="url"
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck="false"
-                placeholder="https://api.elevenlabs.io"
-                value={draft.elevenlabsUrl}
-                onChange={(event) => setDraft((current) => ({ ...current, elevenlabsUrl: event.target.value }))}
-              />
-              <p className={`field-hint ${endpointWarning(draft.elevenlabsUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
-                {endpointWarning(draft.elevenlabsUrl)
-                  || 'Leave blank to use the local Vite proxy or the default ElevenLabs host.'}
+              <p className={`field-hint ${savedVoiceMissing ? 'field-hint-error' : ''}`}>
+                {savedVoiceMissing && selectedVoice
+                  ? `Your saved voice is no longer installed. Falling back to ${describeVoice(selectedVoice)}.`
+                  : selectedVoice
+                    ? `Speaking with ${describeVoice(selectedVoice)} at rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
+                    : 'Speech runs in your browser — no API key and no network needed.'}
               </p>
             </div>
 
@@ -611,9 +521,7 @@ function App() {
   const [settings, setSettings] = useState(() => ({
     model: readSetting('aria.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
     ollamaUrl: readSetting('aria.ollama.url', defaultOllamaUrl()),
-    apiKey: readSetting('aria.elevenlabs.apiKey'),
-    voiceId: readSetting('aria.elevenlabs.voiceId', DEFAULT_ELEVENLABS_VOICE),
-    elevenlabsUrl: readSetting('aria.elevenlabs.url', defaultElevenLabsUrl()),
+    voiceKey: readSetting(TTS_VOICE_KEY),
     showTranscript: readSetting('aria.transcript.visible', 'false') === 'true',
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -621,15 +529,15 @@ function App() {
   const [notice, setNotice] = useState('');
   // A brief celebratory flourish after a reply lands, then back to idle.
   const [mood, setMood] = useState('idle');
+  const voices = useSpeechVoices();
   const moodTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const settingsTriggerRef = useRef(null);
   const recognitionRef = useRef(null);
   const shouldListenRef = useRef(false);
   const promptRef = useRef(null);
-  const audioRef = useRef(null);
+  const speakRef = useRef(null);
   const avatarContainerRef = useRef(null);
-  const audioMeterCleanupRef = useRef(() => {});
   const conversationRef = useRef([]);
 
   const SpeechRecognition = typeof window !== 'undefined'
@@ -706,7 +614,7 @@ function App() {
         { role: 'user', content: prompt },
         { role: 'assistant', content: answer },
       ].slice(-6);
-      await speakAnswer(answer);
+      await speakRef.current?.(answer);
       celebrate();
     } catch (error) {
       try {
@@ -723,96 +631,63 @@ function App() {
         : `I couldn't get a response from Ollama. ${error.message}`;
       notify(detail);
     }
-  // speakAnswer is assigned immediately below and kept current through promptRef.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notify, settings, celebrate]);
 
+  // Voice output is the browser's own speech synthesis: no key, no network.
   const speakAnswer = useCallback(async (text) => {
     const finish = () => setStage('ready');
 
-    if (settings.apiKey) {
-      let objectUrl;
-      let stopAudioMeter = () => {};
-      try {
-        const voiceId = settings.voiceId.trim() || DEFAULT_ELEVENLABS_VOICE;
-        const result = await fetch(`${elevenLabsEndpoint(settings)}/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'xi-api-key': settings.apiKey,
-          },
-          body: JSON.stringify({
-            text,
-            model_id: 'eleven_turbo_v2_5',
-            voice_settings: { stability: 0.42, similarity_boost: 0.78, style: 0.18, use_speaker_boost: true },
-          }),
-        });
-        if (!result.ok) {
-          const body = await result.json().catch(() => ({}));
-          throw new Error(body.detail?.message || body.detail?.status || `ElevenLabs returned ${result.status}.`);
-        }
-        objectUrl = URL.createObjectURL(await result.blob());
-        const audio = new Audio(objectUrl);
-        audioRef.current = audio;
-        stopAudioMeter = await attachAvatarAudioMeter(audio, avatarContainerRef.current);
-        audioMeterCleanupRef.current = stopAudioMeter;
-        await new Promise((resolve, reject) => {
-          audio.onended = resolve;
-          audio.onerror = () => reject(new Error('Audio playback failed.'));
-          const playback = audio.play();
-          if (playback?.then) {
-            playback.then(() => setStage('speaking')).catch(reject);
-          } else {
-            setStage('speaking');
-          }
-        });
-        stopAudioMeter();
-        audioMeterCleanupRef.current = () => {};
-        URL.revokeObjectURL(objectUrl);
-        finish();
-        return;
-      } catch (error) {
-        stopAudioMeter();
-        audioMeterCleanupRef.current = () => {};
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        notify(`ElevenLabs unavailable — using your device voice instead. ${error.message}`);
-      }
+    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+      finish();
+      notify('This browser has no speech synthesis, so replies will stay silent.');
+      return;
     }
 
-    if ('speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined') {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      const avatarElement = avatarContainerRef.current;
-      let speechPulseTimer;
-      const finishSpeech = () => {
-        window.clearTimeout(speechPulseTimer);
-        avatarElement?.classList.remove('speech-boundary-active');
-        avatarElement?.style.removeProperty('--audio-pulse');
-        finish();
-      };
-      utterance.rate = 0.97;
-      utterance.pitch = 1.02;
-      utterance.onstart = () => setStage('speaking');
-      utterance.onboundary = (event) => {
-        if (event.name && event.name !== 'word') return;
-        if (!avatarElement) return;
-        avatarElement.classList.add('speech-boundary-active');
-        const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
-        // Each spoken word lifts the eyes and swells the body a little.
-        avatarElement.style.setProperty('--audio-pulse', (0.58 + wordLength * 0.035).toFixed(3));
-        window.clearTimeout(speechPulseTimer);
-        speechPulseTimer = window.setTimeout(() => {
-          avatarElement.style.setProperty('--audio-pulse', '.16');
-        }, 125);
-      };
-      utterance.onend = finishSpeech;
-      utterance.onerror = finishSpeech;
-      window.speechSynthesis.speak(utterance);
-    } else {
-      finish();
-      notify('Text-to-speech is not available in this browser.');
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const avatarElement = avatarContainerRef.current;
+    let speechPulseTimer;
+
+    // Fall back to the best voice on the machine until the user chooses one.
+    const voice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
+    if (voice) {
+      utterance.voice = voice;
+      if (voice.lang) utterance.lang = voice.lang;
     }
-  }, [notify, settings]);
+    utterance.rate = TTS.rate;
+    utterance.pitch = TTS.pitch;
+    utterance.volume = TTS.volume;
+
+    const finishSpeech = () => {
+      window.clearTimeout(speechPulseTimer);
+      avatarElement?.classList.remove('speech-boundary-active');
+      avatarElement?.style.removeProperty('--audio-pulse');
+      finish();
+    };
+
+    utterance.onstart = () => setStage('speaking');
+    // Word boundaries are the only live signal a local voice gives us, so the eyes
+    // and body pulse off them. Engines that never fire it simply stay steady.
+    utterance.onboundary = (event) => {
+      if (event.name && event.name !== 'word') return;
+      if (!avatarElement) return;
+      avatarElement.classList.add('speech-boundary-active');
+      const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
+      avatarElement.style.setProperty('--audio-pulse', (0.58 + wordLength * 0.035).toFixed(3));
+      window.clearTimeout(speechPulseTimer);
+      speechPulseTimer = window.setTimeout(() => {
+        avatarElement.style.setProperty('--audio-pulse', '.16');
+      }, 125);
+    };
+    utterance.onend = finishSpeech;
+    utterance.onerror = finishSpeech;
+
+    window.speechSynthesis.speak(utterance);
+  }, [notify, settings, voices]);
+
+  // Both refs are refreshed on every render, so callbacks that outlive a render still
+  // reach the current speaker and the current request handler.
+  speakRef.current = speakAnswer;
 
   // Keep the recognizer's event handler pointed at the latest assistant request.
   promptRef.current = (text) => {
@@ -869,8 +744,7 @@ function App() {
 
   useEffect(() => () => {
     window.clearTimeout(noticeTimerRef.current);
-    audioMeterCleanupRef.current();
-    if (audioRef.current) audioRef.current.pause();
+    window.clearTimeout(moodTimerRef.current);
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }, []);
 
@@ -922,17 +796,13 @@ function App() {
     const updatedSettings = {
       model: nextSettings.model.trim() || OLLAMA_MODEL,
       ollamaUrl: trimTrailingSlashes(nextSettings.ollamaUrl || ''),
-      apiKey: nextSettings.apiKey.trim(),
-      voiceId: nextSettings.voiceId.trim() || DEFAULT_ELEVENLABS_VOICE,
-      elevenlabsUrl: trimTrailingSlashes(nextSettings.elevenlabsUrl || ''),
+      voiceKey: (nextSettings.voiceKey || '').trim(),
       showTranscript: Boolean(nextSettings.showTranscript),
     };
     try {
       window.localStorage.setItem('aria.ollama.model', updatedSettings.model);
       window.localStorage.setItem('aria.ollama.url', updatedSettings.ollamaUrl);
-      window.localStorage.setItem('aria.elevenlabs.apiKey', updatedSettings.apiKey);
-      window.localStorage.setItem('aria.elevenlabs.voiceId', updatedSettings.voiceId);
-      window.localStorage.setItem('aria.elevenlabs.url', updatedSettings.elevenlabsUrl);
+      window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem('aria.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
       notify('Settings could not be saved in this browser.');
@@ -1011,6 +881,7 @@ function App() {
       {settingsOpen && (
         <SettingsPanel
           settings={settings}
+          voices={voices}
           standalone={STANDALONE_BUILD}
           connection={connection}
           modelAvailable={modelAvailable}

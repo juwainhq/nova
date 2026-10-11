@@ -1,19 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Speech output runs on the browser's own Web Speech API, so Ollama is the only
+// service that needs proxying.
 const apiProxy = {
   // Keep browser requests same-origin; Vite forwards them to the local Ollama API.
   '/api/ollama': {
     target: 'http://localhost:11434',
     changeOrigin: true,
     rewrite: (path) => path.replace(/^\/api\/ollama/, '/v1'),
-  },
-  // ElevenLabs requests also go through the local dev server to avoid browser CORS issues.
-  '/api/elevenlabs': {
-    target: 'https://api.elevenlabs.io',
-    changeOrigin: true,
-    secure: true,
-    rewrite: (path) => path.replace(/^\/api\/elevenlabs/, ''),
   },
 };
 
