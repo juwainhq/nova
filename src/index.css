@@ -105,8 +105,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 250px;
-  height: 190px;
+  width: 258px;
+  /* Only 5px taller than the 190px that held the old 128px orb. The orb grew by 16,
+     so its breathing room is a little tighter than before rather than the stage growing
+     by the full amount — on a short viewport this row is the first thing to run out. */
+  height: 195px;
   isolation: isolate;
   animation: avatar-materialize .88s cubic-bezier(.2, .75, .25, 1) .62s both;
 }
@@ -134,8 +137,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 .avatar-backlight, .listen-ring { position: absolute; top: 50%; left: 50%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
 .avatar-backlight {
   z-index: -1;
-  width: 220px;
-  height: 220px;
+  width: 248px;
+  height: 248px;
   background: radial-gradient(circle, rgba(204, 68, 0, .22) 0%, rgba(204, 68, 0, .11) 35%, rgba(204, 68, 0, .035) 59%, transparent 76%);
   filter: blur(24px);
   opacity: .82;
@@ -157,8 +160,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   position: relative;
   z-index: 1;
   display: block;
-  width: 128px;
-  height: 128px;
+  /* The visible orb is 222/280 of this box. The ring and backlight below are sized
+     against that ratio, so they stay just outside the orb rather than under it. */
+  width: 144px;
+  height: 144px;
   overflow: visible;
   filter: drop-shadow(0 5px 13px rgba(0, 0, 0, .18));
   animation: orb-float 6.2s ease-in-out infinite;
@@ -202,8 +207,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 }
 .listen-ring {
   z-index: 0;
-  width: 108px;
-  height: 108px;
+  width: 122px;
+  height: 122px;
   border: 1px solid rgba(255, 245, 229, .7);
   opacity: 0;
   box-shadow: 0 0 18px rgba(255, 106, 26, .24), inset 0 0 16px rgba(255, 245, 229, .12);

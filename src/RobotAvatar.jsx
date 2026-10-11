@@ -19,12 +19,15 @@ import { APP_NAME } from './brand.js';
 
 // Eye geometry, in viewBox units on a 280-wide canvas. The pair is the face's focal
 // point: each pill is about a fifth of the avatar's width, and the two together with
-// the gap between them span a little under half of it. Larger than this and they stop
+// the gap between them span a little over half of it. Larger than this and they stop
 // looking like eyes and start looking like goggles.
 const EYE = {
   width: 46,
   height: 74,
-  gap: 16, // between the facing edges, not between the centres
+  // Between the facing edges, not between the centres. Wide enough that the two eyes
+  // read as separate eyes rather than as one split shape — at the old 16 they sat
+  // almost close enough to touch.
+  gap: 24,
   cy: 112, // above the orb's midpoint, so the face reads as upper-centred
 };
 

@@ -109,8 +109,11 @@ check('eyes are true capsules', eye.rx === eye.w / 2, `rx ${eye.rx} vs half-widt
 
 const [leftEye, rightEye] = irisRects;
 const innerGap = rightEye.x - (leftEye.x + leftEye.w);
-check('gap between the eyes is small', innerGap > 0 && innerGap <= eye.w * 0.35,
-  `${innerGap} units = ${(innerGap / eye.w).toFixed(2)}x eye width`);
+const gapRatio = innerGap / eye.w;
+check('eyes are separated, not touching', gapRatio >= .3,
+  `${innerGap} units = ${gapRatio.toFixed(2)}x eye width`);
+check('eyes are not spread to the edges of the face', gapRatio <= .75,
+  `${innerGap} units = ${gapRatio.toFixed(2)}x eye width`);
 check('eyes sit in the upper half', eye.y + eye.h / 2 < 140, `centre y = ${eye.y + eye.h / 2}`);
 check('eyes are centred as a pair',
   Math.abs((leftEye.x + rightEye.x + eye.w) / 2 - 140) < 0.01,
@@ -236,6 +239,28 @@ check('offline: eyes droop', /--eye-sy: \.8/.test(offline));
 check('offline: eyes dim to half brightness', /opacity: \.5;/.test(rulesFor('.is-offline .robot-eye')));
 check('offline: slow sad sway', keyframes('orb-sad-sway') && /animation: orb-sad-sway/.test(offline));
 check('offline rules come last', cssCode.indexOf('.is-offline .robot-eye') > cssCode.indexOf('.is-happy .robot-eye'));
+
+// ------------------------------------------------------------ on-screen sizing
+// The orb is drawn inside a 280-unit viewBox but only occupies the middle 222 units, so
+// its on-screen diameter is a fraction of the CSS box. The ring and the glow are
+// measured against that fraction: size the avatar without them and the ring ends up
+// hidden behind the orb, which is invisible in the SVG and in the markup.
+const cssPx = (selector, property) => {
+  const found = new RegExp(`\\${selector}\\s*\\{[^}]*${property}:\\s*([\\d.]+)px`).exec(cssCode);
+  return found ? Number(found[1]) : null;
+};
+const boxSize = cssPx('.robot-avatar', 'width');
+const ringSize = cssPx('.listen-ring', 'width');
+const glowSize = cssPx('.avatar-backlight', 'width');
+const ORB_SHARE = 222 / 280;
+const orbOnScreen = boxSize === null ? null : boxSize * ORB_SHARE;
+
+check('avatar is sized in a sensible band', boxSize !== null && boxSize >= 128 && boxSize <= 176,
+  `${boxSize}px box`);
+check('listen ring clears the orb', ringSize !== null && orbOnScreen !== null && ringSize > orbOnScreen,
+  `orb ${orbOnScreen?.toFixed(1)}px vs ring ${ringSize}px`);
+check('glow is at least as wide as the ring', glowSize !== null && ringSize !== null && glowSize >= ringSize,
+  `glow ${glowSize}px vs ring ${ringSize}px`);
 
 // ------------------------------------------------------------------- hygiene
 check('no mouth selectors remain in css', !/\.mouth-|\.orb-smile/.test(cssCode));
