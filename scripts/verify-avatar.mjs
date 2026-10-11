@@ -68,11 +68,77 @@ check('has no mouthBloom filter', !/mouthBloom/.test(markup));
 check('keeps the orb body', markup.includes('class="blob-shape"'));
 check('has exactly two eyes', (markup.match(/class="robot-eye robot-eye-/g) || []).length === 2);
 check('has a left and a right eye', /robot-eye-left/.test(markup) && /robot-eye-right/.test(markup));
-check('lays eyes out as gaze > size > blink', (markup.match(/class="eye-scale"/g) || []).length === 2
+check('lays eyes out as lean > drift > size > blink',
+  (markup.match(/class="eye-tilt"/g) || []).length === 2
+  && (markup.match(/class="eye-drift"/g) || []).length === 2
+  && (markup.match(/class="eye-scale"/g) || []).length === 2
   && (markup.match(/class="eye-lid"/g) || []).length === 2);
 check('includes a crescent shape per eye', (markup.match(/class="eye-crescent"/g) || []).length === 2);
-check('keeps an iris and a spark per eye', (markup.match(/class="eye-iris"/g) || []).length === 2
-  && (markup.match(/class="eye-spark"/g) || []).length === 2);
+check('keeps an iris per eye', (markup.match(/class="eye-iris"/g) || []).length === 2);
+// The highlight was removed deliberately: at this size a gleam reads as a pupil and
+// makes the eye look like a ball. Depth comes from the well gradient instead.
+check('has no pupil-like highlight', !/eye-spark/.test(markup));
+// The crescent has to sit inside the drift layer, or it would not travel with the eye
+// it replaces during the happy state.
+check('crescent drifts with its eye', /class="eye-drift">[\s\S]{0,400}?class="eye-crescent"/.test(
+  markup.split('robot-eye-right')[0]));
+
+// ------------------------------------------------------------------- eye geometry
+// Measured from the rendered rects, not the source constants, so a bad formula in the
+// component cannot slip through. This is exactly the class of bug that made the eyes
+// sit near the orb's edges: the centre offset had subtracted a full width rather than
+// half a width, so the intended gap rendered four times too wide.
+const irisRects = [...markup.matchAll(/class="eye-iris" x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="([\d.]+)"/g)]
+  .map((m) => ({ x: +m[1], y: +m[2], w: +m[3], h: +m[4], rx: +m[5] }));
+
+check('both eyes are the same size',
+  irisRects.length === 2 && irisRects[0].w === irisRects[1].w && irisRects[0].h === irisRects[1].h,
+  `${irisRects.length} rects`);
+
+const eye = irisRects[0] ?? { x: 0, y: 0, w: 0, h: 0, rx: 0 };
+check('eyes are tall pills, not dots', eye.h > eye.w * 1.3, `h/w = ${(eye.h / eye.w).toFixed(2)}`);
+check('eyes are large — at least a quarter of the orb width', eye.w >= 52,
+  `${eye.w} units of a ~222-unit orb`);
+
+// A true capsule: corner radius is exactly half the width, so both ends are semicircles.
+check('eyes are true capsules', eye.rx === eye.w / 2, `rx ${eye.rx} vs half-width ${eye.w / 2}`);
+
+const [leftEye, rightEye] = irisRects;
+const innerGap = rightEye.x - (leftEye.x + leftEye.w);
+check('gap between the eyes is small', innerGap > 0 && innerGap <= eye.w * 0.35,
+  `${innerGap} units = ${(innerGap / eye.w).toFixed(2)}x eye width`);
+check('eyes sit in the upper half', eye.y + eye.h / 2 < 140, `centre y = ${eye.y + eye.h / 2}`);
+check('eyes are centred as a pair',
+  Math.abs((leftEye.x + rightEye.x + eye.w) / 2 - 140) < 0.01,
+  `midpoint ${(leftEye.x + rightEye.x + eye.w) / 2}`);
+
+// Both eyes lean the same way, which is what the reference does and what gives the
+// pair its attitude; opposed signs would read as a squint instead.
+const leans = [...markup.matchAll(/class="eye-tilt" transform="rotate\((-?[\d.]+) /g)].map((m) => +m[1]);
+check('both eyes lean the same way', leans.length === 2 && leans[0] === leans[1] && leans[0] !== 0,
+  `rotate(${leans.join(', ')})`);
+// The lean must stay a presentation attribute, because a CSS `transform` on the base
+// .robot-eye rule would win over the attribute and silently straighten the eyes.
+// State rules (`.is-happy .robot-eye`) legitimately set one, so only the bare rule is
+// checked. `transform-box` and `transform-origin` do not count — they set the box.
+const baseRuleSetsTransform = [...cssCode.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(([, selector, body]) =>
+  selector.split(',').map((part) => part.trim()).includes('.robot-eye')
+  && /(^|[\s;])transform:/.test(body));
+check('lean is a presentation attribute, not overridable CSS', !baseRuleSetsTransform);
+
+// ------------------------------------------------------------- inner shadow
+check('inner shadow gradient exists for the eye well', /id="eyeWell"/.test(markup));
+const wellStops = [...markup.matchAll(/<stop offset="[\d.]+" stop-color="#([0-9A-Fa-f]{6})"/g)]
+  .map((m) => m[1]);
+const well = markup.slice(markup.indexOf('id="eyeWell"'), markup.indexOf('id="eyeWell"') + 320);
+const wellShades = [...well.matchAll(/stop-color="#([0-9A-Fa-f]{6})"/g)].map((m) => +('0x' + m[1].slice(0, 2)));
+check('eye well is dark inside', /id="eyeWell"/.test(markup) && wellShades.length >= 3
+  && Math.max(...wellShades) < 0x40,
+  `darkest-to-lightest red channels: ${wellShades.join(', ')}`);
+check('eye well lightens toward the bottom, so it reads as depth not flat fill',
+  wellShades.length >= 3 && wellShades[wellShades.length - 1] > wellShades[0],
+  `${wellShades[0]} -> ${wellShades[wellShades.length - 1]}`);
+void wellStops;
 
 // ------------------------------------------------------------- motion plumbing
 check('pose and rhythm use separate elements',
@@ -108,18 +174,45 @@ const offline = rulesFor('.is-offline');
 // ------------------------------ IDLE: steady glow, occasional blink, gentle float
 check('idle: body floats up and down', keyframes('orb-float') && /animation: orb-float/.test(idle));
 check('idle: eyes glow softly', /drop-shadow/.test(idleEyes));
-check('idle: slow occasional blink', keyframes('eye-blink') && /--eye-blink, 7\.6s/.test(idleEyes));
+check('idle: blinks every 4-5 seconds', keyframes('eye-blink') && /--eye-blink, 4\.6s/.test(idleEyes));
+// The eyes must not ride the body rigidly, or the face reads as a decal.
+check('idle: eyes drift slowly, independently of the body',
+  keyframes('eye-drift') && /\.eye-drift\s*\{[^}]*animation: eye-drift/.test(cssCode));
+// A blink needs a close, a partial re-open, then a full one; a single snap closed and
+// open reads as an accordion rather than a lid.
+const blinkFrames = (cssCode.match(/@keyframes eye-blink \{([\s\S]*?)\n\}/) || [])[1] ?? '';
+const blinkSteps = [...blinkFrames.matchAll(/scaleY\((\d*\.?\d+)\)/g)].map((m) => +m[1]);
+check('blink eases closed and open rather than snapping',
+  blinkSteps.length >= 3 && blinkSteps.includes(1) && Math.min(...blinkSteps) < .1,
+  `scaleY steps: ${blinkSteps.join(', ')}`);
 
 // --------------------- LISTENING: bigger, brighter, lean in, 5 degree tilt, ring
 check('listening: eyes grow bigger', /--eye-sx: 1\.1[6-9]/.test(listening));
-check('listening: eyes get brighter', /--eye-blink: 6\.4s/.test(listening) && /drop-shadow\(0 0 3\.6px/.test(listening));
+const glowOf = (body) => {
+  const found = body.match(/drop-shadow\(0 0 ([\d.]+)px/);
+  return found ? +found[1] : 0;
+};
+check('listening: eyes get brighter', glowOf(listening) > glowOf(idleEyes),
+  `idle ${glowOf(idleEyes)}px -> listening ${glowOf(listening)}px`);
+check('listening: blinks a little more often than idle', /--eye-blink: 4\.4s/.test(listening));
 check('listening: body tilts 5 degrees', /--figure-tilt: -5deg/.test(listening));
 check('listening: leans in', /--figure-scale: 1\.0[0-9]/.test(listening));
 check('listening: subtle pulse ring', /\.is-listening \.listen-ring\s*\{[^}]*animation: listen-pulse/.test(cssCode));
 
 // ------------------ THINKING: gaze side to side, one squint, 3% smaller, wobble
 check('thinking: gaze moves side to side', keyframes('eyes-thinking') && /animation: eyes-thinking/.test(thinking));
-check('thinking: one eye squints', /\.is-thinking \.robot-eye-left \.eye-scale\s*\{[^}]*--eye-sy: \.7/.test(cssCode));
+check('thinking: one eye squints', /\.is-thinking \.robot-eye-left \.eye-scale\s*\{[^}]*--eye-sy: \.8/.test(cssCode));
+// Any state that squashes the eye vertically must leave it taller than it is wide.
+// Nothing else stops a future tweak from flattening the pills into rounded squares.
+const squashes = [
+  ['squint', /\.is-thinking \.robot-eye-left \.eye-scale\s*\{[^}]*--eye-sy: ([\d.]+)/.exec(cssCode)?.[1]],
+  ['droop', /\.is-offline \.eye-scale\s*\{[^}]*--eye-sy: ([\d.]+)/.exec(cssCode)?.[1]],
+];
+for (const [name, value] of squashes) {
+  const ratio = (eye.h * Number(value)) / eye.w;
+  check(`${name} keeps the pill shape`, value !== undefined && ratio > 1.25,
+    `${name} scale ${value} -> h/w = ${ratio.toFixed(2)}`);
+}
 check('thinking: shrinks 3 percent', /--figure-scale: \.97/.test(thinking));
 check('thinking: body wobbles', keyframes('orb-wobble') && /animation: orb-wobble/.test(thinking));
 
@@ -137,7 +230,7 @@ check('happy: crescent eyes replace the iris', /\.is-happy \.eye-crescent\s*\{[^
 check('happy: quick jump then small bounces', keyframes('orb-happy-hop') && /animation: orb-happy-hop/.test(happy));
 
 // ------------------------------ OFFLINE: droop, half brightness, slow sad sway
-check('offline: eyes droop', /--eye-sy: \.68/.test(offline));
+check('offline: eyes droop', /--eye-sy: \.8/.test(offline));
 check('offline: eyes dim to half brightness', /opacity: \.5;/.test(rulesFor('.is-offline .robot-eye')));
 check('offline: slow sad sway', keyframes('orb-sad-sway') && /animation: orb-sad-sway/.test(offline));
 check('offline rules come last', cssCode.indexOf('.is-offline .robot-eye') > cssCode.indexOf('.is-happy .robot-eye'));
@@ -151,7 +244,7 @@ check('reduced motion is still honoured', /@media \(prefers-reduced-motion: redu
 // A sheet of every state, built from the real CSS and the real rendered markup, so
 // the motion can be reviewed without a microphone, a model or a network.
 const STATES = [
-  ['idle', 'IDLE', 'float · slow blink'],
+  ['idle', 'IDLE', 'float · eye drift · blink every 4.6s'],
   ['is-listening', 'LISTENING', 'bigger + brighter · 5° tilt · ring'],
   ['is-thinking', 'THINKING', 'side to side · one squint · −3% · wobble'],
   ['is-speaking', 'SPEAKING', 'wider · rapid blinks · +5% · word beat'],
