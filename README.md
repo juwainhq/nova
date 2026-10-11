@@ -27,7 +27,7 @@ Open the settings panel with the gear icon to choose an Ollama model, point at a
 
 ### Backend endpoints
 
-Both service endpoints have an optional override in the settings panel, so the app is not tied to the Vite proxy:
+The Ollama endpoint has an optional override in the settings panel, so the app is not tied to the Vite proxy:
 
 | Setting | Blank (default) | Example value | Requests go to |
 | --- | --- | --- | --- |
@@ -53,9 +53,47 @@ Do not reach for `--disable-web-security` or `--allow-running-insecure-content`:
 
 Press Space from the main view to toggle the microphone. Microphone access requires a secure browser context (HTTPS or localhost). The live preview must be able to reach Ollama from the machine running its Vite server; `localhost` always refers to that server, not the computer viewing a remote preview.
 
+## Wake word
+
+NOVA attempts to start continuous microphone recognition as soon as the page loads. A dim microphone in the bottom-left corner means it is in **wake word standby**. Say **“hey nova”** to brighten and grow the avatar’s eyes, change the status to **LISTENING**, and hear a short, soft two-note chime. Ask your question after the cue, or say the wake phrase and question in one utterance — “hey nova, what time is it?” works too.
+
+Standby requests final transcripts only, with one recognition alternative, and discards everything except the wake phrase. Unrelated background speech is not saved or sent to Ollama. Full question input uses interim results as well. Recognition pauses while NOVA thinks and speaks, then automatically returns to standby **after speech actually finishes** (or an error is handled). A wake without a question returns to standby after 15 seconds of silence. Opening settings or hiding the tab also suspends listening; returning to the idle main view resumes it.
+
+### Browser limits and permissions
+
+- Microphone permission and a secure browser context (HTTPS or localhost) are still required. If automatic startup is blocked, allow microphone access and use the mic button once to retry. The mic button and Space shortcut still work without a wake phrase.
+- If the browser has no continuous recognition support, NOVA displays **“Wake word not supported — use the mic button”**. Manual recognition remains available if the browser supports it. Normal engine time limits trigger delayed restarts; permission failures and repeated service failures do not cause an endless retry loop.
+- The Web Speech API has **no low-power mode or guaranteed offline recognition**. Final-only standby reduces app-side work, but power consumption and recognition processing are controlled by the browser. Some browsers send microphone audio to a network speech service, even though NOVA discards unrelated transcripts locally. This is not a dedicated on-device wake-word engine.
+- The chime is synthesized locally through Web Audio, with no audio download. Browser autoplay rules may silence it until the first click, tap, or key interaction. A blocked chime does not prevent waking, and is not queued to play later.
+
+## Persistent memory
+
+NOVA saves user-provided facts across reloads and browser sessions in local storage under **`nova.memory`** (a JSON array of fact strings). Use the wake word or the mic button:
+
+| Say | Result |
+| --- | --- |
+| “hey nova, remember my name is Juwain” | Saves your name |
+| “don't forget that I work as a designer” | Saves the fact, rather than deleting it |
+| “my favorite color is orange” | Automatically saves a simple profile declaration |
+| “I work as a designer” | Automatically saves your occupation |
+| “what do you remember?” | Reads every saved fact, or says that no facts are saved |
+| “forget my name” or “forget Juwain” | Deletes the matching fact |
+
+Explicit `remember` / `don't forget` commands accept any fact. Automatic capture is deliberately limited to simple, affirmative `my name is …`, `my favorite color is …` (also `favourite colour`), and `I work as …` statements. Questions, unrelated speech, and multi-sentence chat are not automatically saved. Wake-word standby transcripts and NOVA's replies never become memories.
+
+Duplicate facts are ignored. A new name, favorite color, or occupation replaces the older value, instead of keeping contradictory profile facts. Forgetting accepts a complete fact or a unique whole-word phrase; if several facts match, NOVA asks you to be more specific without deleting anything.
+
+Memory commands are handled locally and still work when Ollama is offline. Every normal chat request injects the current facts into the system prompt as **“Here is what you know about the user: …”**, with a reminder that these are user-reported data, not instructions. Successful memory edits reset the short conversation context and cancel replies still using the old facts, so deleted details cannot linger in later requests. Memory changes from another tab are synchronized through the browser's storage event.
+
+Settings has a **Memory** section with every saved fact, individual **Delete** buttons, and **Clear all memory** with an inline confirmation. These changes are saved immediately, independently of the other settings draft; Cancel does not undo them. Clearing memory leaves model, endpoint, and voice settings untouched.
+
+The store accepts up to 100 facts of 500 characters each. Full/blocked storage and corrupt data are reported rather than falsely claiming a save or silently erasing data. Explicitly clearing all memory can reset an unreadable store.
+
+**Privacy and scope:** local storage is not encrypted; don't use it for secrets. Facts are sent to the Ollama endpoint you configured whenever you chat. Persistence belongs to this browser profile and page origin — a different browser, deployment, or `file://` copy may have a separate store. Clearing browser site data removes the memories. They are not embedded in a downloaded `nova.html`, and deleting them cannot erase anything a backend may already have logged.
+
 ## Voice output
 
-Replies are spoken with the browser's own Web Speech API. There is no API key, no account, and no network call: a local voice keeps working with the machine offline, which is why the whole speech path is a single `speechSynthesis.speak()` call with no fallback service behind it.
+Replies are spoken with the browser's own Web Speech API. There is no API key, account, or separate speech backend: a local voice keeps working with the machine offline, while a voice marked `network` depends on the browser's speech service. The speech path uses `speechSynthesis.speak()` with no fallback service behind it.
 
 Speech is fixed at the values NOVA is specified to use, in `src/speech.js`:
 
@@ -112,9 +150,9 @@ The offline notice sits **below** the orb rather than over it, so the drooping e
 
 `npm run verify:avatar` checks all of the above — it renders the avatar through React and inspects the stylesheet, so a reworded selector or a dropped layer fails the build rather than silently flattening the animation. It also writes `avatar-states.html`, a sheet of every state built from the real stylesheet and the real markup, so the motion can be reviewed without a microphone, a model or a network.
 
-`npm run verify:speech` does the same job for voice selection: it runs the real scorer against a synthetic machine and asserts what it picks, that the speaking parameters are the specified values, and that a non-English voice can never win by accident.
+`npm run verify:speech` does the same job for voice selection: it runs the real scorer against a synthetic machine and asserts what it picks, that the speaking parameters are the specified values, and that a non-English voice cannot displace an available English voice. It also exercises the real wake-word controller, chime scheduling, persistent memory helpers, settings controls, and compiled App lifecycle with recognition, timer, audio, and storage doubles — including waiting for speech completion, permission failures, restarts, manual fallback, cross-session memory, remembered-fact prompt context, forgetting, storage failures, and cleanup. These checks verify behaviour structurally, not microphone accuracy or how the chime sounds.
 
-`build:pages` runs both.
+`build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
 
 ## Build and publish
 

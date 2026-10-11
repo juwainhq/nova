@@ -2,8 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
 import { APP_NAME } from './brand.js';
 import {
+  MEMORY_KEY, describeMemoryFact, forgetFact, memoryPrompt, parseMemoryIntent,
+  readMemoryStore, rememberFact, writeMemoryStore,
+} from './memory.js';
+import {
   TTS,
   TTS_VOICE_KEY,
+  WAKE_WORD,
+  WAKE_UNSUPPORTED_MESSAGE,
+  createVoiceListener,
+  createWakeChime,
   defaultVoice,
   describeVoice,
   groupVoices,
@@ -235,15 +243,18 @@ function hasOllamaModel(models, model) {
 
 // Exported so scripts/verify-speech.mjs can render the panel and inspect the
 // voice selector it produces.
-export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef }) {
+export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef,
+  memories = [], memoryError = '', onDeleteMemory = () => {}, onClearMemory = () => false }) {
   const [draft, setDraft] = useState(settings);
   const [testStatus, setTestStatus] = useState('idle');
   const [testMessage, setTestMessage] = useState('');
   const [downloadStatus, setDownloadStatus] = useState('idle');
   const [downloadMessage, setDownloadMessage] = useState('');
+  const [confirmClearMemory, setConfirmClearMemory] = useState(false);
   const modelInputRef = useRef(null);
   const panelRef = useRef(null);
   const testControllerRef = useRef(null);
+  const memoryHeadingRef = useRef(null);
 
   useEffect(() => {
     modelInputRef.current?.focus();
@@ -473,6 +484,43 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 
             <div className="settings-divider" />
 
+            <section className="settings-memory" aria-labelledby="memory-title">
+              <div className="settings-test-heading">
+                <h3 ref={memoryHeadingRef} id="memory-title" className="field-label" tabIndex={-1}>Memory</h3>
+                <span className="config-detail">{memoryError && !memories.length ? 'Unavailable' : `${memories.length} saved ${memories.length === 1 ? 'fact' : 'facts'}`}</span>
+              </div>
+              <p className="field-hint">
+                Facts stay in this browser and are shared with your configured Ollama endpoint when you chat.
+                Memory changes are saved immediately, even if you cancel other settings.
+              </p>
+              {memoryError && <p className="field-hint field-hint-error" role="status" aria-live="polite">{memoryError}</p>}
+              {memories.length ? (
+                <ul className="memory-list">
+                  {memories.map((fact) => (
+                    <li key={fact}>
+                      <span>{fact}</span>
+                      <button className="text-button memory-delete" type="button" aria-label={`Delete memory: ${fact}`} onClick={() => { if (onDeleteMemory(fact)) memoryHeadingRef.current?.focus(); }}>Delete</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : !memoryError && (
+                <p className="field-hint">No saved memories yet. Say “remember” followed by a fact.</p>
+              )}
+              {confirmClearMemory && <p className="field-hint" role="status">Clear every saved fact? This cannot be undone.</p>}
+              <div className="memory-actions">
+                {confirmClearMemory ? (
+                  <>
+                    <button className="test-ollama-button" type="button" onClick={() => { if (onClearMemory()) { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); } }}>Confirm clear all</button>
+                    <button className="text-button" type="button" onClick={() => { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); }}>Keep memories</button>
+                  </>
+                ) : (
+                  <button className="test-ollama-button" type="button" disabled={!memories.length && !memoryError} onClick={() => setConfirmClearMemory(true)}>Clear all memory</button>
+                )}
+              </div>
+            </section>
+
+            <div className="settings-divider" />
+
             <div className="settings-test">
               <div className="settings-test-heading">
                 <div>
@@ -538,20 +586,26 @@ function App() {
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [memoryState, setMemoryState] = useState(readMemoryStore);
   const [lastResponse, setLastResponse] = useState('');
   const [notice, setNotice] = useState('');
+  const [wakeStandby, setWakeStandby] = useState(false);
+  const [wakeMessage, setWakeMessage] = useState('');
   // A brief celebratory flourish after a reply lands, then back to idle.
   const [mood, setMood] = useState('idle');
   const voices = useSpeechVoices();
   const moodTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const settingsTriggerRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const shouldListenRef = useRef(false);
+  const voiceListenerRef = useRef(null);
+  const wakeChimeRef = useRef(null);
+  const speechFinishRef = useRef(null);
+  const requestControllerRef = useRef(null);
   const promptRef = useRef(null);
   const speakRef = useRef(null);
   const avatarContainerRef = useRef(null);
   const conversationRef = useRef([]);
+  const memoriesRef = useRef(memoryState.facts);
 
   const SpeechRecognition = typeof window !== 'undefined'
     ? (window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -594,47 +648,148 @@ function App() {
     return () => controller.abort();
   }, [settings.model, settings.ollamaUrl]);
 
+  // Memory is independent of the settings draft. Persist first, then publish it;
+  // never claim a fact was saved/deleted when localStorage rejected the write.
+  const applyMemoryState = useCallback((next, interrupt = true, forceReset = false) => {
+    const changed = JSON.stringify(next.facts) !== JSON.stringify(memoriesRef.current);
+    memoriesRef.current = next.facts;
+    setMemoryState(next);
+    if (!changed && !forceReset) return;
+    conversationRef.current = []; // Removed/replaced facts must not survive in chat history.
+    if (interrupt) {
+      requestControllerRef.current?.abort();
+      speechFinishRef.current?.(false);
+      window.speechSynthesis?.cancel();
+      window.clearTimeout(moodTimerRef.current);
+      setMood('idle');
+      setLastResponse('');
+      setStage('ready');
+    }
+  }, []);
+
+  const refreshMemories = useCallback((interrupt = true) => {
+    const next = readMemoryStore();
+    applyMemoryState(next, interrupt);
+    return next;
+  }, [applyMemoryState]);
+
+  const commitMemories = useCallback((facts, interrupt = true) => {
+    const result = writeMemoryStore(facts);
+    applyMemoryState({ facts: result.ok ? facts : memoriesRef.current, error: result.error }, interrupt, result.ok && interrupt);
+    return result;
+  }, [applyMemoryState]);
+
+  useEffect(() => {
+    const sync = (event) => {
+      if (event.key !== MEMORY_KEY && event.key !== null) return;
+      try {
+        if (event.storageArea && event.storageArea !== window.localStorage) return;
+      } catch { /* The safe reader below reports blocked storage. */ }
+      refreshMemories();
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, [refreshMemories]);
+
+  const deleteSavedMemory = useCallback((fact) => {
+    const current = refreshMemories();
+    if (current.error) { notify(current.error); return false; }
+    if (!current.facts.includes(fact)) { notify('That fact is no longer saved.'); return false; }
+    const result = commitMemories(current.facts.filter((saved) => saved !== fact));
+    notify(result.ok ? 'Memory deleted.' : result.error);
+    return result.ok;
+  }, [refreshMemories, commitMemories, notify]);
+
+  const clearSavedMemories = useCallback(() => {
+    // Explicit confirmation also lets a user reset an unreadable/corrupt store.
+    const result = commitMemories([]);
+    notify(result.ok ? 'All saved memory cleared.' : result.error);
+    return result.ok;
+  }, [commitMemories, notify]);
+
   const askAria = useCallback(async (text) => {
     const prompt = text.trim();
     if (!prompt) return;
+    voiceListenerRef.current?.setMode(null);
     setStage('thinking');
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
 
-    const conversation = conversationRef.current.slice(-6);
-    const messages = [
-      {
-        role: 'system',
-        content: `You are ${APP_NAME}, a warm and witty local AI assistant. You run 100% locally on the user's machine. Keep responses under 3 sentences. Be helpful, kind, and efficient.`,
-      },
-      ...conversation,
-      { role: 'user', content: prompt },
-    ];
+    const currentMemory = refreshMemories(false);
+    const intent = parseMemoryIntent(prompt);
 
     try {
-      const result = await fetch(`${ollamaEndpoint(settings)}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true }),
-      });
-      if (!result.ok) {
-        const payload = await result.json().catch(() => ({}));
-        throw new Error(payload.error?.message || `Ollama returned ${result.status}.`);
+      let answer;
+      if (intent) {
+        // Memory commands run locally, so listing/saving/forgetting still works
+        // with Ollama offline and never relies on a model's claimed memory.
+        if (currentMemory.error) answer = currentMemory.error;
+        else if (intent.type === 'list') {
+          answer = currentMemory.facts.length
+            ? `I remember these facts about you: ${currentMemory.facts.map(describeMemoryFact).join('; ')}.`
+            : 'I do not have any saved memories yet. Say “remember” followed by a fact.';
+        } else if (intent.type === 'remember') {
+          const result = rememberFact(currentMemory.facts, intent.fact);
+          if (result.status === 'error') answer = result.error;
+          else if (result.status === 'unchanged') answer = `I already remember: ${describeMemoryFact(intent.fact)}.`;
+          else {
+            const saved = commitMemories(result.facts, false);
+            answer = saved.ok
+              ? `${result.status === 'updated' ? 'Updated my memory' : "I'll remember"}: ${describeMemoryFact(result.fact)}.`
+              : saved.error;
+          }
+        } else if (intent.type === 'forget') {
+          const result = forgetFact(currentMemory.facts, intent.query);
+          if (result.status === 'error') answer = result.error;
+          else if (result.status === 'missing') answer = `I do not have a saved fact matching “${result.query}”. You can review memories in Settings.`;
+          else if (result.status === 'ambiguous') answer = `More than one fact matches “${result.query}”. Please be more specific, or delete it in Settings.`;
+          else {
+            const saved = commitMemories(result.facts, false);
+            answer = saved.ok ? `Forgot: ${describeMemoryFact(result.fact)}.` : saved.error;
+          }
+        }
       }
-
-      const answer = await readChatCompletionStream(result);
+      if (!intent) {
+        const conversation = conversationRef.current.slice(-6);
+        const messages = [
+          {
+            role: 'system',
+            content: `You are ${APP_NAME}. ${memoryPrompt(currentMemory.facts)}\nYou are a warm and witty local AI assistant. You run 100% locally on the user's machine. Keep responses under 3 sentences. Be helpful, kind, and efficient.`,
+          },
+          ...conversation,
+          { role: 'user', content: prompt },
+        ];
+        const result = await fetch(`${ollamaEndpoint(settings)}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true }),
+        });
+        if (!result.ok) {
+          const payload = await result.json().catch(() => ({}));
+          throw new Error(payload.error?.message || `Ollama returned ${result.status}.`);
+        }
+        answer = await readChatCompletionStream(result);
+        if (controller.signal.aborted) return;
+        conversationRef.current = [
+          ...conversation,
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: answer },
+        ].slice(-6);
+      }
+      if (controller.signal.aborted) return;
       setLastResponse(answer);
-      conversationRef.current = [
-        ...conversation,
-        { role: 'user', content: prompt },
-        { role: 'assistant', content: answer },
-      ].slice(-6);
       await speakRef.current?.(answer);
-      celebrate();
+      if (!controller.signal.aborted) celebrate();
     } catch (error) {
+      if (controller.signal.aborted) return;
       try {
-        const models = await fetchOllamaModels(ollamaEndpoint(settings));
+        const models = await fetchOllamaModels(ollamaEndpoint(settings), controller.signal);
         setConnection('connected');
         setModelAvailable(hasOllamaModel(models, settings.model || OLLAMA_MODEL));
       } catch {
+        if (controller.signal.aborted) return;
         setConnection('offline');
         setModelAvailable(false);
       }
@@ -643,59 +798,70 @@ function App() {
         ? `I could not reach Ollama at ${(settings.ollamaUrl || '').trim() || 'localhost:11434'}. Check that it is running and that its CORS settings accept this page — open Settings for the exact command.`
         : `I couldn't get a response from Ollama. ${error.message}`;
       notify(detail);
+    } finally {
+      if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
-  }, [notify, settings, celebrate]);
+  }, [notify, settings, celebrate, refreshMemories, commitMemories]);
 
-  // Voice output is the browser's own speech synthesis: no key, no network.
-  const speakAnswer = useCallback(async (text) => {
-    const finish = () => setStage('ready');
-
+  // Resolve only when speech ends, not when it is queued. Otherwise standby
+  // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
+  const speakAnswer = useCallback((text) => {
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-      finish();
+      setStage('ready');
       notify('This browser has no speech synthesis, so replies will stay silent.');
-      return;
+      return Promise.resolve();
     }
 
+    speechFinishRef.current?.(false);
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const avatarElement = avatarContainerRef.current;
-    let speechPulseTimer;
+    return new Promise((resolve) => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      const avatarElement = avatarContainerRef.current;
+      let speechPulseTimer;
+      let finished = false;
 
-    // Fall back to the best voice on the machine until the user chooses one.
-    const voice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
-    if (voice) {
-      utterance.voice = voice;
-      if (voice.lang) utterance.lang = voice.lang;
-    }
-    utterance.rate = TTS.rate;
-    utterance.pitch = TTS.pitch;
-    utterance.volume = TTS.volume;
+      const voice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
+      if (voice) {
+        utterance.voice = voice;
+        if (voice.lang) utterance.lang = voice.lang;
+      }
+      utterance.rate = TTS.rate;
+      utterance.pitch = TTS.pitch;
+      utterance.volume = TTS.volume;
 
-    const finishSpeech = () => {
-      window.clearTimeout(speechPulseTimer);
-      avatarElement?.classList.remove('speech-boundary-active');
-      avatarElement?.style.removeProperty('--audio-pulse');
-      finish();
-    };
-
-    utterance.onstart = () => setStage('speaking');
-    // Word boundaries are the only live signal a local voice gives us, so the eyes
-    // and body pulse off them. Engines that never fire it simply stay steady.
-    utterance.onboundary = (event) => {
-      if (event.name && event.name !== 'word') return;
-      if (!avatarElement) return;
-      avatarElement.classList.add('speech-boundary-active');
-      const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
-      avatarElement.style.setProperty('--audio-pulse', (0.58 + wordLength * 0.035).toFixed(3));
-      window.clearTimeout(speechPulseTimer);
-      speechPulseTimer = window.setTimeout(() => {
-        avatarElement.style.setProperty('--audio-pulse', '.16');
-      }, 125);
-    };
-    utterance.onend = finishSpeech;
-    utterance.onerror = finishSpeech;
-
-    window.speechSynthesis.speak(utterance);
+      const finishSpeech = (resume = true) => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(speechPulseTimer);
+        avatarElement?.classList.remove('speech-boundary-active');
+        avatarElement?.style.removeProperty('--audio-pulse');
+        if (speechFinishRef.current === finishSpeech) speechFinishRef.current = null;
+        if (resume) setStage('ready');
+        resolve();
+      };
+      speechFinishRef.current = finishSpeech;
+      utterance.onstart = () => { if (!finished) setStage('speaking'); };
+      // Engines without word-boundary events simply hold the speaking pulse steady.
+      utterance.onboundary = (event) => {
+        if (finished || (event.name && event.name !== 'word') || !avatarElement) return;
+        avatarElement.classList.add('speech-boundary-active');
+        const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
+        avatarElement.style.setProperty('--audio-pulse', (0.58 + wordLength * 0.035).toFixed(3));
+        window.clearTimeout(speechPulseTimer);
+        speechPulseTimer = window.setTimeout(() => {
+          avatarElement.style.setProperty('--audio-pulse', '.16');
+        }, 125);
+      };
+      utterance.onend = () => finishSpeech();
+      utterance.onerror = () => finishSpeech();
+      setStage('speaking'); // Also covers an engine's queue before onstart.
+      try {
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        finishSpeech();
+        notify('Speech could not start in this browser.');
+      }
+    });
   }, [notify, settings, voices]);
 
   // Both refs are refreshed on every render, so callbacks that outlive a render still
@@ -708,81 +874,98 @@ function App() {
   };
 
   useEffect(() => {
-    if (!SpeechRecognition) return undefined;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-    recognition.onresult = (event) => {
-      let finalText = '';
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        if (event.results[index].isFinal) finalText += event.results[index][0]?.transcript || '';
-      }
-      if (finalText.trim()) {
-        shouldListenRef.current = false;
-        recognition.stop();
-        promptRef.current?.(finalText.trim());
-      }
-    };
-    recognition.onerror = (event) => {
-      shouldListenRef.current = false;
-      if (event.error !== 'aborted') {
-        setStage('ready');
-        const reason = event.error === 'not-allowed'
-          ? 'Microphone access is blocked. Allow it in your browser settings and try again.'
-          : event.error === 'no-speech'
-            ? 'I did not hear anything. Tap the microphone and try again.'
-            : `Speech recognition stopped: ${event.error}.`;
-        notify(reason);
-      }
-    };
-    recognition.onend = () => {
-      if (shouldListenRef.current) {
-        shouldListenRef.current = false;
-        setStage('ready');
-      }
-    };
-    recognitionRef.current = recognition;
+    const chime = createWakeChime(window.AudioContext || window.webkitAudioContext);
+    wakeChimeRef.current = chime;
+    const unlock = () => { void chime.unlock(); };
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
     return () => {
-      shouldListenRef.current = false;
-      try {
-        recognition.stop();
-      } catch {
-        // It may already be idle when the component unmounts.
-      }
-      recognitionRef.current = null;
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      chime.dispose();
+      wakeChimeRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const listener = createVoiceListener({
+      Recognition: SpeechRecognition,
+      onStandbyChange: setWakeStandby,
+      onUnsupported: () => setWakeMessage(WAKE_UNSUPPORTED_MESSAGE),
+      onInputStart: () => {
+        if (listener.wakeSupported) setWakeMessage('');
+      },
+      onWake: () => {
+        window.clearTimeout(moodTimerRef.current);
+        setMood('idle');
+        setNotice('');
+        setStage('listening');
+        void wakeChimeRef.current?.play();
+      },
+      onQuestion: (text) => promptRef.current?.(text),
+      onInputEnd: (reason) => {
+        setStage('ready');
+        if (reason === 'no-speech') notify('I did not hear a question. Say “hey nova” or tap the microphone and try again.');
+      },
+      onError: (error, mode) => {
+        if (error === 'not-allowed' || error === 'service-not-allowed') {
+          setWakeMessage('Microphone access is blocked — allow it, then use the mic button to retry.');
+        } else if (mode === 'standby') {
+          setWakeMessage('Wake word paused — use the mic button to retry.');
+        }
+        if (mode === 'question') {
+          notify(error === 'not-allowed' || error === 'service-not-allowed'
+            ? 'Microphone access is blocked. Allow it in your browser settings and try again.'
+            : error === 'no-speech'
+              ? 'I did not hear anything. Tap the microphone and try again.'
+              : `Speech recognition stopped: ${error}.`);
+        }
+      },
+    });
+    voiceListenerRef.current = listener;
+    return () => {
+      listener.dispose();
+      voiceListenerRef.current = null;
     };
   }, [SpeechRecognition, notify]);
 
+  // Standby is automatic on load / after a reply. Never listen to the speaker,
+  // settings edits, or a hidden tab; resume when the main view is idle again.
+  useEffect(() => {
+    const updateMode = () => {
+      const mode = settingsOpen || document.hidden || stage === 'thinking' || stage === 'speaking'
+        ? null
+        : stage === 'listening' ? 'question' : 'standby';
+      voiceListenerRef.current?.setMode(mode);
+    };
+    updateMode();
+    document.addEventListener('visibilitychange', updateMode);
+    return () => document.removeEventListener('visibilitychange', updateMode);
+  }, [settingsOpen, stage, SpeechRecognition]);
+
   useEffect(() => () => {
-    window.clearTimeout(noticeTimerRef.current);
-    window.clearTimeout(moodTimerRef.current);
+    requestControllerRef.current?.abort();
+    speechFinishRef.current?.(false);
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }, []);
 
   const toggleListening = () => {
     if (stage === 'listening') {
-      shouldListenRef.current = false;
-      recognitionRef.current?.stop();
+      voiceListenerRef.current?.setMode(null);
       setStage('ready');
       return;
     }
     if (stage !== 'ready') return;
-    if (!recognitionRef.current) {
+    if (!voiceListenerRef.current?.available) {
       notify('Speech recognition is not supported in this browser. Try a recent version of Chrome or Edge.');
       return;
     }
     window.speechSynthesis?.cancel();
+    window.clearTimeout(moodTimerRef.current);
+    setMood('idle');
     setNotice('');
-    shouldListenRef.current = true;
-    try {
-      recognitionRef.current.start();
-      setStage('listening');
-    } catch {
-      shouldListenRef.current = false;
-      notify('The microphone could not start. Please try again.');
-    }
+    setStage('listening');
+    voiceListenerRef.current.setMode('question');
   };
 
   useEffect(() => {
@@ -847,7 +1030,7 @@ function App() {
         <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
           <div
             ref={avatarContainerRef}
-            className={`avatar-container ${stage === 'listening' ? 'is-listening' : ''} ${stage === 'speaking' ? 'is-speaking' : ''} ${stage === 'thinking' ? 'is-thinking' : ''} ${mood === 'happy' && connection !== 'offline' ? 'is-happy' : ''} ${connection === 'offline' ? 'is-offline' : ''}`}
+            className={`avatar-container ${stage === 'listening' ? 'is-listening' : ''} ${stage === 'speaking' ? 'is-speaking' : ''} ${stage === 'thinking' ? 'is-thinking' : ''} ${mood === 'happy' && connection !== 'offline' ? 'is-happy' : ''} ${connection === 'offline' && stage !== 'listening' ? 'is-offline' : ''}`}
           >
             <div className="avatar-backlight" />
             <div className="listen-ring" aria-hidden="true" />
@@ -874,6 +1057,12 @@ function App() {
       </main>
 
       <footer className="control-dock">
+        {wakeStandby && stage === 'ready' && !settingsOpen && (
+          <div className="wake-indicator" role="status" aria-label={`Wake word standby — say “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” to wake ${APP_NAME}`}>
+            <MicIcon />
+          </div>
+        )}
+        {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
         <div className="mic-control-wrap">
           <div className={`mic-halo ${stage === 'listening' ? 'mic-halo-active' : ''}`} />
           <button
@@ -895,6 +1084,10 @@ function App() {
         <SettingsPanel
           settings={settings}
           voices={voices}
+          memories={memoryState.facts}
+          memoryError={memoryState.error}
+          onDeleteMemory={deleteSavedMemory}
+          onClearMemory={clearSavedMemories}
           standalone={STANDALONE_BUILD}
           connection={connection}
           modelAvailable={modelAvailable}

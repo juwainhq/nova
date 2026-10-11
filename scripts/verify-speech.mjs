@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createAppHarness, createAudioDouble, createClock, createRecognitionDouble } from './speech-test-fixtures.mjs';
+import { verifyMemory } from './memory-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -40,7 +42,8 @@ try {
   await rm(directory, { recursive: true, force: true }).catch(() => {});
 }
 
-const { TTS, defaultVoice, describeVoice, groupVoices, resolveVoice, scoreVoice, sortVoices, voiceKey, voiceOptionLabel } = speech;
+const { TTS, defaultVoice, describeVoice, groupVoices, resolveVoice, scoreVoice, sortVoices, voiceKey, voiceOptionLabel,
+  WAKE_WORD, WAKE_UNSUPPORTED_MESSAGE, parseWakeWord, createVoiceListener, createWakeChime } = speech;
 
 const voice = (name, lang, extra = {}) => ({ name, lang, voiceURI: `${name}-uri`, localService: true, default: false, ...extra });
 
@@ -158,7 +161,7 @@ check('speaker is reached through a ref, not a stale closure',
 // ------------------------------------------------- the panel, actually rendered
 // Renders the real component, so the selector is inspected as markup rather than as
 // source text.
-async function renderPanel(voices, savedKey) {
+async function renderPanel(voices, savedKey, memories = [], memoryError = '') {
   const result = await build({
     stdin: {
       contents: `
@@ -168,7 +171,7 @@ async function renderPanel(voices, savedKey) {
         const voices = ${JSON.stringify(voices)};
         const settings = { model: 'mistral:7b-instruct-q4_K_M', ollamaUrl: '', voiceKey: ${JSON.stringify(savedKey)}, showTranscript: false };
         process.stdout.write(renderToStaticMarkup(createElement(SettingsPanel, {
-          settings, voices, connection: 'connected', modelAvailable: true, standalone: false,
+          settings, voices, memories: ${JSON.stringify(memories)}, memoryError: ${JSON.stringify(memoryError)}, connection: 'connected', modelAvailable: true, standalone: false,
           onClose() {}, onSave() {}, onConnectionChange() {}, openerRef: { current: null },
         })));
       `,
@@ -225,6 +228,334 @@ check('a missing saved voice is reported', /no longer installed/i.test(missingPa
 // An empty list must degrade gracefully rather than render a broken control.
 const emptyPanel = await renderPanel([], '');
 check('panel survives an empty voice list', /<select[^>]*id="nova-voice"/.test(emptyPanel) && /No voices available/.test(emptyPanel));
+
+// ----------------------------------------------------------- wake word / modes
+check('wake phrase follows the brand', WAKE_WORD === 'hey nova');
+check('wake phrase is case insensitive', parseWakeWord('HEY NOVA')?.question === '');
+check('wake parser preserves a same-utterance question', parseWakeWord('Hey, Nova! What time is it?')?.question === 'What time is it?');
+check('wake parser tolerates repeated whitespace', parseWakeWord('hey   nova, hello')?.question === 'hello');
+check('wake parser rejects partial and lookalike names', ['hey novation', 'hey supernova', 'heynova', 'hey no va'].every((text) => parseWakeWord(text) === null));
+check('wake parser ignores unrelated and empty text', parseWakeWord('good morning') === null && parseWakeWord(undefined) === null);
+check('unsupported message is the specified wording', WAKE_UNSUPPORTED_MESSAGE === 'Wake word not supported — use the mic button');
+
+function listenerHarness(options = {}) {
+  const clock = createClock();
+  const { Recognition, instances } = createRecognitionDouble(clock, options);
+  const events = { wakes: 0, questions: [], standby: [], errors: [], ended: [], unsupported: 0 };
+  const listener = createVoiceListener({
+    Recognition: options.missing ? undefined : Recognition,
+    timers: clock,
+    now: clock.now,
+    onWake: () => { events.wakes += 1; },
+    onQuestion: (text) => events.questions.push(text),
+    onStandbyChange: (value) => events.standby.push(value),
+    onError: (error, mode) => events.errors.push({ error, mode }),
+    onInputEnd: (reason) => events.ended.push(reason),
+    onUnsupported: () => { events.unsupported += 1; },
+  });
+  listener.setMode('standby');
+  return { listener, clock, events, recognition: instances[0] };
+}
+
+const wake = listenerHarness({ autoStart: false });
+check('startup is deferred so StrictMode cleanup can cancel it', wake.recognition.starts.length === 0 && wake.clock.pending === 1);
+wake.clock.tick();
+check('standby starts continuous final-only recognition', wake.recognition.starts[0].continuous === true && wake.recognition.starts[0].interim === false);
+check('standby indicator waits for actual onstart', wake.events.standby.length === 0);
+wake.recognition.onstart();
+check('standby indicator reflects a running microphone', wake.events.standby.at(-1) === true);
+wake.recognition.result('hey nova', false);
+wake.recognition.result('ordinary background speech');
+check('standby discards unrelated and interim transcripts', wake.events.wakes === 0 && wake.events.questions.length === 0);
+wake.recognition.result('Hey Nova!');
+check('wake triggers once and does not send an empty question', wake.events.wakes === 1 && wake.events.questions.length === 0);
+check('wake immediately hides standby and aborts the old session', wake.events.standby.at(-1) === false && wake.recognition.aborts === 1);
+wake.recognition.result('late standby result');
+wake.clock.tick(1000);
+check('handoff never overlaps recognition sessions', wake.recognition.starts.length === 1 && wake.events.questions.length === 0);
+wake.recognition.end();
+wake.clock.tick(150);
+wake.recognition.onstart();
+check('full question mode enables interim recognition', wake.recognition.starts.length === 2 && wake.recognition.starts[1].interim === true);
+wake.recognition.results([{ text: 'What', isFinal: true }, { text: 'time is it?', isFinal: true }]);
+check('question mode combines final results with spaces', wake.events.questions[0] === 'What time is it?');
+wake.recognition.result('duplicate final');
+wake.recognition.end();
+wake.clock.tick(20000);
+check('recognition stays paused while the caller processes and speaks', wake.recognition.starts.length === 2 && wake.events.questions.length === 1);
+wake.listener.setMode('standby');
+wake.clock.tick();
+wake.recognition.onstart();
+check('caller can resume standby after speech ends', wake.recognition.starts.length === 3 && wake.events.standby.at(-1) === true);
+wake.listener.dispose();
+
+const inline = listenerHarness();
+inline.clock.tick();
+inline.recognition.result('Hey, Nova, tell me a joke.');
+check('same-utterance question is not lost during wake handoff', inline.events.wakes === 1 && inline.events.questions[0] === 'tell me a joke.');
+inline.listener.dispose();
+
+const split = listenerHarness();
+split.clock.tick();
+split.recognition.result('Hey,');
+split.recognition.result('Nova, what is two plus two?');
+check('wake phrase may span adjacent final results', split.events.wakes === 1 && split.events.questions[0] === 'what is two plus two?');
+split.listener.dispose();
+
+const indexed = listenerHarness();
+indexed.clock.tick();
+indexed.recognition.results([{ text: 'hey nova obsolete question' }, { text: 'new background speech' }], 1);
+check('only changed results are processed', indexed.events.wakes === 0 && indexed.events.questions.length === 0);
+indexed.listener.setMode('question');
+indexed.recognition.end();
+indexed.clock.tick(150);
+indexed.recognition.result('Hey Nova, a manually started question');
+check('mic button input requires no wake word and strips a repeated prefix', indexed.events.wakes === 0 && indexed.events.questions[0] === 'a manually started question');
+indexed.listener.dispose();
+
+const restart = listenerHarness();
+restart.clock.tick();
+restart.clock.tick(3000);
+restart.recognition.result('hey');
+restart.recognition.error('no-speech');
+restart.recognition.end();
+restart.clock.tick(799);
+check('natural standby endings restart with a delay, not a hot loop', restart.recognition.starts.length === 1);
+restart.clock.tick(1);
+restart.recognition.result('nova, not a wake from a previous session');
+check('silence is harmless and a new session clears the partial wake phrase', restart.events.errors.length === 0 && restart.events.wakes === 0 && restart.recognition.starts.length === 2);
+restart.listener.dispose();
+
+const silence = listenerHarness();
+silence.clock.tick();
+silence.recognition.result('hey nova');
+silence.recognition.end();
+silence.clock.tick(150);
+silence.clock.tick(15000);
+check('a wake without a question times out instead of staying awake', silence.events.ended[0] === 'no-speech');
+silence.recognition.end();
+silence.clock.tick(150);
+check('question timeout returns to final-only standby', silence.recognition.starts.at(-1).interim === false && silence.events.standby.at(-1) === true);
+silence.listener.dispose();
+
+const unsupported = listenerHarness({ continuous: false });
+unsupported.clock.tick();
+check('missing continuous mode reports unsupported without auto-starting', unsupported.events.unsupported === 1 && unsupported.recognition.starts.length === 0 && unsupported.listener.available);
+unsupported.listener.setMode('question');
+unsupported.clock.tick();
+unsupported.recognition.result('manual fallback works');
+check('unsupported continuous mode preserves manual voice input', unsupported.events.questions[0] === 'manual fallback works');
+unsupported.listener.dispose();
+const missing = listenerHarness({ missing: true });
+missing.clock.tick();
+check('a missing recognition API degrades safely', missing.events.unsupported === 1 && !missing.listener.available && missing.clock.pending === 0);
+missing.listener.dispose();
+
+const denied = listenerHarness();
+denied.clock.tick();
+denied.recognition.error('not-allowed');
+denied.recognition.end();
+denied.clock.tick(60000);
+check('permission denial stops automatic retries', denied.recognition.starts.length === 1 && denied.events.errors[0]?.error === 'not-allowed');
+denied.listener.setMode('question');
+denied.clock.tick();
+denied.recognition.result('permission is now granted');
+denied.recognition.end();
+denied.listener.setMode('standby');
+denied.clock.tick();
+check('a successful manual start recovers wake standby after permission denial', denied.recognition.starts.length === 3 && denied.events.standby.at(-1) === true);
+denied.listener.dispose();
+
+const network = listenerHarness();
+network.clock.tick();
+for (const delay of [1600, 3200, 6400]) {
+  network.clock.tick(2000);
+  network.recognition.error('network');
+  network.recognition.end();
+  network.clock.tick(delay);
+}
+check('network failure retries are bounded and back off', network.recognition.starts.length === 3 && network.events.errors.length === 1 && network.clock.pending === 0);
+network.listener.dispose();
+
+const ends = listenerHarness();
+ends.clock.tick();
+for (let i = 0; i < 3; i += 1) { ends.recognition.end(); ends.clock.tick(800); }
+check('an engine that repeatedly ends immediately disables wake mode', ends.events.unsupported === 1 && ends.recognition.starts.length === 3 && ends.listener.available);
+ends.listener.dispose();
+
+const startFailure = listenerHarness();
+startFailure.recognition.startError = Object.assign(new Error('blocked'), { name: 'NotAllowedError' });
+startFailure.clock.tick();
+startFailure.clock.tick(60000);
+check('synchronous start failure has no retry storm', startFailure.events.errors[0]?.error === 'not-allowed' && startFailure.clock.pending === 0);
+startFailure.listener.dispose();
+
+const cleanup = listenerHarness();
+cleanup.listener.dispose();
+cleanup.clock.tick(60000);
+check('unmount before startup cancels the microphone attempt', cleanup.recognition.starts.length === 0 && cleanup.clock.pending === 0);
+const activeCleanup = listenerHarness();
+activeCleanup.clock.tick();
+const lateResult = activeCleanup.recognition.onresult;
+const lateEnd = activeCleanup.recognition.onend;
+activeCleanup.listener.dispose();
+lateResult({ resultIndex: 0, results: [Object.assign([{ transcript: 'hey nova' }], { isFinal: true })] });
+lateEnd();
+activeCleanup.clock.tick(60000);
+check('unmount aborts recognition and ignores stale callbacks', activeCleanup.recognition.onresult === null && activeCleanup.events.wakes === 0 && activeCleanup.recognition.starts.length === 1 && activeCleanup.clock.pending === 0);
+
+// ---------------------------------------------------------------- soft chime
+const audio = createAudioDouble();
+const chime = createWakeChime(audio.AudioContext);
+check('chime allocates no audio context until it is needed', audio.instances.length === 0);
+check('chime can play using only Web Audio', await chime.play());
+const context = audio.instances[0];
+check('chime uses two sine tones, quietly and briefly', context.oscillators.length === 2
+  && context.oscillators.every((oscillator) => oscillator.type === 'sine')
+  && context.gains.every((gain) => gain.ramps.some((ramp) => ramp.value === .035))
+  && context.oscillators.at(-1).stopAt - context.currentTime < .35);
+context.oscillators.forEach((oscillator) => oscillator.onended());
+check('finished chime nodes disconnect', context.oscillators.every((oscillator) => oscillator.disconnected) && context.gains.every((gain) => gain.disconnected));
+await chime.play();
+check('chime reuses a single context', audio.instances.length === 1);
+chime.dispose();
+check('chime context closes on unmount and cannot play again', context.closes === 1 && !await chime.play());
+const blockedAudio = createAudioDouble({ suspended: true });
+const blockedChime = createWakeChime(blockedAudio.AudioContext);
+check('blocked autoplay does not queue a late chime', !await blockedChime.play() && blockedAudio.instances[0].oscillators.length === 0);
+await blockedChime.unlock();
+check('a gesture can unlock audio without playing a stale wake sound', blockedAudio.instances[0].state === 'running' && blockedAudio.instances[0].oscillators.length === 0);
+check('subsequent wake sounds play after audio unlock', await blockedChime.play());
+blockedChime.dispose();
+const rejectedAudio = createAudioDouble({ suspended: true, rejectResume: true });
+const rejectedChime = createWakeChime(rejectedAudio.AudioContext);
+check('autoplay rejection is handled without throwing', !await rejectedChime.unlock() && !await rejectedChime.play());
+rejectedChime.dispose();
+const noChime = createWakeChime(undefined);
+check('a missing AudioContext leaves voice input usable', !await noChime.unlock() && !await noChime.play());
+noChime.dispose();
+
+// ----------------------------------------------- the real App's full lifecycle
+const ui = await createAppHarness();
+ui.clock.tick();
+await ui.settle();
+const mic = ui.recognition.instances[0];
+check('App starts wake standby on load and renders a subtle mic indicator', mic.starts.length === 1 && Boolean(ui.find('wake-indicator')));
+check('standby indicator has an accessible wake label', ui.find('wake-indicator')?.props['aria-label']?.includes('hey nova'));
+mic.result('not a request');
+check('App never sends background chatter to Ollama', !ui.requests.some((request) => request.url.endsWith('/chat/completions')));
+ui.window.dispatch('pointerdown');
+await ui.settle();
+mic.result('Hey Nova');
+ui.flush();
+check('wake changes status to LISTENING and enables listening eyes', ui.find('status-word')?.props.children === 'NOVA LISTENING' && ui.find('avatar-container')?.props.className.includes('is-listening'));
+check('wake hides the standby icon and plays the chime', !ui.find('wake-indicator') && ui.audio.instances[0]?.oscillators.length === 2);
+mic.end();
+ui.clock.tick(150);
+mic.result('How are you?');
+ui.flush();
+check('a question enters thinking and disables the mic button', ui.find('status-word')?.props.children === 'NOVA THINKING' && ui.find('mic-button')?.props.disabled);
+mic.end();
+await ui.settle();
+const reply = ui.utterances[0];
+check('App speaks the answer with the selected browser voice and parameters', reply?.voice?.name === 'Samantha' && reply.rate === .95 && reply.pitch === .9 && reply.volume === 1);
+check('queued speech stays speaking, not happy or standby', ui.find('status-word')?.props.children === 'NOVA SPEAKING' && !ui.find('wake-indicator') && !ui.find('avatar-container')?.props.className.includes('is-happy'));
+const beforeSpeechEnd = mic.starts.length;
+ui.clock.tick(10000);
+ui.flush();
+check('standby cannot restart while speech is queued', mic.starts.length === beforeSpeechEnd);
+reply?.onstart();
+ui.flush();
+reply?.onboundary({ name: 'word', charLength: 4 });
+ui.clock.tick(125);
+check('standby stays paused while speech is playing', mic.starts.length === beforeSpeechEnd && !ui.find('wake-indicator'));
+reply?.onend();
+await ui.settle();
+ui.clock.tick();
+ui.flush();
+check('actual speech end automatically restores wake standby', mic.starts.length === beforeSpeechEnd + 1 && Boolean(ui.find('wake-indicator')));
+check('celebration happens after speech, not before', ui.find('avatar-container')?.props.className.includes('is-happy'));
+reply?.onerror();
+await ui.settle();
+ui.clock.tick();
+check('duplicate speech completion does not restart another recognizer', mic.starts.length === beforeSpeechEnd + 1);
+
+ui.find('settings-trigger').props.onClick();
+ui.flush();
+mic.end();
+ui.clock.tick(10000);
+check('settings pause the background microphone', !ui.find('wake-indicator') && mic.starts.length === beforeSpeechEnd + 1);
+// The fake JSX tree keeps SettingsPanel as a component with its real callbacks.
+const openPanel = ui.tree.props.children.find((node) => node?.props?.onClose);
+openPanel.props.onClose();
+ui.flush();
+ui.clock.tick();
+ui.flush();
+check('closing settings resumes wake standby', Boolean(ui.find('wake-indicator')));
+ui.document.hidden = true;
+ui.document.dispatch('visibilitychange');
+ui.flush();
+mic.end();
+const beforeHidden = mic.starts.length;
+ui.clock.tick(10000);
+check('hidden tabs suspend background listening', mic.starts.length === beforeHidden && !ui.find('wake-indicator'));
+ui.document.hidden = false;
+ui.document.dispatch('visibilitychange');
+ui.clock.tick();
+ui.flush();
+check('visible idle tabs resume wake listening', mic.starts.length === beforeHidden + 1 && Boolean(ui.find('wake-indicator')));
+ui.unmount();
+check('App unmount detaches recognition and closes audio', mic.onresult === null && ui.audio.instances[0]?.closes === 1);
+
+const unsupportedUi = await createAppHarness({ continuous: false });
+await unsupportedUi.settle();
+check('App persistently shows the exact unsupported fallback message', unsupportedUi.find('wake-message')?.props.children === WAKE_UNSUPPORTED_MESSAGE && unsupportedUi.find('wake-message')?.props['aria-live'] === 'polite');
+unsupportedUi.find('mic-button').props.onClick();
+unsupportedUi.flush();
+unsupportedUi.clock.tick();
+const fallbackMic = unsupportedUi.recognition.instances[0];
+fallbackMic.result('a question without a wake word');
+fallbackMic.end();
+await unsupportedUi.settle();
+check('manual mic input still reaches Ollama on an unsupported browser', unsupportedUi.requests.some((request) => request.options?.method === 'POST') && unsupportedUi.utterances.length === 1);
+unsupportedUi.utterances[0]?.onerror();
+await unsupportedUi.settle();
+unsupportedUi.clock.tick();
+unsupportedUi.flush();
+check('speech error releases the UI without claiming wake support', unsupportedUi.find('status-word')?.props.children === 'NOVA READY' && !unsupportedUi.find('wake-indicator'));
+unsupportedUi.unmount();
+
+const silentUi = await createAppHarness({ speech: false });
+silentUi.clock.tick();
+silentUi.recognition.instances[0].result('hey nova tell me something');
+silentUi.recognition.instances[0].end();
+await silentUi.settle();
+silentUi.clock.tick();
+silentUi.flush();
+check('missing speech synthesis returns to standby without hanging', Boolean(silentUi.find('wake-indicator')) && silentUi.utterances.length === 0);
+silentUi.unmount();
+
+const failedUi = await createAppHarness();
+failedUi.chatError = true;
+failedUi.clock.tick();
+failedUi.recognition.instances[0].result('hey nova this model request fails');
+failedUi.recognition.instances[0].end();
+await failedUi.settle();
+failedUi.clock.tick();
+failedUi.flush();
+check('a failed model request returns to wake standby', Boolean(failedUi.find('wake-indicator')) && failedUi.utterances.length === 0);
+failedUi.unmount();
+
+const deniedUi = await createAppHarness();
+deniedUi.clock.tick();
+deniedUi.recognition.instances[0].error('not-allowed');
+deniedUi.recognition.instances[0].end();
+await deniedUi.settle();
+deniedUi.clock.tick(60000);
+check('App explains denied microphone permission without repeated prompts', deniedUi.find('wake-message')?.props.children.includes('Microphone access is blocked') && deniedUi.recognition.instances[0].starts.length === 1 && !deniedUi.find('wake-indicator'));
+deniedUi.unmount();
+
+await verifyMemory(check, renderPanel);
 
 const failed = problems.length;
 for (const { label, ok, detail } of checks) {

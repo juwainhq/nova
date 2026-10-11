@@ -27,7 +27,7 @@ const OLD_NAME = 'ARIA';
 
 const SOURCE_FILES = [
   'index.dev.html', 'vite.config.js', 'package.json',
-  'src/App.jsx', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/index.css', 'src/brand.js',
+  'src/App.jsx', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/memory.js', 'src/index.css', 'src/brand.js',
   'scripts/build-standalone.mjs', 'scripts/verify-standalone.mjs',
   'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/sync-pages.mjs',
 ];
