@@ -20,7 +20,13 @@ const apiProxy = {
 export default defineConfig({
   base: './',
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: { index: 'index.dev.html' },
+    },
+  },
   server: {
+    open: '/index.dev.html',
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
