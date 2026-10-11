@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Speech output runs on the browser's own Web Speech API, so Ollama is the only
+// service that needs proxying.
 const apiProxy = {
   // Keep browser requests same-origin; Vite forwards them to the local Ollama API.
   '/api/ollama': {
@@ -8,25 +10,62 @@ const apiProxy = {
     changeOrigin: true,
     rewrite: (path) => path.replace(/^\/api\/ollama/, '/v1'),
   },
-  // ElevenLabs requests also go through the local dev server to avoid browser CORS issues.
-  '/api/elevenlabs': {
-    target: 'https://api.elevenlabs.io',
-    changeOrigin: true,
-    secure: true,
-    rewrite: (path) => path.replace(/^\/api\/elevenlabs/, ''),
-  },
 };
+
+// The repository root also holds the built, Pages-ready `index.html`. Without
+// this, `npm run dev` would serve that stale bundle at `/` instead of the
+// hot-reloading source entry. Production builds are untouched.
+function serveDevEntryAtRoot() {
+  return {
+    name: 'nova-serve-dev-entry-at-root',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const [pathname, search = ''] = (req.url || '').split('?');
+        if (pathname === '/' || pathname === '/index.html') {
+          req.url = `/index.dev.html${search ? `?${search}` : ''}`;
+        }
+        next();
+      });
+    },
+  };
+}
+
+// Vite rewrites the HTML it serves — it injects the HMR client, including into
+// plain root-level .html files. The standalone download must be byte-exact, so
+// serve that one file from disk untouched. Dev only; production is unaffected.
+function serveStandaloneRaw() {
+  return {
+    name: 'nova-serve-standalone-raw',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const [pathname] = (req.url || '').split('?');
+        if (pathname !== '/nova.html') return next();
+        try {
+          const { readFile } = await import('node:fs/promises');
+          const file = readFile('nova.html');
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(await file);
+        } catch {
+          next();
+        }
+      });
+    },
+  };
+}
 
 export default defineConfig({
   base: './',
-  plugins: [react()],
+  plugins: [react(), serveDevEntryAtRoot(), serveStandaloneRaw()],
   build: {
     rollupOptions: {
       input: { index: 'index.dev.html' },
     },
   },
   server: {
-    open: '/index.dev.html',
+    open: '/',
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
