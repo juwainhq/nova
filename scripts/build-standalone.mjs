@@ -1,4 +1,4 @@
-// Produce `aria.html`: one self-contained file, opened straight from disk with no
+// Produce `nova.html`: one self-contained file, opened straight from disk with no
 // build step and no server. CSS and JS are inlined, and a build-time constant flips
 // the app to call Ollama directly instead of through the Vite proxy.
 import { promisify } from 'node:util';
@@ -9,9 +9,9 @@ import { resolve } from 'node:path';
 const run = promisify(execFile);
 const root = process.cwd();
 
-const OUTPUT_NAME = 'aria.html';
+const OUTPUT_NAME = 'nova.html';
 // Placeholder replaced by esbuild; keeps the bundle free of a bare global lookup.
-const FLAG_TOKEN = '__ARIA_STANDALONE__';
+const FLAG_TOKEN = '__NOVA_STANDALONE__';
 
 const TEMPLATE = `<!doctype html>
 <html lang="en">
@@ -19,8 +19,8 @@ const TEMPLATE = `<!doctype html>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0d0805" />
-    <meta name="description" content="ARIA is your local, voice-first AI assistant. This single file runs from your disk with no build step." />
-    <title>ARIA — Voice Intelligence</title>
+    <meta name="description" content="NOVA is your local, voice-first AI assistant. This single file runs from your disk with no build step." />
+    <title>NOVA — Voice Intelligence</title>
     <style>
 __styles__
     </style>
@@ -65,6 +65,10 @@ async function main() {
     minify: true,
     legalComments: 'none',
     loader: { '.jsx': 'jsx' },
+    // Match what Vite uses. The classic transform emits bare `React.createElement`
+    // calls, which only work here by accident because main.jsx happens to import
+    // React — a coupling that would break silently if that import were removed.
+    jsx: 'automatic',
     define: { [FLAG_TOKEN]: 'true' },
     logLevel: 'warning',
   });

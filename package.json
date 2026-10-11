@@ -1,16 +1,18 @@
 {
-  "name": "aria-voice-assistant",
+  "name": "nova-voice-assistant",
   "private": true,
-  "version": "1.3.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build && node scripts/rename-build-entry.mjs",
     "build:standalone": "node scripts/build-standalone.mjs",
+    "build:pages": "npm run build && npm run build:standalone && npm run verify:standalone && npm run verify:avatar && npm run verify:speech && npm run verify:brand && node scripts/sync-pages.mjs",
+    "preview": "vite preview --host 0.0.0.0",
+    "verify:standalone": "node scripts/verify-standalone.mjs",
     "verify:avatar": "node scripts/verify-avatar.mjs",
     "verify:speech": "node scripts/verify-speech.mjs",
-    "build:pages": "npm run build && npm run build:standalone && npm run verify:avatar && npm run verify:speech && node scripts/sync-pages.mjs",
-    "preview": "vite preview --host 0.0.0.0"
+    "verify:brand": "node scripts/verify-brand.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

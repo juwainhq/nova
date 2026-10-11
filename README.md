@@ -1,6 +1,10 @@
-# ARIA — Voice Intelligence
+# NOVA — Voice Intelligence
 
 A local, voice-first AI assistant with a calm warm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and speech output through the browser's built-in Web Speech API.
+
+> **Renamed from ARIA.** The assistant, package, and standalone download are now NOVA. Saved settings are picked up automatically — `readSetting` falls back to the older `aria.*` keys once, then writes the `nova.*` names from then on, so your voice, model, and endpoint choices survive the upgrade. The standalone file changed from `aria.html` to `nova.html`; an older copy keeps working, it just is not updated.
+>
+> The rename leaves the W3C `aria-*` accessibility attributes untouched — those are a web standard, not branding. `npm run verify:brand` asserts both sides of that distinction.
 
 ## Requirements
 
@@ -31,9 +35,9 @@ Both service endpoints have an optional override in the settings panel, so the a
 
 Ollama is the only service that needs configuring. Speech output is local, so there is nothing else to point anywhere.
 
-A trailing `/v1` is detected and not duplicated. The value is stored in local storage (`aria.ollama.url`), and saving a new endpoint re-runs the connection check.
+A trailing `/v1` is detected and not duplicated. The value is stored in local storage (`nova.ollama.url`), and saving a new endpoint re-runs the connection check.
 
-This is what makes the GitHub Pages build usable: static hosting has no Vite proxy, so the same-origin `/api/...` paths have nothing to answer them. Point ARIA at a backend the browser can reach instead — a tunnel or a hosted relay for the model server.
+This is what makes the GitHub Pages build usable: static hosting has no Vite proxy, so the same-origin `/api/...` paths have nothing to answer them. Point NOVA at a backend the browser can reach instead — a tunnel or a hosted relay for the model server.
 
 The backend must also permit this page's origin, because the browser calls it directly rather than through the proxy. For a local Ollama serving a hosted page, allow the Pages origin when starting it:
 
@@ -53,7 +57,7 @@ Press Space from the main view to toggle the microphone. Microphone access requi
 
 Replies are spoken with the browser's own Web Speech API. There is no API key, no account, and no network call: a local voice keeps working with the machine offline, which is why the whole speech path is a single `speechSynthesis.speak()` call with no fallback service behind it.
 
-Speech is fixed at the values ARIA is specified to use, in `src/speech.js`:
+Speech is fixed at the values NOVA is specified to use, in `src/speech.js`:
 
 | Parameter | Value | Effect |
 | --- | --- | --- |
@@ -61,21 +65,21 @@ Speech is fixed at the values ARIA is specified to use, in `src/speech.js`:
 | pitch | `0.9` | slightly lower — calmer, less cartoonish |
 | volume | `1.0` | full |
 
-**ARIA Voice** in the settings panel lists every voice `speechSynthesis.getVoices()` reports, English first, best first, then the rest by language. Each entry is labelled with its language and whether it works offline:
+**NOVA Voice** in the settings panel lists every voice `speechSynthesis.getVoices()` reports, English first, best first, then the rest by language. Each entry is labelled with its language and whether it works offline:
 
 ```
 Samantha (en-US) · offline
 Microsoft Aria Online (Natural) - English (United States) (en-US) · network
 ```
 
-Until you choose one, ARIA picks the most natural English voice the machine offers: neural and "Natural"/"Enhanced" names first, then well-regarded local voices, with a bonus for Apple's and Microsoft's better defaults and for Microsoft's voice actually named *Aria*. Offline voices are favoured when quality is otherwise equal.
+Until you choose one, NOVA picks the most natural English voice the machine offers: neural and "Natural"/"Enhanced" names first, then well-regarded local voices, with a bonus for Apple's and Microsoft's better defaults and for Microsoft's voice actually named *Aria* — a stock voice name that happens to match the app's former name, and unrelated to this rename. Offline voices are favoured when quality is otherwise equal.
 
 Two caveats worth knowing:
 
 - The most natural voices on a machine are often **cloud-backed** (Google's and Microsoft's "Online (Natural)" entries), so they stop working offline. The label says which is which; pick an `offline` voice if the machine is ever disconnected.
 - Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally, but the avatar's per-word pulse stays steady instead of reacting.
 
-`aria.tts.voice` in local storage holds your choice. If that voice is later uninstalled, the panel says so and falls back to the automatic pick rather than switching silently.
+`nova.tts.voice` in local storage holds your choice. If that voice is later uninstalled, the panel says so and falls back to the automatic pick rather than switching silently.
 
 ## Avatar states
 
@@ -123,17 +127,17 @@ After changing the app, run `npm run build:pages` to refresh the root `index.htm
 
 In development, `npm run dev` serves the hot-reloading source entry at `/` and `/index.html`, so the stale root Pages bundle is never served from the dev server. `index.dev.html` remains the direct source entry and the build input; the root `index.html` is only ever the published artifact.
 
-## Standalone single file (`aria.html`)
+## Standalone single file (`nova.html`)
 
-`aria.html` is one self-contained HTML file — CSS and JS inlined, no build step, no server, no `node_modules`. Open it from disk with `file://` and it runs. Settings expose it as **Download aria.html** so the hosted site can hand out a copy.
+`nova.html` is one self-contained HTML file — CSS and JS inlined, no build step, no server, no `node_modules`. Open it from disk with `file://` and it runs. Settings expose it as **Download nova.html** so the hosted site can hand out a copy.
 
 ```bash
-npm run build:standalone   # builds and verifies aria.html
+npm run build:standalone   # builds and verifies nova.html
 ```
 
 `build:pages` runs this automatically, so the published site always ships a current copy.
 
-The standalone build differs from the hosted page in two ways, both decided at build time by the `__ARIA_STANDALONE__` flag in `src/App.jsx`:
+The standalone build differs from the hosted page in two ways, both decided at build time by the `__NOVA_STANDALONE__` flag in `src/App.jsx`:
 
 - The Ollama endpoint defaults to `http://localhost:11434` instead of the same-origin proxy path, which cannot exist without a server.
 - The CORS helper prints `OLLAMA_ORIGINS=* ollama serve`, because a file has no stable origin to name.

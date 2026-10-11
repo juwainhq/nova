@@ -17,7 +17,7 @@ const apiProxy = {
 // hot-reloading source entry. Production builds are untouched.
 function serveDevEntryAtRoot() {
   return {
-    name: 'aria-serve-dev-entry-at-root',
+    name: 'nova-serve-dev-entry-at-root',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use((req, _res, next) => {
@@ -36,15 +36,15 @@ function serveDevEntryAtRoot() {
 // serve that one file from disk untouched. Dev only; production is unaffected.
 function serveStandaloneRaw() {
   return {
-    name: 'aria-serve-standalone-raw',
+    name: 'nova-serve-standalone-raw',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const [pathname] = (req.url || '').split('?');
-        if (pathname !== '/aria.html') return next();
+        if (pathname !== '/nova.html') return next();
         try {
           const { readFile } = await import('node:fs/promises');
-          const file = readFile('aria.html');
+          const file = readFile('nova.html');
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
           res.setHeader('Cache-Control', 'no-store');
           res.end(await file);

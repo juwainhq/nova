@@ -1,11 +1,12 @@
 // Voice output runs entirely on the browser's built-in Web Speech API: no API key,
 // no network, nothing to configure. This module holds the pure parts — choosing and
 // describing voices — so they can be exercised without a browser.
+import { APP_NAME } from './brand.js';
 
 // "Slightly slower, slightly lower": calm and even rather than the shrill default.
 export const TTS = { rate: 0.95, pitch: 0.9, volume: 1 };
 
-export const TTS_VOICE_KEY = 'aria.tts.voice';
+export const TTS_VOICE_KEY = 'nova.tts.voice';
 
 // Voices whose names mark them out as the good ones. Tiered so a neural voice
 // always outranks a merely pleasant-sounding older one.
@@ -15,12 +16,16 @@ const QUALITY_TIERS = [
   { pattern: /^google\b/i, score: 40 },
 ];
 
-// Pleasant local voices, by the names the major platforms use. "aria" is first
-// class on purpose: Microsoft ships a voice by that name, and it suits the
-// assistant better than any other default.
+// Well-regarded local voices, by the names the major platforms use. These are voice
+// names, not app names: "aria" is here because Microsoft ships a good voice called
+// that, and it earns its place on quality alone.
 const PREFERRED_NAMES = ['aria', 'samantha', 'ava', 'allison', 'serena', 'zoe', 'jenny', 'evan', 'nathan', 'karen', 'moira', 'tessa', 'daniel'];
+// A voice named after the assistant itself is the nicest outcome, so it leads.
 const ASSISTANT_NAME_BONUS = 30;
 const PREFERRED_NAME_BONUS = 16;
+
+// Derived from the brand so the preference follows a rename instead of going stale.
+const ASSISTANT_NAME = APP_NAME.toLowerCase();
 
 // A local voice keeps working with no connection; a network voice does not.
 const LOCAL_BONUS = 14;
@@ -64,7 +69,7 @@ export function scoreVoice(voice) {
     }
   }
 
-  if (name.includes('aria')) score += ASSISTANT_NAME_BONUS;
+  if (name.includes(ASSISTANT_NAME)) score += ASSISTANT_NAME_BONUS;
   else if (PREFERRED_NAMES.some((preferred) => name.includes(preferred))) score += PREFERRED_NAME_BONUS;
 
   score += englishRank(voice) * 4;

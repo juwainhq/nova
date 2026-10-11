@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
+import { APP_NAME } from './brand.js';
 import {
   TTS,
   TTS_VOICE_KEY,
@@ -17,7 +18,7 @@ const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
 // Replaced at build time by scripts/build-standalone.mjs. The standalone file is
 // opened from a file:// URL, where there is no origin server, so the Vite proxy
 // paths cannot resolve and the only sensible default is a direct local endpoint.
-const STANDALONE_BUILD = typeof __ARIA_STANDALONE__ !== 'undefined' && __ARIA_STANDALONE__ === true;
+const STANDALONE_BUILD = typeof __NOVA_STANDALONE__ !== 'undefined' && __NOVA_STANDALONE__ === true;
 
 function defaultOllamaUrl() {
   return STANDALONE_BUILD ? 'http://localhost:11434' : '';
@@ -30,9 +31,21 @@ function ollamaOriginsCommand() {
   return origin ? `OLLAMA_ORIGINS=${origin} ollama serve` : 'OLLAMA_ORIGINS=* ollama serve';
 }
 
+// Settings written before the rename live under the previous prefix. Fall back to
+// them so renaming the app never silently resets someone's configuration; the first
+// save writes the new key and the old one is then ignored.
+const STORAGE_PREFIX = 'nova.';
+const LEGACY_STORAGE_PREFIX = 'aria.';
+
 function readSetting(key, fallback = '') {
   try {
-    return window.localStorage.getItem(key) ?? fallback;
+    const stored = window.localStorage.getItem(key);
+    if (stored !== null) return stored;
+    if (key.startsWith(STORAGE_PREFIX)) {
+      const legacy = window.localStorage.getItem(`${LEGACY_STORAGE_PREFIX}${key.slice(STORAGE_PREFIX.length)}`);
+      if (legacy !== null) return legacy;
+    }
+    return fallback;
   } catch {
     return fallback;
   }
@@ -43,8 +56,8 @@ function trimTrailingSlashes(url) {
 }
 
 // The standalone single-file build, published beside index.html at the site root.
-const STANDALONE_PAGE = './aria.html';
-const STANDALONE_FILENAME = 'aria.html';
+const STANDALONE_PAGE = './nova.html';
+const STANDALONE_FILENAME = 'nova.html';
 
 // Same-origin Vite proxy path. It only resolves when the app is served by the local
 // Vite dev/preview server; static hosts (GitHub Pages) have no backend.
@@ -339,10 +352,10 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 
   return (
     <div className="settings-panel-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section ref={panelRef} id="aria-settings-panel" className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <section ref={panelRef} id="nova-settings-panel" className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header className="settings-panel-header">
           <div>
-            <p className="settings-eyebrow">ARIA / PREFERENCES</p>
+            <p className="settings-eyebrow">{APP_NAME} / PREFERENCES</p>
             <h2 id="settings-title">Settings</h2>
           </div>
           <button className="icon-button settings-close" type="button" aria-label="Close settings" onClick={onClose}>
@@ -403,9 +416,9 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             <div className="settings-divider" />
 
             <div className="settings-field">
-              <label className="field-label" htmlFor="aria-voice">ARIA Voice</label>
+              <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice</label>
               <select
-                id="aria-voice"
+                id="nova-voice"
                 className="settings-select"
                 value={selectedKey}
                 disabled={!voiceCount}
@@ -446,7 +459,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             <label className="settings-toggle-row" htmlFor="show-transcript">
               <span className="settings-toggle-copy">
                 <span className="config-title">Show last response</span>
-                <span className="config-detail">Display a transcript below ARIA</span>
+                <span className="config-detail">Display a transcript below {APP_NAME}</span>
               </span>
               <input
                 id="show-transcript"
@@ -519,10 +532,10 @@ function App() {
   const [connection, setConnection] = useState('checking');
   const [modelAvailable, setModelAvailable] = useState(null);
   const [settings, setSettings] = useState(() => ({
-    model: readSetting('aria.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
-    ollamaUrl: readSetting('aria.ollama.url', defaultOllamaUrl()),
+    model: readSetting('nova.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
+    ollamaUrl: readSetting('nova.ollama.url', defaultOllamaUrl()),
     voiceKey: readSetting(TTS_VOICE_KEY),
-    showTranscript: readSetting('aria.transcript.visible', 'false') === 'true',
+    showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lastResponse, setLastResponse] = useState('');
@@ -590,7 +603,7 @@ function App() {
     const messages = [
       {
         role: 'system',
-        content: "You are ARIA, a sharp and witty local AI assistant with a robotic personality. You run 100% locally on the user's machine. Keep responses under 3 sentences. Be helpful, slightly sarcastic, and efficient.",
+        content: `You are ${APP_NAME}, a warm and witty local AI assistant. You run 100% locally on the user's machine. Keep responses under 3 sentences. Be helpful, kind, and efficient.`,
       },
       ...conversation,
       { role: 'user', content: prompt },
@@ -786,10 +799,10 @@ function App() {
   }, [settingsOpen, stage]);
 
   const statusText = {
-    ready: 'READY',
-    listening: 'LISTENING',
-    thinking: 'THINKING',
-    speaking: 'SPEAKING',
+    ready: `${APP_NAME} READY`,
+    listening: `${APP_NAME} LISTENING`,
+    thinking: `${APP_NAME} THINKING`,
+    speaking: `${APP_NAME} SPEAKING`,
   }[stage];
 
   const saveSettings = (nextSettings) => {
@@ -800,10 +813,10 @@ function App() {
       showTranscript: Boolean(nextSettings.showTranscript),
     };
     try {
-      window.localStorage.setItem('aria.ollama.model', updatedSettings.model);
-      window.localStorage.setItem('aria.ollama.url', updatedSettings.ollamaUrl);
+      window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
+      window.localStorage.setItem('nova.ollama.url', updatedSettings.ollamaUrl);
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
-      window.localStorage.setItem('aria.transcript.visible', String(updatedSettings.showTranscript));
+      window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
       notify('Settings could not be saved in this browser.');
       return;
@@ -824,14 +837,14 @@ function App() {
   return (
     <div className={`app-shell stage-${stage}`}>
       <header className="topbar">
-        <div className="brand-name">ARIA</div>
-        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="aria-settings-panel" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}>
+        <div className="brand-name">{APP_NAME}</div>
+        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}>
           <SettingsIcon />
         </button>
       </header>
 
       <main className="main-stage">
-        <section className="assistant-stage" aria-label="ARIA voice assistant">
+        <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
           <div
             ref={avatarContainerRef}
             className={`avatar-container ${stage === 'listening' ? 'is-listening' : ''} ${stage === 'speaking' ? 'is-speaking' : ''} ${stage === 'thinking' ? 'is-thinking' : ''} ${mood === 'happy' && connection !== 'offline' ? 'is-happy' : ''} ${connection === 'offline' ? 'is-offline' : ''}`}
@@ -845,7 +858,7 @@ function App() {
           </div>
           {connection === 'offline' && (
             <div className="avatar-offline-display" role="status" aria-live="polite">
-              <span>ARIA OFFLINE —</span>
+              <span>{APP_NAME} OFFLINE —</span>
               <span>{(settings.ollamaUrl || '').trim() ? 'Check your Ollama endpoint' : 'Start Ollama to connect'}</span>
             </div>
           )}

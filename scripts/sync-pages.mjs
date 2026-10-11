@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 const root = process.cwd();
 const builtAssets = resolve(root, 'dist/assets');
 const publishedAssets = resolve(root, 'assets');
-const standalone = resolve(root, 'aria.html');
+const standalone = resolve(root, 'nova.html');
 
 await rm(publishedAssets, { recursive: true, force: true });
 await mkdir(publishedAssets, { recursive: true });
@@ -16,7 +16,7 @@ await copyFile(resolve(root, 'dist/index.html'), resolve(root, 'index.html'));
 try {
   await access(standalone);
 } catch {
-  throw new Error('aria.html is missing — run `npm run build:standalone` before syncing the Pages bundle.');
+  throw new Error('nova.html is missing — run `npm run build:standalone` before syncing the Pages bundle.');
 }
 
-console.log('Synced the GitHub Pages bundle to the repository root (index.html, assets/, aria.html).');
+console.log('Synced the GitHub Pages bundle to the repository root (index.html, assets/, nova.html).');

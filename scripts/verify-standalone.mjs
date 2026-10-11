@@ -1,11 +1,11 @@
-// Verify `aria.html` really is a single self-contained file that works from file://.
+// Verify `nova.html` really is a single self-contained file that works from file://.
 // Runs as part of `npm run build:standalone`, and standalone via `node scripts/verify-standalone.mjs`.
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { runInNewContext } from 'node:vm';
+import { Script, runInNewContext } from 'node:vm';
 
 const root = process.cwd();
-const FILE = resolve(root, 'aria.html');
+const FILE = resolve(root, 'nova.html');
 
 const problems = [];
 const checks = [];
@@ -50,7 +50,7 @@ check('guards inline script against early termination', !/<\/script>/i.test(scri
 
 // The build-time flag must be substituted and folded, so the file defaults to
 // calling Ollama directly rather than a proxy path that cannot exist on file://.
-check('substitutes the build-time flag', !html.includes('__ARIA_STANDALONE__'));
+check('substitutes the build-time flag', !html.includes('__NOVA_STANDALONE__'));
 
 // Ollama is the only remaining service; speech output is the browser's own, so it
 // needs no endpoint at all.
@@ -84,7 +84,22 @@ if (!guarded.length || !flag) {
 // Speech is entirely local now, so nothing in the file may reach a speech service.
 check('needs no speech API key', !/xi-api-key|elevenlabs/i.test(html));
 check('speaks through the Web Speech API', /speechSynthesis/.test(html));
-check('offers the ARIA Voice selector', /ARIA Voice/.test(html));
+
+// The UI builds names from the brand constant, so the app name appears in the bundle
+// as its own string rather than glued into every label. The rendered wording is
+// asserted in verify-speech.mjs, which mounts the real panel.
+check('shell is titled NOVA', /<title>NOVA\b/.test(html));
+check('bundle carries the brand name', /"NOVA"/.test(html));
+check('voice selector is bound to nova-voice', /nova-voice/.test(html));
+
+// Guards the `</script>` escaping: a mangled inline script would otherwise still
+// satisfy every structural check above.
+try {
+  new Script(scriptMatch[1]);
+  check('inline script is valid JavaScript', true);
+} catch (error) {
+  check('inline script is valid JavaScript', false, error.message);
+}
 
 const failed = problems.length;
 for (const { label, ok, detail } of checks) {

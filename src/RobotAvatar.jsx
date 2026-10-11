@@ -1,4 +1,6 @@
-// ARIA's avatar. Purely presentational: every expression is driven by state classes
+import { APP_NAME } from './brand.js';
+
+// NOVA's avatar. Purely presentational: every expression is driven by state classes
 // on `.avatar-container` from index.css, so all motion lives in one place.
 //
 // There is deliberately no mouth. Expression comes from the eyes and the body only,
@@ -33,7 +35,7 @@ function Eye({ side, cx, sparkX, crescent }) {
 
 function RobotAvatar() {
   return (
-    <svg className="robot-avatar" viewBox="0 0 280 280" fill="none" role="img" aria-label="ARIA, a softly glowing orb with expressive eyes">
+    <svg className="robot-avatar" viewBox="0 0 280 280" fill="none" role="img" aria-label={`${APP_NAME}, a softly glowing orb with expressive eyes`}>
       <defs>
         <radialGradient id="orbSurface" cx="0" cy="0" r="1" gradientTransform="matrix(145 164 -153 135 93 76)" gradientUnits="userSpaceOnUse">
           <stop stopColor="#FFFDF9" />

@@ -1,6 +1,6 @@
 // Verify the Web Speech voice plumbing: the same voice must be chosen for the same
 // machine, users must be able to override it, and the speaking parameters must be the
-// values ARIA is specified to use.
+// values NOVA is specified to use.
 //
 //   node scripts/verify-speech.mjs
 import { build } from 'esbuild';
@@ -30,7 +30,7 @@ const bundle = await build({
   logLevel: 'warning',
 });
 
-const directory = await mkdtemp(join(tmpdir(), 'aria-speech-'));
+const directory = await mkdtemp(join(tmpdir(), 'nova-speech-'));
 const probe = join(directory, 'speech.mjs');
 let speech;
 try {
@@ -58,6 +58,7 @@ const MACHINE = [
   voice('Google US English', 'en-US', { localService: false }),
   voice('Google UK English Female', 'en-GB', { localService: false }),
   voice('Microsoft Aria Online (Natural) - English (United States)', 'en-US', { localService: false }),
+  voice('Microsoft NOVA Online (Natural) - English (United States)', 'en-US', { localService: false }),
   voice('Microsoft Guy Online (Natural) - English (United States)', 'en-US', { localService: false }),
   voice('Samantha', 'en-US'),
   voice('Alex', 'en-US'),
@@ -68,12 +69,14 @@ const MACHINE = [
 
 const best = defaultVoice(MACHINE);
 check('picks a natural English voice', /natural/i.test(best.name) && /^en/i.test(best.lang), best.name);
-check('picks the ARIA-named voice when present', /aria/i.test(best.name), best.name);
+check('picks the voice named after the app', /nova/i.test(best.name), best.name);
+check('prefers it over an equally natural rival', /nova/i.test(best.name) && /aria/i.test(MACHINE.find(
+  (entry) => /^Microsoft Aria Online/.test(entry.name)).name), best.name);
 check('never picks a non-English voice', /^en/i.test(defaultVoice(MACHINE).lang), defaultVoice(MACHINE).lang);
 
-// A natural voice still wins over a merely pleasant one.
-const noAria = MACHINE.filter((entry) => !/aria/i.test(entry.name));
-check('still prefers natural without an ARIA voice', /natural/i.test(defaultVoice(noAria).name), defaultVoice(noAria).name);
+// Without a voice matching the app name, plain quality still decides.
+const noNova = MACHINE.filter((entry) => !/nova/i.test(entry.name));
+check('still prefers natural without a NOVA voice', /natural/i.test(defaultVoice(noNova).name), defaultVoice(noNova).name);
 
 // With no neural voices at all, the well-regarded local ones should surface.
 const LOCAL_ONLY = [
@@ -99,7 +102,7 @@ check('handles a voice with no name', Boolean(defaultVoice([{ lang: 'en-US', voi
 
 // ------------------------------------------------------------------ ordering
 const { english, others } = groupVoices(MACHINE);
-check('groups English separately', english.length === 8 && others.length === 3, `${english.length}/${others.length}`);
+check('groups English separately', english.length === 9 && others.length === 3, `${english.length}/${others.length}`);
 check('every English voice is in the English group', english.every((entry) => /^en/i.test(entry.lang)));
 check('no English voice leaks into the other group', !others.some((entry) => /^en/i.test(entry.lang)));
 check('English group is best first', scoreVoice(english[0]) >= scoreVoice(english[1]));
@@ -134,12 +137,17 @@ check('app has no ElevenLabs code', !/elevenlabs/i.test(app));
 check('app has no API key handling', !/xi-api-key|apiKey/.test(app));
 check('dev proxy no longer forwards ElevenLabs', !/elevenlabs/i.test(viteConfig));
 check('app speaks through the Web Speech API', /speechSynthesis\.speak/.test(app));
+check('app takes its name from the brand module', /import \{ APP_NAME \} from '\.\/brand\.js'/.test(app));
+check('system prompt carries the brand name', /You are \$\{APP_NAME\}/.test(app));
+check('system prompt asks for a warm personality', /warm and witty/.test(app));
+check('status messages carry the brand name', /ready: `\$\{APP_NAME\} READY`/.test(app));
+check('settings written under the old name are adopted', /LEGACY_STORAGE_PREFIX/.test(app));;
 check('app sends the specified parameters', /utterance\.rate = TTS\.rate/.test(app)
   && /utterance\.pitch = TTS\.pitch/.test(app)
   && /utterance\.volume = TTS\.volume/.test(app));
 check('voice list comes from getVoices', /getVoices/.test(await readFile(resolve(root, 'src/speech.js'), 'utf8')));
 check('listens for late voice loading', /voiceschanged/.test(app));
-check('the selector is labelled ARIA Voice', />ARIA Voice</.test(app));
+check('the selector label is derived from the brand', /\{\s*APP_NAME\s*\}\s*Voice/.test(app));
 
 // Regression: the voice list arrives after first render and does not change
 // `settings`, so a memoized askAria would otherwise call a speaker that never saw it
@@ -172,11 +180,11 @@ async function renderPanel(voices, savedKey) {
     platform: 'node',
     format: 'cjs',
     jsx: 'automatic',
-    define: { __ARIA_STANDALONE__: 'false' },
+    define: { __NOVA_STANDALONE__: 'false' },
     logLevel: 'warning',
   });
 
-  const dir = await mkdtemp(join(tmpdir(), 'aria-panel-'));
+  const dir = await mkdtemp(join(tmpdir(), 'nova-panel-'));
   const file = join(dir, 'panel.cjs');
   try {
     await writeFile(file, result.outputFiles[0].text, 'utf8');
@@ -191,8 +199,8 @@ const panel = await renderPanel(MACHINE, '');
 const options = [...panel.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)]
   .map((match) => ({ value: match[1], label: match[2] }));
 
-check('panel renders the ARIA Voice selector', /<label[^>]*for="aria-voice"[^>]*>ARIA Voice<\/label>|>ARIA Voice</.test(panel));
-check('panel renders a select bound to aria-voice', /<select[^>]*id="aria-voice"/.test(panel));
+check('panel renders the NOVA Voice selector', /<label[^>]*for="nova-voice"[^>]*>NOVA Voice<\/label>|>NOVA Voice</.test(panel));
+check('panel renders a select bound to nova-voice', /<select[^>]*id="nova-voice"/.test(panel));
 check('selector lists every voice', options.length === MACHINE.length, `${options.length} of ${MACHINE.length}`);
 check('selector groups English and other languages', /<optgroup label="English">/.test(panel) && /<optgroup label="Other languages">/.test(panel));
 check('English voices appear before other languages', panel.indexOf('<optgroup label="English">') < panel.indexOf('<optgroup label="Other languages">'));
@@ -201,8 +209,7 @@ check('labels mark which voices work offline', options.some((option) => option.l
 const bestKey = voiceKey(best);
 const selectedOption = options.find((option) => option.value === bestKey);
 check('the natural voice is offered as an option', Boolean(selectedOption), bestKey);
-check('the natural voice is pre-selected', new RegExp(`<option value="${bestKey}"[^>]*selected`).test(panel)
-  || /selected[^>]*value="[^"]*aria/i.test(panel) || panel.includes(`value="${bestKey}" selected`),
+check('the app-named voice is pre-selected', panel.includes(`value="${bestKey}" selected`),
   `pre-selected: ${bestKey}`);
 check('panel states the speaking parameters', panel.includes(`rate ${TTS.rate}`) && panel.includes(`pitch ${TTS.pitch}`) && panel.includes(`volume ${TTS.volume}`));
 
@@ -217,7 +224,7 @@ check('a missing saved voice is reported', /no longer installed/i.test(missingPa
 
 // An empty list must degrade gracefully rather than render a broken control.
 const emptyPanel = await renderPanel([], '');
-check('panel survives an empty voice list', /<select[^>]*id="aria-voice"/.test(emptyPanel) && /No voices available/.test(emptyPanel));
+check('panel survives an empty voice list', /<select[^>]*id="nova-voice"/.test(emptyPanel) && /No voices available/.test(emptyPanel));
 
 const failed = problems.length;
 for (const { label, ok, detail } of checks) {
