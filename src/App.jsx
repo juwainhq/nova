@@ -29,6 +29,10 @@ import {
   voiceKey,
   voiceOptionLabel,
 } from './speech.js';
+import {
+  DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
+  createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
+} from './kokoro.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
 
@@ -259,7 +263,9 @@ function hasOllamaModel(models, model) {
 // voice selector it produces.
 export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef,
   memories = [], memoryError = '', onDeleteMemory = () => {}, onClearMemory = () => false,
-  onTestVoice = null, onStopVoiceTest = null, voiceTestPlaying = false, voiceTestDisabled = true, speechAvailable = false }) {
+  onTestVoice = null, onStopVoiceTest = null, voiceTestPlaying = false, voiceTestDisabled = true, speechAvailable = false,
+  kokoroStatus = { state: 'failed', progress: null } }) {
+  const kokoroActive = kokoroStatus.state !== 'failed';
   const [draft, setDraft] = useState(settings);
   const [testStatus, setTestStatus] = useState('idle');
   const [testMessage, setTestMessage] = useState('');
@@ -443,53 +449,75 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             <div className="settings-divider" />
 
             <div className="settings-field">
-              <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice</label>
+              <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice (Kokoro AI)</label>
               <select
                 id="nova-voice"
-                className="settings-select"
-                value={selectedKey}
-                disabled={!voiceCount}
+                className="settings-select kokoro-voice-select"
+                value={kokoroVoice(draft.kokoroVoice).id}
+                disabled={!kokoroActive}
                 onChange={(event) => {
                   onStopVoiceTest?.();
-                  setDraft((current) => ({ ...current, voiceKey: event.target.value }));
+                  setDraft((current) => ({ ...current, kokoroVoice: event.target.value }));
                 }}
               >
-                <option value="">{voiceCount ? `Automatic — ${autoVoice?.name || 'browser default'}`
-                  : speechAvailable ? "Voices are still loading — browser default" : "No voices here yet"}</option>
-                {naturalVoices.length > 0 && (
-                  <optgroup label="Natural / Online">
-                    {naturalVoices.map((voice) => (
-                      <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
-                    ))}
-                  </optgroup>
-                )}
-                {basicVoices.length > 0 && (
-                  <optgroup label="Basic system voices">
-                    {basicVoices.map((voice) => (
-                      <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
-                    ))}
-                  </optgroup>
-                )}
+                {KOKORO_VOICES.map((voice) => <option key={voice.id} value={voice.id}>{kokoroVoiceLabel(voice)}</option>)}
               </select>
-              <p className="field-hint" aria-live="polite">
-                {voiceCount
-                  ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Natural / Online voices are at the top; “network” voices need a connection.`
-                  : speechAvailable ? "Your voices are still loading. We can use the browser default for now."
-                    : "I can’t find a voice to use in this browser."}
+              <p className={`field-hint kokoro-status ${kokoroActive ? '' : 'field-hint-error'}`}>
+                {kokoroStatus.state === 'ready'
+                  ? "Kokoro is ready. I make speech right here in your browser, so your replies aren’t sent to a speech service."
+                  : kokoroStatus.state === 'loading'
+                    ? `Loading the Kokoro voice model${kokoroStatus.progress == null ? '' : ` (${kokoroStatus.progress}%)`}. The first load downloads about 115 MB; after that your browser usually keeps a copy.`
+                    : "I couldn’t load Kokoro here, so I’m using your browser’s voice instead."}
               </p>
-              <p className={`field-hint ${savedVoiceMissing ? 'field-hint-error' : ''}`}>
-                {savedVoiceMissing && selectedVoice
-                  ? `I can’t find your saved voice here, so I’m using ${describeVoice(selectedVoice)} for now.`
-                  : selectedVoice
-                    ? `Your voice: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
-                    : `Browser default · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
-              </p>
+              {!kokoroActive && <>
+                <label className="field-label" htmlFor="nova-browser-voice">Browser voice (fallback)</label>
+                <select
+                  id="nova-browser-voice"
+                  className="settings-select browser-voice-select"
+                  value={selectedKey}
+                  disabled={!voiceCount}
+                  onChange={(event) => {
+                    onStopVoiceTest?.();
+                    setDraft((current) => ({ ...current, voiceKey: event.target.value }));
+                  }}
+                >
+                  <option value="">{voiceCount ? `Automatic — ${autoVoice?.name || 'browser default'}`
+                    : speechAvailable ? "Voices are still loading — browser default" : "No voices here yet"}</option>
+                  {naturalVoices.length > 0 && (
+                    <optgroup label="Natural / Online">
+                      {naturalVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {basicVoices.length > 0 && (
+                    <optgroup label="Basic system voices">
+                      {basicVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <p className="field-hint" aria-live="polite">
+                  {voiceCount
+                    ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Natural / Online voices are at the top; “network” voices need a connection.`
+                    : speechAvailable ? "Your voices are still loading. We can use the browser default for now."
+                      : "I can’t find a voice to use in this browser."}
+                </p>
+                <p className={`field-hint ${savedVoiceMissing ? 'field-hint-error' : ''}`}>
+                  {savedVoiceMissing && selectedVoice
+                    ? `I can’t find your saved voice here, so I’m using ${describeVoice(selectedVoice)} for now.`
+                    : selectedVoice
+                      ? `Your voice: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
+                      : `Browser default · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
+                </p>
+              </>}
               <div className="voice-preview">
-                <button className="test-ollama-button test-voice-button" type="button" disabled={voiceTestDisabled || voiceTestPlaying} onClick={() => onTestVoice?.(draft.voiceKey)}>Test Voice</button>
+                <button className="test-ollama-button test-voice-button" type="button" disabled={voiceTestDisabled || voiceTestPlaying} onClick={() => onTestVoice?.(draft.voiceKey, kokoroVoice(draft.kokoroVoice).id)}>Test Voice</button>
                 {voiceTestPlaying && <button className="text-button voice-test-stop" type="button" onClick={onStopVoiceTest}>Stop test</button>}
               </div>
               <p className="field-hint">
-                {!speechAvailable ? "I can’t speak aloud in this browser. You can try Chrome or Edge instead."
+                {!kokoroActive && !speechAvailable ? "I can’t speak aloud in this browser. You can try Chrome or Edge instead."
                   : voiceTestDisabled && !voiceTestPlaying ? "Let me finish this reply, then we can try a voice."
                   : `Preview: “${TTS_TEST_TEXT}”`}
               </p>
@@ -613,6 +641,7 @@ function App() {
     model: readSetting('nova.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
     ollamaUrl: readSetting('nova.ollama.url', defaultOllamaUrl()),
     voiceKey: readSetting(TTS_VOICE_KEY),
+    kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -635,16 +664,31 @@ function App() {
   const voiceTestRef = useRef(false);
   const speechAvailable = typeof window !== 'undefined' && typeof window.speechSynthesis?.speak === 'function'
     && typeof SpeechSynthesisUtterance === 'function';
+  // Kokoro needs a module worker (inference) and Web Audio (playback); otherwise
+  // the Web Speech fallback is used from the start.
+  const [kokoroStatus, setKokoroStatus] = useState(() => ({
+    state: typeof window !== 'undefined' && typeof window.Worker === 'function' && typeof window.Blob === 'function'
+      && typeof window.URL?.createObjectURL === 'function' && (window.AudioContext || window.webkitAudioContext) ? 'loading' : 'failed',
+    progress: null,
+  }));
+  const kokoroActive = kokoroStatus.state !== 'failed';
+  const kokoroRef = useRef(null);
+  const kokoroAudioRef = useRef(null);
   const preferredVoice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
-  const activeVoiceName = speechVoiceName || (speechAvailable
-    ? (preferredVoice ? preferredVoice.name || 'Unnamed voice' : 'Browser default')
-    : "Voice isn’t available here");
+  const kokoroVoiceName = `${kokoroVoice(settings.kokoroVoice).name} · Kokoro AI`;
+  // No live percentage here: the label is announced, and progress lives in Settings.
+  const activeVoiceName = speechVoiceName || (kokoroActive
+    ? `${kokoroVoiceName}${kokoroStatus.state === 'loading' ? ' · loading' : ''}`
+    : speechAvailable
+      ? (preferredVoice ? preferredVoice.name || 'Unnamed voice' : 'Browser default')
+      : "Voice isn’t available here");
   const moodTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const settingsTriggerRef = useRef(null);
   const voiceListenerRef = useRef(null);
   const wakeChimeRef = useRef(null);
   const speechFinishRef = useRef(null);
+  const speakBrowserRef = useRef(null);
   // Chrome can garbage-collect a queued utterance and silently drop its events.
   const utteranceRef = useRef(null);
   const requestControllerRef = useRef(null);
@@ -912,7 +956,7 @@ function App() {
 
   // Resolve only when speech ends, not when it is queued. Otherwise standby
   // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
-  const speakAnswer = useCallback((text, selectedVoiceKey = settings.voiceKey, preview = false) => {
+  const speakBrowser = useCallback((text, selectedVoiceKey, preview) => {
     if (typeof window.speechSynthesis?.speak !== 'function' || typeof SpeechSynthesisUtterance !== 'function') {
       setStage('ready');
       notify("I can’t speak aloud in this browser. Turn on Show last response in Settings to read my replies, or try Chrome or Edge.");
@@ -1012,17 +1056,96 @@ function App() {
         notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
       }
     });
-  }, [notify, settings, voices]);
+  }, [notify, voices]);
+
+  // One reply through Kokoro: generation shows as "thinking"; "speaking" starts
+  // with real audio. The eye pulse follows the audio's loudness on the AudioContext
+  // clock and clears the moment playback ends or is canceled.
+  const speakKokoro = useCallback((text, engine, audio, kokoroVoiceId, selectedVoiceKey, preview) => {
+    voiceListenerRef.current?.setMode(null);
+    speechFinishRef.current?.(false);
+    window.speechSynthesis?.cancel();
+    return new Promise((resolve) => {
+      const voice = kokoroVoice(kokoroVoiceId);
+      const avatarElement = avatarContainerRef.current;
+      let finished = false;
+      let session = null;
+      const release = () => {
+        avatarElement?.classList.remove('speech-boundary-active');
+        avatarElement?.style.removeProperty('--audio-pulse');
+        if (speechFinishRef.current === finishSpeech) {
+          speechFinishRef.current = null;
+          voiceTestRef.current = false;
+          setVoiceTestPlaying(false);
+          setSpeechVoiceName('');
+        }
+      };
+      const finishSpeech = (resume = true, completed = false) => {
+        if (finished) return;
+        finished = true;
+        session?.stop();
+        release();
+        if (resume) setStage('ready');
+        resolve(completed);
+      };
+      speechFinishRef.current = finishSpeech;
+      setSpeechVoiceName(`${voice.name} · Kokoro AI`);
+      voiceTestRef.current = preview;
+      setVoiceTestPlaying(preview);
+      setStage('thinking');
+      session = speakWithKokoro({
+        engine, getContext: audio.get, text, voice: voice.id, timers: window,
+        onWaiting: () => notify("My Kokoro voice is still loading. I’ll speak as soon as it’s ready."),
+        onBlocked: () => notify("Tap anywhere or press a key so I can talk out loud."),
+        onStart: () => { if (!finished) setStage('speaking'); },
+        onPulse: (level) => {
+          if (finished || !avatarElement) return;
+          if (level === null) {
+            avatarElement.classList.remove('speech-boundary-active');
+            avatarElement.style.removeProperty('--audio-pulse');
+          } else {
+            avatarElement.classList.add('speech-boundary-active');
+            avatarElement.style.setProperty('--audio-pulse', level.toFixed(3));
+          }
+        },
+      });
+      session.done.then((result) => {
+        if (finished) return;
+        if (result.status === 'failed') {
+          // Hand the unplayed text to the Web Speech fallback, so nothing is lost.
+          finished = true;
+          release();
+          if (result.reason !== 'load') notify("My Kokoro voice hit a snag, so I’ll use the browser voice for the rest of this reply.");
+          speakBrowserRef.current(result.remaining, selectedVoiceKey, preview).then(resolve);
+          return;
+        }
+        if (result.status === 'blocked') notify("I couldn’t play audio without a tap first. Turn on Show last response in Settings to read my replies.");
+        // Blocked audio still gets the visual reply, like a silent browser.
+        finishSpeech(true, result.status !== 'stopped');
+      });
+    });
+  }, [notify]);
+
+  speakBrowserRef.current = speakBrowser;
+
+  // Kokoro is the voice; Web Speech is used only when Kokoro couldn't load (or,
+  // for the rest of one reply, when Kokoro fails mid-reply).
+  const speakAnswer = useCallback((text, selectedVoiceKey = settings.voiceKey, preview = false, kokoroVoiceId = settings.kokoroVoice) => {
+    const engine = kokoroRef.current;
+    const audio = kokoroAudioRef.current;
+    if (engine && audio && engine.state !== 'failed') return speakKokoro(text, engine, audio, kokoroVoiceId, selectedVoiceKey, preview);
+    return speakBrowser(text, selectedVoiceKey, preview);
+  }, [settings, speakKokoro, speakBrowser]);
 
   // Both refs are refreshed on every render, so callbacks that outlive a render still
   // reach the current speaker and the current request handler.
   speakRef.current = speakAnswer;
 
-  const testVoice = useCallback((key) => {
+  const testVoice = useCallback((key, kokoroVoiceId) => {
     if (!settingsOpen || stage === 'thinking' || stage === 'speaking' || requestControllerRef.current || speechFinishRef.current) return;
     window.clearTimeout(moodTimerRef.current);
     setMood('idle');
-    void speakRef.current?.(TTS_TEST_TEXT, key, true)?.catch(() => {
+    void speakRef.current?.(TTS_TEST_TEXT, key, true, kokoroVoiceId)?.catch(() => {
       stopVoiceTest();
       setStage('ready');
       notify("I couldn’t start that voice preview. Try another voice in Settings.");
@@ -1033,6 +1156,34 @@ function App() {
   promptRef.current = (text) => {
     askAria(text).then(() => {});
   };
+
+  // Start loading Kokoro on app load. A failed load (blocked CDN, no WebAssembly,
+  // download stall, worker crash) switches every reply to the Web Speech fallback.
+  useEffect(() => {
+    if (kokoroStatus.state === 'failed') return undefined;
+    const audio = createKokoroAudio(window.AudioContext || window.webkitAudioContext);
+    const engine = createKokoroEngine({
+      createWorker: () => browserKokoroWorker(window),
+      timers: window,
+      onStatus: (status) => {
+        setKokoroStatus(status);
+        if (status.state === 'failed') notify("I couldn’t load my Kokoro voice, so I’ll use your browser’s voice for now.");
+      },
+    });
+    kokoroAudioRef.current = audio;
+    kokoroRef.current = engine;
+    const unlock = () => { if (engine.state !== 'failed') audio.unlock(); };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      speechFinishRef.current?.(false);
+      engine.dispose();
+      audio.dispose();
+      kokoroRef.current = kokoroAudioRef.current = null;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- load once per mount
 
   useEffect(() => {
     const chime = createWakeChime(window.AudioContext || window.webkitAudioContext);
@@ -1159,12 +1310,14 @@ function App() {
       model: nextSettings.model.trim() || OLLAMA_MODEL,
       ollamaUrl: trimTrailingSlashes(nextSettings.ollamaUrl || ''),
       voiceKey: (nextSettings.voiceKey || '').trim(),
+      kokoroVoice: kokoroVoice(nextSettings.kokoroVoice).id,
       showTranscript: Boolean(nextSettings.showTranscript),
     };
     try {
       window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
       window.localStorage.setItem('nova.ollama.url', updatedSettings.ollamaUrl);
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
+      window.localStorage.setItem(KOKORO_VOICE_KEY, updatedSettings.kokoroVoice);
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
@@ -1261,7 +1414,8 @@ function App() {
           voices={voices}
           speechAvailable={speechAvailable}
           voiceTestPlaying={voiceTestPlaying}
-          voiceTestDisabled={!speechAvailable || stage === 'thinking' || stage === 'speaking'}
+          voiceTestDisabled={!(kokoroActive || speechAvailable) || stage === 'thinking' || stage === 'speaking'}
+          kokoroStatus={kokoroStatus}
           onTestVoice={testVoice}
           onStopVoiceTest={stopVoiceTest}
           memories={memoryState.facts}

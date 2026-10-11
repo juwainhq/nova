@@ -103,6 +103,8 @@ check('does not ship obsolete personality or robotic status copy', !/warm and wi
 check('ships response link cards with safe new-tab navigation', script.includes('rich-link-card') && script.includes('noopener noreferrer') && script.includes('_blank'));
 check('ships Google Images searches with a local placeholder and View Images action', script.includes('https://www.google.com/search')
   && script.includes('rich-image-placeholder') && script.includes('View Images'));
+check('loads Kokoro TTS at runtime from the pinned CDN browser build, not inlined', /kokoro-js@\$\{\w+\}\/dist\/kokoro\.web\.js/.test(script)
+  && /=\s*"1\.2\.1"/.test(script) && script.includes('import(data.url)') && !script.includes('KokoroTTS.prototype') && script.includes('Kokoro AI'));
 check('ships numbered/bulleted response item cards', script.includes('rich-items') && script.includes('rich-item-card'));
 check('keeps rich content in its own sliding/fading row, not an avatar overlay', styleMatch[1].includes('.app-shell.has-rich-content')
   && styleMatch[1].includes('minmax(min-content,1fr)') && styleMatch[1].includes('rich-panel-in') && styleMatch[1].includes('rich-panel-out'));

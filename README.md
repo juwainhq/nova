@@ -1,6 +1,6 @@
 # NOVA — Voice Intelligence
 
-A warm, voice-first personal assistant with a calm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and speech output through the browser's built-in Web Speech API.
+A warm, voice-first personal assistant with a calm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and natural neural speech from [Kokoro TTS](https://www.npmjs.com/package/kokoro-js) running in the browser, with the Web Speech API as a fallback.
 
 > **Renamed from ARIA.** The assistant, package, and standalone download are now NOVA. Saved settings are picked up automatically — `readSetting` falls back to the older `aria.*` keys once, then writes the `nova.*` names from then on, so your voice, model, and endpoint choices survive the upgrade. The standalone file changed from `aria.html` to `nova.html`; an older copy keeps working, it just is not updated.
 >
@@ -10,7 +10,8 @@ A warm, voice-first personal assistant with a calm near-black interface, a softl
 
 - Node.js 18+
 - [Ollama](https://ollama.com/) running on the same machine as the Vite dev server
-- A supported browser with the Web Speech API (Chrome or Edge recommended)
+- A supported browser with the Web Speech API for recognition (Chrome or Edge recommended)
+- For the Kokoro voice: module Web Workers, WebAssembly and Web Audio (current Chrome, Edge, Firefox or Safari), plus network access to `cdn.jsdelivr.net` and `huggingface.co` for the first load
 
 ## Run locally
 
@@ -113,9 +114,55 @@ The base prompt guides the model; it cannot guarantee that every model follows t
 
 ## Voice output
 
-Replies are spoken with the browser's own Web Speech API. There is no API key, account, or separate speech backend: a local voice keeps working with the machine offline, while a voice marked `network` depends on the browser's speech service. The speech path uses `speechSynthesis.speak()` with no fallback service behind it.
+NOVA speaks with **Kokoro TTS** (`kokoro-js`, the 82M-parameter Kokoro model), generated in the browser and played through the Web Audio API. There is no API key or speech server. Reply text never leaves your device for speech.
 
-Speech is fixed at the values NOVA is specified to use, in `src/speech.js`:
+| Setting | Value |
+| --- | --- |
+| Library | `https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js` (loaded at runtime) |
+| Model | `onnx-community/Kokoro-82M-v1.0-ONNX`, `dtype: "q8"`, `device: "wasm"` |
+| Default voice | `af_bella` |
+| Saved choice | `localStorage["nova.kokoro.voice"]` |
+
+**Why `kokoro.web.js`, not `kokoro.min.js`:** the package has no `kokoro.min.js`. jsDelivr would generate one from `dist/kokoro.js`, which imports bare Node packages (`@huggingface/transformers`, `phonemizer`, `fs/promises`) that a browser cannot resolve. `kokoro.web.js` is the package's self-contained browser build and jsDelivr's default file. The version is pinned rather than `@latest`, so a new release can't silently break NOVA. To upgrade, change `KOKORO_VERSION` in `src/kokoro.js`.
+
+**Loading.** Kokoro starts loading as soon as the app opens, inside a module **Web Worker**, so inference never blocks recognition, timers, or the avatar. The first load downloads about 115 MB: about 2 MB for the library, 22 MB for the ONNX Runtime WebAssembly from jsDelivr, and roughly 90 MB for the quantized model from Hugging Face. Each voice adds a small style file on first use. After that, the browser usually serves them from its cache. While loading, the label below the avatar reads **Bella · Kokoro AI · loading**, and Settings shows the download percentage. A reply that arrives mid-load says so and waits for Kokoro instead of switching voices.
+
+**Speaking a reply.**
+
+1. The reply is split at sentence boundaries into chunks of up to 240 characters. The first chunk is kept to about 140 characters so speech starts sooner. Kokoro truncates long input, so this keeps every word of longer, detailed replies.
+2. The worker generates chunks in order on one model session. Each chunk is scheduled back-to-back on the AudioContext clock while the next one generates.
+3. NOVA shows **“Let me think...”** while the first chunk generates, and switches to **“Talking with you.”** when real audio is scheduled.
+4. The reply ends when the last audio buffer actually finishes. Then rich cards appear and wake-word standby resumes.
+
+Kokoro uses its natural speed (`1`). The Web Speech rate/pitch values below apply only to the fallback.
+
+**Avatar sync.** Each audio chunk's loudness is measured in 50ms frames. While audio plays, NOVA reads `AudioContext.currentTime` every 50ms and sets the existing `--audio-pulse` variable from the frame actually playing. The eyes brighten on speech and stay dark in pauses, and the pulse is removed the moment playback ends or is canceled. The avatar CSS and geometry are unchanged.
+
+**Settings.** **NOVA Voice (Kokoro AI)** offers:
+
+| Voice | Description |
+| --- | --- |
+| `af_bella` | Warm American Female (default) |
+| `af_sarah` | Bright American Female |
+| `af_nicole` | Soft American Female |
+| `bf_emma` | British Female |
+
+**Test Voice** previews the unsaved choice with **“Hey, I'm Nova. Ready when you are.”** Stop test, changing the voice, saving or closing Settings, memory edits, and unmounting all stop Kokoro audio and cancel queued generation.
+
+**Fallbacks and safety nets**
+
+| Situation | What happens |
+| --- | --- |
+| Kokoro can't load: CDN blocked, no module worker/WebAssembly/Web Audio, a load error, a worker crash, or no download activity for 60s | “I couldn’t load my Kokoro voice…”; every reply uses the **Web Speech fallback** below, and Settings shows the browser-voice list |
+| One chunk fails or takes over 45s to generate | Unplayed text, starting with the chunk still audible, finishes with Web Speech; Kokoro stays on for later replies |
+| Audio is blocked until a tap or key press (autoplay rules) | NOVA asks for a tap and plays when allowed; after 20s it gives up, and cards/transcript stay available |
+| The audio context never reports `ended` | The reply finishes 3s after its scheduled audio |
+
+Model quality, speed and download size depend on the device and connection. Generation on WebAssembly is CPU-bound, so slower machines take longer before speaking. The checks (`scripts/kokoro-checks.mjs`) use worker and Web Audio doubles. The bundled library was inspected to run in a worker and to fetch its runtime from jsDelivr. The real model, voice quality and timing have not been tested in a browser here.
+
+### Web Speech fallback
+
+Used only when Kokoro can't load (or, for the rest of one reply, when Kokoro fails mid-reply). This is the browser's own `speechSynthesis` with NOVA's earlier voice logic. Local voices keep working offline, while a voice marked `network` depends on the browser's speech service.
 
 | Parameter | Value | Effect |
 | --- | --- | --- |
@@ -123,7 +170,7 @@ Speech is fixed at the values NOVA is specified to use, in `src/speech.js`:
 | pitch | `0.88` | slightly lower — calmer, less cartoonish |
 | volume | `1.0` | full |
 
-On load, NOVA calls `window.speechSynthesis.getVoices()` and automatically chooses the first available tier:
+NOVA calls `window.speechSynthesis.getVoices()` and automatically chooses the first available tier:
 
 1. **Microsoft Aria Online**
 2. **Microsoft Guy Online**
@@ -134,7 +181,7 @@ On load, NOVA calls `window.speechSynthesis.getVoices()` and automatically choos
 
 Name matching is case-insensitive and accepts the stock names' language/quality suffixes. English variants break ties **within** a tier; locale, offline capability, and app-name similarities never override the list. Voices often arrive asynchronously: `voiceschanged` refreshes the choice, with a 500ms refresh as a fallback.
 
-**NOVA Voice** lists every available voice in two groups: **Natural / Online** names at the top, then **Basic system voices**. Each group is priority-sorted. Grouping is by name, not a promise of quality: the Google voices still have their automatic priority even though their names don't contain those keywords. Every entry includes its language and offline/network status:
+When Kokoro is unavailable, Settings shows **Browser voice (fallback)**, which lists every available voice in two groups: **Natural / Online** names at the top, then **Basic system voices**. Each group is priority-sorted. Grouping is by name, not a promise of quality: the Google voices still have their automatic priority even though their names don't contain those keywords. Every entry includes its language and offline/network status:
 
 ```
 Microsoft Aria Online (Natural) - English (United States) (en-US) · network
@@ -143,11 +190,11 @@ Samantha (en-US) · offline
 
 A saved manual selection takes precedence over Automatic. `nova.tts.voice` stores its stable URI, with support for older name-only selections. Choose **Automatic** to clear that override and follow the priority list again. If a saved voice is uninstalled, the panel reports it and temporarily uses the automatic pick.
 
-**Test Voice** previews the current dropdown choice **without saving**, saying exactly **“Hey, I'm Nova. Ready when you are.”** It uses the same rate, pitch, voice resolution, and word-boundary animation as replies. **Stop test**, changing the dropdown, saving/closing settings, and unmounting all cancel a preview safely. Testing pauses recognition and never sends a chat request, modifies memory, or creates a response transcript. It is disabled during a pending/spoken answer so it cannot interrupt a real reply; Ollama does not need to be running to test speech.
+In fallback mode, **Test Voice** previews the browser-voice choice **without saving**, using the same rate, pitch, voice resolution, and word-boundary animation as replies. **Stop test**, changing the dropdown, saving/closing settings, and unmounting all cancel a preview safely. Testing pauses recognition and never sends a chat request, modifies memory, or creates a response transcript. It is disabled during a pending/spoken answer so it cannot interrupt a real reply; Ollama does not need to be running to test speech.
 
-A tiny voice-name label below the avatar shows the current speaker while an utterance is queued/playing, then the saved/automatic choice at rest. Late voice-loading events cannot falsely rename an utterance already in progress. If the engine exposes no voices yet, the label honestly says **Browser default**; if speech synthesis is missing, it says **Voice isn’t available here** and testing is disabled.
+A tiny voice-name label below the avatar shows the current speaker while an utterance is queued/playing (for example **Bella · Kokoro AI**), then the saved choice at rest. Late voice-loading events cannot falsely rename an utterance already in progress. If the engine exposes no voices yet, the label honestly says **Browser default**; if speech synthesis is missing, it says **Voice isn’t available here** and testing is disabled.
 
-Two caveats worth knowing:
+Fallback caveats:
 
 - Voice availability and sound depend on your browser and OS. **Online/network** voices may send spoken text to the browser's speech provider and need a connection; select an `offline` voice if that is not suitable. No speech backend or API key is configured by NOVA.
 - Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally. The eyes and per-word scale stay neutral; the gentle speaking bounce still runs.
@@ -191,7 +238,7 @@ Shared motion layers keep the pair synchronized:
 | --- | --- |
 | `.eyes-gaze` | the pair’s horizontal gaze |
 | `.eyes-blink` | one blink clock and one fixed center for both eyes |
-| `.eyes-voice` | shared word-boundary brightness |
+| `.eyes-voice` | shared speech brightness (Kokoro audio loudness, or fallback word boundaries) |
 | `.eye-scale` inside each eye | identical size/expression scaling about a fixed local origin |
 
 Body pose is separate from rhythm: `.avatar-figure` holds transitioned scale and `rotateY`, while `.robot-avatar` carries translation-only keyframes. No body state rotates on Z. There is no perspective that could make one eye appear larger than the other. Pose, eye color and capsule/crescent crossfades use **400ms ease-in-out** transitions; timed blinks and rapid word-light beats keep their own timings.
@@ -205,7 +252,7 @@ Body pose is separate from rhythm: `.avatar-figure` holds transitioned scale and
 | Happy / wake | matching filled wide crescents, **scaleX(1.2), scaleY(.4)** | one **800ms double-bounce jump** |
 | Offline | identical slight droop, half opacity | slow lateral sway; no eye tilt |
 
-`speechSynthesis` word-boundary events publish a single `--audio-pulse`: capped at 1, decayed to 0 after 125ms, and removed on speech completion/cancellation. Both eye light and body scale read that value. Without boundary events the word light/scale stays neutral rather than being simulated.
+With Kokoro, the loudness of the audio actually playing publishes a single `--audio-pulse` (0–1, every 50ms on the AudioContext clock), removed the moment playback ends or is canceled. In the Web Speech fallback, `speechSynthesis` word-boundary events publish it instead: capped at 1, decayed to 0 after 125ms, and removed on speech completion/cancellation. Both eye light and body scale read that value. Without boundary events the word light/scale stays neutral rather than being simulated.
 
 The wake flourish lasts **800ms** and then settles into listening. A same-utterance question moves directly to thinking/speaking without the wake expression masking it. Happy follows response completion and holds its crescent pose for **1.5s**; the double jump itself happens only once. Offline styling applies only at rest, so local memory replies still get the full speaking animation even when Ollama is unavailable. The offline notice stays below the orb.
 
@@ -230,7 +277,7 @@ In development, `npm run dev` serves the hot-reloading source entry at `/` and `
 
 ## Standalone single file (`nova.html`)
 
-`nova.html` is one self-contained HTML file — CSS and JS inlined, no build step, no server, no `node_modules`. Open it from disk with `file://` and it runs. Settings expose it as **Download nova.html** so the hosted site can hand out a copy.
+`nova.html` is one self-contained HTML file — CSS and JS inlined, no build step, no server, no `node_modules`. Open it from disk with `file://` and it runs. The Kokoro voice is the one runtime exception: it is still loaded from jsDelivr and Hugging Face (not inlined, about 115 MB). Without that network access, or if the browser refuses module workers for `file://` pages, the copy uses the Web Speech fallback. Settings expose it as **Download nova.html** so the hosted site can hand out a copy.
 
 ```bash
 npm run build:standalone   # builds and verifies nova.html

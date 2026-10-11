@@ -88,6 +88,24 @@ export function createRecognitionDouble(clock, { continuous = true, autoStart = 
   return { Recognition, instances };
 }
 
+// A module worker double: records messages, and lets tests reply as the worker.
+export function createWorkerDouble() {
+  const workers = [];
+  class Worker {
+    constructor(url, options) {
+      this.url = url;
+      this.options = options;
+      this.messages = [];
+      this.terminated = false;
+      workers.push(this);
+    }
+    postMessage(message) { this.messages.push(message); }
+    terminate() { this.terminated = true; }
+    reply(data) { this.onmessage?.({ data }); }
+  }
+  return { Worker, workers };
+}
+
 export function createAudioDouble({ suspended = false, rejectResume = false } = {}) {
   const instances = [];
   class AudioContext {
@@ -99,7 +117,25 @@ export function createAudioDouble({ suspended = false, rejectResume = false } = 
       this.gains = [];
       this.resumes = 0;
       this.closes = 0;
+      this.sources = [];
       instances.push(this);
+    }
+    // Kokoro playback: buffers are inspectable and sources end only when told to.
+    createBuffer(channels, length, sampleRate) {
+      const data = new Float32Array(length);
+      return { numberOfChannels: channels, length, sampleRate, duration: length / sampleRate, getChannelData: () => data };
+    }
+    createBufferSource() {
+      const source = {
+        stopped: false,
+        connect(target) { this.target = target; },
+        disconnect() { this.disconnected = true; },
+        start(at) { this.startAt = at; },
+        stop() { this.stopped = true; },
+        finish() { this.onended?.(); },
+      };
+      this.sources.push(source);
+      return source;
     }
     async resume() {
       this.resumes += 1;
@@ -187,8 +223,10 @@ const appBuild = build({
 
 export async function createAppHarness({ continuous = true, missingRecognition = false, speech = true,
   storage = createStorageDouble(), panelProps = null, modelsOffline = false, missingSynthesis = false,
-  voices = [{ name: 'Samantha', lang: 'en-US', voiceURI: 'samantha', localService: true }] } = {}) {
+  voices = [{ name: 'Samantha', lang: 'en-US', voiceURI: 'samantha', localService: true }], kokoro = false } = {}) {
   const clock = createClock();
+  // Without `kokoro`, there is no Worker, so the App starts on its Web Speech fallback.
+  const workerDouble = kokoro ? createWorkerDouble() : null;
   const recognition = createRecognitionDouble(clock, { continuous });
   const audio = createAudioDouble();
   const utterances = [];
@@ -216,6 +254,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     }),
   });
   if (missingSynthesis) delete window.speechSynthesis;
+  if (workerDouble) Object.assign(window, { Worker: workerDouble.Worker, Blob, URL });
   const document = Object.assign(eventTarget(), { hidden: false });
   const slots = [];
   let cursor = 0;
@@ -322,6 +361,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     utterances.push(utterance);
   };
   return {
+    workers: workerDouble?.workers ?? [],
     clock, window, document, recognition, audio, utterances, requests, storage, pendingChats, avatarElement, flush, find, nodes,
     findButton: (text) => nodes().find((node) => node.type === 'button' && node.props.children === text),
     updatePanel(next) { Object.assign(props, next); dirty = true; flush(); },

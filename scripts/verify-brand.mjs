@@ -150,7 +150,7 @@ check('rendered accessibility attributes are the spec spelling',
 // The settings panel and the offline notice are not part of the idle render.
 const panelSource = appSource;
 check('settings panel title uses the new name', /\{APP_NAME\} \/ PREFERENCES/.test(panelSource));
-check('voice selector is labelled with the new name', /htmlFor="nova-voice">\{APP_NAME\} Voice</.test(panelSource));
+check('voice selector is labelled with the new name', /htmlFor="nova-voice">\{APP_NAME\} Voice \(Kokoro AI\)</.test(panelSource));
 check('offline notice uses friendly, actionable copy', panelSource.includes('{OLLAMA_UNREACHABLE}')
   && sources['src/personality.js'].includes("Hmm, I can't reach Ollama right now. Is it running?"));
 

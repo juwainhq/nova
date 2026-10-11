@@ -14,6 +14,7 @@ import { verifyMemory } from './memory-checks.mjs';
 import { verifyVoices } from './voice-checks.mjs';
 import { verifyPersonality } from './personality-checks.mjs';
 import { verifyRich } from './rich-checks.mjs';
+import { verifyKokoro } from './kokoro-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -196,11 +197,20 @@ async function renderPanel(voices, savedKey, memories = [], memoryError = '') {
 }
 
 const panel = await renderPanel(MACHINE, '');
-const options = [...panel.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)]
+// The browser list is the Web Speech fallback, shown when Kokoro is unavailable.
+const browserSelect = (markup) => markup.match(/<select[^>]*id="nova-browser-voice"[\s\S]*?<\/select>/)?.[0] ?? '';
+const options = [...browserSelect(panel).matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)]
   .map((match) => ({ value: match[1], label: match[2] }));
 
-check('panel renders the NOVA Voice selector', /<label[^>]*for="nova-voice"[^>]*>NOVA Voice<\/label>|>NOVA Voice</.test(panel));
+check('panel renders the NOVA Voice (Kokoro AI) selector', /<label[^>]*for="nova-voice"[^>]*>NOVA Voice \(Kokoro AI\)<\/label>/.test(panel));
 check('panel renders a select bound to nova-voice', /<select[^>]*id="nova-voice"/.test(panel));
+const kokoroOptions = [...(panel.match(/<select[^>]*id="nova-voice"[\s\S]*?<\/select>/)?.[0] ?? '').matchAll(/<option value="([^"]*)"([^>]*)>([^<]*)<\/option>/g)];
+check('Kokoro selector offers exactly the four requested voices', kokoroOptions.map((match) => `${match[1]}|${match[3]}`).join('\n') === [
+  'af_bella|af_bella — Warm American Female (default)', 'af_sarah|af_sarah — Bright American Female',
+  'af_nicole|af_nicole — Soft American Female', 'bf_emma|bf_emma — British Female'].join('\n'));
+check('Kokoro selector defaults to af_bella', /selected/.test(kokoroOptions[0]?.[2] ?? ''));
+check('unavailable Kokoro shows the labelled browser fallback selector', /<label[^>]*for="nova-browser-voice"[^>]*>Browser voice \(fallback\)<\/label>/.test(panel)
+  && /couldn’t load Kokoro here/.test(panel));
 check('selector lists every voice plus Automatic', options.length === MACHINE.length + 1, `${options.length - 1} of ${MACHINE.length}`);
 check('selector separates Natural/Online from basic system voices', /<optgroup label="Natural \/ Online">/.test(panel) && /<optgroup label="Basic system voices">/.test(panel));
 check('Natural/Online voices appear above basic voices', panel.indexOf('<optgroup label="Natural / Online">') < panel.indexOf('<optgroup label="Basic system voices">'));
@@ -231,7 +241,7 @@ check('a missing saved voice is reported', /can’t find your saved voice/i.test
 
 // An empty list must degrade gracefully rather than render a broken control.
 const emptyPanel = await renderPanel([], '');
-check('panel survives an empty voice list', /<select[^>]*id="nova-voice"/.test(emptyPanel) && /Voices are still loading/.test(emptyPanel));
+check('panel survives an empty voice list', /<select[^>]*id="nova-browser-voice"/.test(emptyPanel) && /Voices are still loading/.test(emptyPanel));
 
 // ----------------------------------------------------------- wake word / modes
 check('wake phrase follows the brand', WAKE_WORD === 'hey nova');
@@ -643,6 +653,7 @@ deniedUi.unmount();
 
 // Voice preview/selection and memory use the same compiled App fixture.
 await verifyRich(check);
+await verifyKokoro(check);
 await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);

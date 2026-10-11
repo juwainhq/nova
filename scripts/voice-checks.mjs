@@ -21,7 +21,7 @@ async function openSettings(ui) {
   return createAppHarness({ panelProps: panelNode(ui).props });
 }
 const syncPanel = (ui, panel) => panel.updatePanel(panelNode(ui).props);
-const choose = (panel, key) => { panel.find('settings-select').props.onChange({ target: { value: key } }); panel.flush(); };
+const choose = (panel, key) => { panel.find('browser-voice-select').props.onChange({ target: { value: key } }); panel.flush(); };
 const test = (ui, panel) => { panel.find('test-voice-button').props.onClick(); ui.flush(); syncPanel(ui, panel); };
 
 export async function verifyVoices(check) {
