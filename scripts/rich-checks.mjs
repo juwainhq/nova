@@ -74,6 +74,9 @@ export async function verifyRich(check) {
   check('rich URLs: unsafe/relative/credential-bearing URLs never become cards', responseLinks('javascript:alert(1) data:text/html,hi file:///etc/passwd /path www.example.com https://user:secret@example.com/ http://').length === 0);
   check('rich URLs: markup is not part of a clickable target', responseLinks('https://example.com/<img src=x>')[0].href === 'https://example.com/');
   check('rich URLs: IPv6 and fragments survive delimiter cleanup', responseLinks('(http://[::1]:8080/docs#read).')[0].href === 'http://[::1]:8080/docs#read');
+  check('rich URLs: mixed closing delimiters are trimmed until stable', responseLinks('(see https://example.com.) [https://example.org/a!] https://example.net/b…').map((link) => link.href).join(' ')
+    === 'https://example.com/ https://example.org/a https://example.net/b');
+  check('rich URLs: trailing-dot hostnames cannot evade duplicate removal', responseLinks('https://example.com (or https://example.com.)').length === 1);
   check('rich URLs: rendering is bounded without mutating spoken text', responseLinks(Array.from({ length: 100 }, (_, i) => `https://example.com/${i}`).join('\n')).length === MAX_RICH_LINKS);
   const items = responseItems('A few ideas:\n1. **Coffee**\n2) __Tea__\n- A walk\n* `Music`\n• A book\n+ [A guide](https://example.com)');
   check('rich lists: numbered, parenthesized, and bullet markers become clean labels', same(items, ['Coffee', 'Tea', 'A walk', 'Music', 'A book', 'A guide']));
@@ -83,6 +86,7 @@ export async function verifyRich(check) {
   check('rich lists: single emphasis is cleaned without rewriting underscores in names', same(responseItems('- *Coffee*\n- _Tea_\n- file_name_here'), ['Coffee', 'Tea', 'file_name_here']));
   check('rich lists: empty bullets/rules are ignored and large lists are bounded', responseItems('-\n---\n1.').length === 0
     && responseItems(Array.from({ length: 100 }, (_, i) => `${i + 1}. Item ${i}`).join('\n')).length === MAX_RICH_ITEMS);
+  check('rich lists: spaced Markdown rules and marker-only lines never become cards', same(responseItems('* * *\n- - -\n- …\n- Real item'), ['Real item']));
   for (const request of ['show me a picture of cats', 'Can you please show me an image of cats?', 'find photos of cats', 'Please search Google Images for cats.', 'I’d like to see a photo of cats']) {
     check(`rich images: intent extracts the query (${request})`, imageSearchQuery(request) === 'cats');
   }

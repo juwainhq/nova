@@ -5,11 +5,14 @@ export const MAX_RICH_LINKS = 24;
 export const MAX_RICH_ITEMS = 60;
 
 function trimUrl(value) {
-  let url = value.replace(/[.,!?;:'"”’]+$/, '');
-  // Keep balanced Wikipedia-style parentheses, but not prose/Markdown delimiters.
-  for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']]) {
-    while (url.endsWith(close) && url.split(close).length > url.split(open).length) {
-      url = url.slice(0, -1);
+  // Repeat until stable so "(see https://example.com.)" loses both ")" and ".".
+  let url = value;
+  for (let previous = ''; url !== previous;) {
+    previous = url;
+    url = url.replace(/[.,!?;:'"”’…]+$/, '');
+    // Keep balanced Wikipedia-style parentheses, but not prose/Markdown delimiters.
+    for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']]) {
+      if (url.endsWith(close) && url.split(close).length > url.split(open).length) url = url.slice(0, -1);
     }
   }
   return url;
@@ -53,7 +56,8 @@ export function responseItems(text, limit = MAX_RICH_ITEMS) {
     const match = line.match(/^\s*(?:[-+*•–]\s+|\d{1,4}[.)]\s+)(\S.*)$/);
     if (!match) continue;
     const label = plainLabel(match[1].replace(/^\[[ xX]\]\s*/, ''));
-    if (label) items.push(label);
+    // Skips "* * *" / "- - -" rules and other marker-only lines.
+    if (/[\p{L}\p{N}]/u.test(label)) items.push(label);
     if (items.length === limit) break;
   }
   return items;

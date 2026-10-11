@@ -79,7 +79,7 @@ NOVA saves user-provided facts across reloads and browser sessions in local stor
 | “what do you remember?” | Reads every saved fact, or says that no facts are saved |
 | “forget my name” or “forget Juwain” | Deletes the matching fact |
 
-Explicit `remember` / `don't forget` commands accept any fact. Automatic capture is deliberately limited to simple, affirmative `my name is …`, `my favorite color is …` (also `favourite colour`), and `I work as …` statements. Questions, unrelated speech, and multi-sentence chat are not automatically saved. Wake-word standby transcripts and NOVA's replies never become memories.
+Explicit `remember` / `don't forget` commands accept any fact. Automatic capture is deliberately limited to simple, affirmative `my name is …`, `my favorite color is …` (also `favourite colour`), and `I work as …` statements. Questions, unrelated speech, and multi-sentence chat are not automatically saved. A question that merely starts with a command word — “remember what my name is?”, “forget my name?” — goes to normal chat and never saves or deletes anything. This relies on a trailing question mark. Speech recognition often omits punctuation, so an unpunctuated “remember what my name is” is still treated as a command. Wake-word standby transcripts and NOVA's replies never become memories.
 
 Duplicate facts are ignored. A new name, favorite color, or occupation replaces the older value, instead of keeping contradictory profile facts. Forgetting accepts a complete fact or a unique whole-word phrase; if several facts match, NOVA asks you to be more specific without deleting anything.
 
@@ -152,13 +152,24 @@ Two caveats worth knowing:
 - Voice availability and sound depend on your browser and OS. **Online/network** voices may send spoken text to the browser's speech provider and need a connection; select an `offline` voice if that is not suitable. No speech backend or API key is configured by NOVA.
 - Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally. The eyes and per-word scale stay neutral; the gentle speaking bounce still runs.
 
+**Stuck-speech safety net.** Some engines lose an utterance's end event, silently drop a queued utterance, or wedge partway through a long reply (a long-standing Chrome issue with network voices). Without a fallback, NOVA would stay in "speaking" with the mic disabled. NOVA keeps a reference to the active utterance, so Chrome can't garbage-collect it and drop its events. Where the browser exposes `speechSynthesis.speaking`/`pending` as booleans, it checks them once a second:
+
+| Situation | Recovery |
+| --- | --- |
+| Speech was reported, then 2 quiet checks with no end event | Finish normally; cards still appear |
+| Nothing started or queued for 10 seconds | Return to ready with “I couldn’t start speaking just now…”; no cards |
+| Still “speaking” past 15s + ~2× the reply's estimated length | Cancel the stuck queue and resume listening |
+| `onstart` fired but the flags never report speaking | Flags are unreliable; rely on real events only |
+
+This is a recovery path, not a fix for Chrome's cut-off: a wedged reply still stops early, but NOVA no longer stays stuck. It uses no pause/resume keepalive or text splitting. Normal events always win, and late events from a recovered utterance are ignored. The checks use API doubles, not real engines.
+
 ## Rich responses
 
 After NOVA finishes speaking, replies with useful extra content open a soft panel **below the avatar and response area**, above the microphone controls:
 
-- **Links:** `http://` and `https://` URLs become clickable cards with the actual domain, a short path, and a subtle open icon. Clicking opens a new tab using `noopener noreferrer`. Markdown/prose punctuation is cleaned up, canonical duplicates are removed, and malformed/non-web/credential-bearing links are not made clickable. No page previews, favicons, or remote thumbnails are fetched automatically.
+- **Links:** `http://` and `https://` URLs become clickable cards with the actual domain, a short path, and a subtle open icon. Clicking opens a new tab using `noopener noreferrer`. Markdown/prose punctuation is cleaned up, even when stacked like `(see https://example.com.)`. Canonical duplicates are removed, and malformed/non-web/credential-bearing links are not made clickable. No page previews, favicons, or remote thumbnails are fetched automatically.
 - **Image requests:** say **“show me a picture of cats”**, **“find photos of the Eiffel Tower”**, or **“search Google Images for sunsets.”** NOVA handles these locally with a friendly spoken introduction and an encoded Google Images search link in a visual card. The thumbnail is clearly a **placeholder**, not a claimed photo; **View Images** opens the real search in a new tab. This does not require Ollama to be running and never saves the query as a memory.
-- **Lists:** numbered (`1.`, `1)`) and bulleted (`-`, `*`, `•`, etc.) lines become clean cards/chips. Common Markdown emphasis is removed from visual labels, and code fences are not mistaken for lists. The original reply is still spoken in full and unchanged.
+- **Lists:** numbered (`1.`, `1)`) and bulleted (`-`, `*`, `•`, etc.) lines become clean cards/chips. Common Markdown emphasis is removed from visual labels. Code fences, Markdown rules like `* * *`, and marker-only lines are not mistaken for list items. The original reply is still spoken in full and unchanged.
 
 The panel appears only after the actual speech-end event, not when text arrives or audio is queued. Silent/unsupported-speech browsers can still use visual replies once the text is ready; failed or canceled utterances do not publish unfinished content. Cards work independently of the optional **Show last response** transcript.
 

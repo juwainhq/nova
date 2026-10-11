@@ -267,4 +267,82 @@ export async function verifyVoices(check) {
   check('the next actual reply uses newly loaded voices through the fresh speaker ref', normal.utterances[1]?.voice === ariaVoice
     && normal.utterances[1].rate === .92 && normal.utterances[1].pitch === .88);
   normal.unmount();
+
+  // Engine safety net: only the public speaking/pending booleans are read.
+  const notice = (ui) => ui.find('toast')?.props.children[1]?.props.children;
+  const rich = (ui) => Boolean(ui.find('rich-content-slot'));
+  async function speakingUi(answer = 'Hello! I am here to help.') {
+    const ui = await createAppHarness({ voices: [basicVoice], storage: createStorageDouble() });
+    Object.assign(ui.window.speechSynthesis, { speaking: false, pending: false });
+    ui.chatAnswer = answer;
+    ui.clock.tick();
+    await ui.settle();
+    ui.recognition.instances[0].result('hey nova tell me something');
+    ui.recognition.instances[0].end();
+    await ui.settle();
+    return ui;
+  }
+  const tick = async (ui, ms) => { ui.clock.tick(ms); await ui.settle(); };
+
+  const lost = await speakingUi('Two ideas:\n- Tea\n- A walk');
+  lost.window.speechSynthesis.speaking = true;
+  lost.utterances[0].onstart();
+  await tick(lost, 5000);
+  check('speech watchdog: a reply that is still speaking is left alone', atStage(lost, 'speaking') && !rich(lost));
+  lost.window.speechSynthesis.speaking = false;
+  await tick(lost, 1000);
+  check('speech watchdog: one quiet check is not treated as a lost end event', atStage(lost, 'speaking'));
+  const lostCancels = lost.cancellations;
+  await tick(lost, 1000);
+  check('speech watchdog: a lost end event finishes the reply and publishes its cards', atStage(lost, 'ready') && rich(lost)
+    && lost.cancellations === lostCancels + 1 && !notice(lost));
+  lost.utterances[0].onend();
+  lost.utterances[0].onerror();
+  await lost.settle();
+  check('speech watchdog: late events from a rescued utterance are ignored', atStage(lost, 'ready') && lost.utterances.length === 1);
+  lost.unmount();
+
+  const dropped = await speakingUi('Two ideas:\n- Tea\n- A walk');
+  await tick(dropped, 9000);
+  check('speech watchdog: a slow-to-start queued utterance gets 10 seconds', atStage(dropped, 'speaking') && !notice(dropped));
+  await tick(dropped, 1000);
+  check('speech watchdog: an utterance that never starts recovers with a friendly message and no cards', atStage(dropped, 'ready')
+    && !rich(dropped) && notice(dropped) === 'I couldn’t start speaking just now. Try again, or choose another voice in Settings.');
+  dropped.unmount();
+
+  const wedged = await speakingUi();
+  wedged.window.speechSynthesis.speaking = true;
+  wedged.utterances[0].onstart();
+  await tick(wedged, 18000);
+  check('speech watchdog: speech within the generous length-based ceiling is never cut off', atStage(wedged, 'speaking'));
+  const wedgedCancels = wedged.cancellations;
+  await tick(wedged, 1000);
+  check('speech watchdog: a wedged engine is canceled at the ceiling so listening can resume', atStage(wedged, 'ready')
+    && wedged.cancellations === wedgedCancels + 1);
+  wedged.clock.tick();
+  wedged.flush();
+  check('speech watchdog: wake-word standby resumes after a rescued reply', Boolean(wedged.find('wake-indicator')));
+  wedged.unmount();
+
+  const unreliable = await speakingUi();
+  unreliable.utterances[0].onstart();
+  await tick(unreliable, 120000);
+  check('speech watchdog: engines whose flags never report speaking keep trusting real events', atStage(unreliable, 'speaking'));
+  unreliable.utterances[0].onend();
+  await unreliable.settle();
+  check('speech watchdog: the normal end event still completes those replies', atStage(unreliable, 'ready'));
+  unreliable.unmount();
+
+  const finished = await speakingUi();
+  finished.window.speechSynthesis.speaking = true;
+  finished.utterances[0].onstart();
+  await tick(finished, 2000);
+  finished.window.speechSynthesis.speaking = false;
+  finished.utterances[0].onend();
+  await finished.settle();
+  const finishedCancels = finished.cancellations;
+  await tick(finished, 120000);
+  check('speech watchdog: a normally ended reply leaves no watchdog behind', atStage(finished, 'ready') && finished.cancellations === finishedCancels);
+  finished.unmount();
+  check('speech watchdog: unmount clears every watchdog timer', finished.clock.pending === 0);
 }

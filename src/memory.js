@@ -81,6 +81,8 @@ export function parseMemoryIntent(value) {
   if (/^(?:what do you remember(?: about me)?|(?:show|list)(?: me)?(?: all)?(?: (?:my|your|saved))? (?:memories|remembered facts))[.!?]*$/i.test(text)) {
     return { type: 'list' };
   }
+  // "Remember what my name is?" asks about memory; it must not save/delete anything.
+  if (/\?\s*$/.test(text)) return null;
   // Order matters: "don't forget" saves; it must never reach the delete branch.
   const remember = text.match(/^(?:please\s+)?(?:remember\b|(?:don['’]t|do not)\s+forget\b)[\s,:]*(?:that\s+)?(.*)$/i);
   if (remember) return { type: 'remember', fact: normalizeMemoryFact(remember[1]) };

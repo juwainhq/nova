@@ -32,6 +32,13 @@ import {
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
 
+// Safety net for engines that lose an utterance's end event, never start a queued
+// one, or wedge mid-reply (Chrome's long network-voice bug). Without it NOVA stays
+// "speaking" with the mic disabled. Reads only the public speaking/pending flags,
+// and only where they are real booleans. The ceiling is ~2x a slow speaking pace.
+const SPEECH_CHECK_MS = 1000;
+const speechCeilingMs = (text) => 15000 + Math.ceil((text.length / (14 * TTS.rate)) * 2000);
+
 // Replaced at build time by scripts/build-standalone.mjs. The standalone file is
 // opened from a file:// URL, where there is no origin server, so the Vite proxy
 // paths cannot resolve and the only sensible default is a direct local endpoint.
@@ -638,6 +645,8 @@ function App() {
   const voiceListenerRef = useRef(null);
   const wakeChimeRef = useRef(null);
   const speechFinishRef = useRef(null);
+  // Chrome can garbage-collect a queued utterance and silently drop its events.
+  const utteranceRef = useRef(null);
   const requestControllerRef = useRef(null);
   const promptRef = useRef(null);
   const speakRef = useRef(null);
@@ -917,6 +926,8 @@ function App() {
       const utterance = new SpeechSynthesisUtterance(text);
       const avatarElement = avatarContainerRef.current;
       let speechPulseTimer;
+      let watchdogTimer;
+      let started = false;
       let finished = false;
 
       const voice = resolveVoice(voices, selectedVoiceKey) || defaultVoice(voices);
@@ -932,6 +943,8 @@ function App() {
         if (finished) return;
         finished = true;
         window.clearTimeout(speechPulseTimer);
+        window.clearTimeout(watchdogTimer);
+        if (utteranceRef.current === utterance) utteranceRef.current = null;
         avatarElement?.classList.remove('speech-boundary-active');
         avatarElement?.style.removeProperty('--audio-pulse');
         if (speechFinishRef.current === finishSpeech) {
@@ -943,7 +956,7 @@ function App() {
         if (resume) setStage('ready');
         resolve(completed);
       };
-      utterance.onstart = () => { if (!finished) setStage('speaking'); };
+      utterance.onstart = () => { if (!finished) { started = true; setStage('speaking'); } };
       // No word events: neutral eye light/scale, with the CSS speaking bounce intact.
       utterance.onboundary = (event) => {
         if (finished || (event.name && event.name !== 'word') || !avatarElement) return;
@@ -961,7 +974,30 @@ function App() {
         finishSpeech();
         if (preview) notify("I couldn’t play that voice just now. Check your connection, or try another voice.");
       };
+      const synth = window.speechSynthesis;
+      const ceiling = speechCeilingMs(text);
+      let heard = false;
+      let quiet = 0;
+      let elapsed = 0;
+      const giveUp = (completed) => {
+        finishSpeech(true, completed);
+        synth.cancel(); // Purge a wedged/stale queue; late events are ignored.
+      };
+      const watch = () => {
+        watchdogTimer = window.setTimeout(() => {
+          if (finished) return;
+          elapsed += SPEECH_CHECK_MS;
+          if (synth.speaking === true) heard = true;
+          quiet = synth.speaking || synth.pending ? 0 : quiet + 1;
+          if (heard && quiet >= 2) return giveUp(true); // Spoke, but its end event was lost.
+          if (started && !heard) return; // Flags aren't reliable here; trust the events.
+          if (elapsed < ceiling && (heard || quiet < 10)) return watch();
+          giveUp(heard); // Wedged mid-reply, or a queued utterance that never started.
+          if (!heard) notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
+        }, SPEECH_CHECK_MS);
+      };
       speechFinishRef.current = finishSpeech;
+      utteranceRef.current = utterance;
       // Publish only after configuration succeeds, and freeze the actual utterance's
       // name even if voiceschanged updates the automatic pick while it is queued.
       setSpeechVoiceName(voice ? voice.name || 'Unnamed voice' : 'Browser default');
@@ -970,6 +1006,7 @@ function App() {
       setStage('speaking'); // Also covers an engine's queue before onstart.
       try {
         window.speechSynthesis.speak(utterance);
+        if (!finished && typeof synth.speaking === 'boolean') watch();
       } catch {
         finishSpeech();
         notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");

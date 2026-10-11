@@ -24,6 +24,9 @@ export async function verifyMemory(check, renderPanel) {
     'What is my name?', 'my favorite color is orange?', 'I work as a designer. What do you think?',
     'Tell me a joke', 'I am tired', 'remembrance is important',
   ].every((text) => parseMemoryIntent(text) === null));
+  check('questions starting with remember/forget never save or delete memories', [
+    'Remember what my name is?', 'remember when we talked about dogs?', 'forget my name?', "don't forget my color?",
+  ].every((text) => parseMemoryIntent(text) === null) && parseMemoryIntent('What do you remember?')?.type === 'list');
   check('bare memory commands request a fact instead of matching everything', parseMemoryIntent('remember')?.fact === '' && parseMemoryIntent('forget')?.query === '');
   check('facts normalize harmless whitespace and trailing punctuation', normalizeMemoryFact('  my name\n is Juwain.  ') === initialFacts[0]);
 
