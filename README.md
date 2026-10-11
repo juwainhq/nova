@@ -23,7 +23,7 @@ npm run dev
 
 Vite opens the editable app at `/index.dev.html` and proxies browser requests to Ollama at `http://localhost:11434/v1`. The app defaults to `mistral:7b-instruct-q4_K_M` for chat completions. The repository-root `index.html` is the built, GitHub Pages-ready entry; its JS and CSS bundle paths are relative.
 
-Open the settings panel with the gear icon to choose an Ollama model, point at an Ollama endpoint, pick the speaking voice, toggle the last-response transcript, or test the Ollama connection. Settings are saved in this browser's local storage.
+Open the settings panel with the gear icon to choose an Ollama model, point at an Ollama endpoint, pick and test the speaking voice, toggle the last-response transcript, or test the Ollama connection. Settings are saved in this browser's local storage.
 
 ### Backend endpoints
 
@@ -33,7 +33,7 @@ The Ollama endpoint has an optional override in the settings panel, so the app i
 | --- | --- | --- | --- |
 | Ollama endpoint | Vite proxy `/api/ollama` | `http://localhost:11434` | `<url>/v1/models`, `<url>/v1/chat/completions` |
 
-Ollama is the only service that needs configuring. Speech output is local, so there is nothing else to point anywhere.
+Ollama is the only service that needs configuring. Speech is browser-managed, with no separate endpoint to configure.
 
 A trailing `/v1` is detected and not duplicated. The value is stored in local storage (`nova.ollama.url`), and saving a new endpoint re-runs the connection check.
 
@@ -99,25 +99,38 @@ Speech is fixed at the values NOVA is specified to use, in `src/speech.js`:
 
 | Parameter | Value | Effect |
 | --- | --- | --- |
-| rate | `0.95` | slightly slower than default |
-| pitch | `0.9` | slightly lower — calmer, less cartoonish |
+| rate | `0.92` | slightly slower than default |
+| pitch | `0.88` | slightly lower — calmer, less cartoonish |
 | volume | `1.0` | full |
 
-**NOVA Voice** in the settings panel lists every voice `speechSynthesis.getVoices()` reports, English first, best first, then the rest by language. Each entry is labelled with its language and whether it works offline:
+On load, NOVA calls `window.speechSynthesis.getVoices()` and automatically chooses the first available tier:
+
+1. **Microsoft Aria Online**
+2. **Microsoft Guy Online**
+3. **Google UK English Female**
+4. **Google US English**
+5. Any voice with **Natural** or **Online** in its name
+6. The **browser default** (or first exposed voice if the engine omits its default flag)
+
+Name matching is case-insensitive and accepts the stock names' language/quality suffixes. English variants break ties **within** a tier; locale, offline capability, and app-name similarities never override the list. Voices often arrive asynchronously: `voiceschanged` refreshes the choice, with a 500ms refresh as a fallback.
+
+**NOVA Voice** lists every available voice in two groups: **Natural / Online** names at the top, then **Basic system voices**. Each group is priority-sorted. Grouping is by name, not a promise of quality: the Google voices still have their automatic priority even though their names don't contain those keywords. Every entry includes its language and offline/network status:
 
 ```
-Samantha (en-US) · offline
 Microsoft Aria Online (Natural) - English (United States) (en-US) · network
+Samantha (en-US) · offline
 ```
 
-Until you choose one, NOVA picks the most natural English voice the machine offers: neural and "Natural"/"Enhanced" names first, then well-regarded local voices, with a bonus for Apple's and Microsoft's better defaults and for Microsoft's voice actually named *Aria* — a stock voice name that happens to match the app's former name, and unrelated to this rename. Offline voices are favoured when quality is otherwise equal.
+A saved manual selection takes precedence over Automatic. `nova.tts.voice` stores its stable URI, with support for older name-only selections. Choose **Automatic** to clear that override and follow the priority list again. If a saved voice is uninstalled, the panel reports it and temporarily uses the automatic pick.
+
+**Test Voice** previews the current dropdown choice **without saving**, saying exactly **“Hey, I'm Nova. Ready when you are.”** It uses the same rate, pitch, voice resolution, and word-boundary animation as replies. **Stop test**, changing the dropdown, saving/closing settings, and unmounting all cancel a preview safely. Testing pauses recognition and never sends a chat request, modifies memory, or creates a response transcript. It is disabled during a pending/spoken answer so it cannot interrupt a real reply; Ollama does not need to be running to test speech.
+
+A tiny voice-name label below the avatar shows the current speaker while an utterance is queued/playing, then the saved/automatic choice at rest. Late voice-loading events cannot falsely rename an utterance already in progress. If the engine exposes no voices yet, the label honestly says **Browser default**; if speech synthesis is missing, it says **Speech unavailable** and testing is disabled.
 
 Two caveats worth knowing:
 
-- The most natural voices on a machine are often **cloud-backed** (Google's and Microsoft's "Online (Natural)" entries), so they stop working offline. The label says which is which; pick an `offline` voice if the machine is ever disconnected.
+- Voice availability and sound depend on your browser and OS. **Online/network** voices may send spoken text to the browser's speech provider and need a connection; select an `offline` voice if that is not suitable. No speech backend or API key is configured by NOVA.
 - Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally. The eyes and per-word scale stay neutral; the gentle speaking bounce still runs.
-
-`nova.tts.voice` in local storage holds your choice. If that voice is later uninstalled, the panel says so and falls back to the automatic pick rather than switching silently.
 
 ## Avatar states
 
@@ -153,7 +166,7 @@ Reduced motion disables float, gaze, blinks, jumps, pulsing light and rings whil
 
 `npm run verify:avatar` renders the real SVG through React and checks pixel geometry, symmetry, radial colors, fixed pivots, exact timing, scale bounds, reduced motion and orb/ring/backlight sizing at all three viewport sizes. It also generates **`avatar-states.html`**, a real-CSS state sheet with a happy/wake replay button. Each cell has unique SVG definition IDs so its gradient colors cannot accidentally resolve to another state. The sheet holds a clearly labelled sample speech pulse; it does not generate audio.
 
-`npm run verify:speech` checks voice selection and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
+`npm run verify:speech` checks all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
 
 `build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
 

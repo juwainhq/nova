@@ -3,32 +3,20 @@
 // and recognition depend on the browser. Helpers are testable with browser API doubles.
 import { APP_NAME } from './brand.js';
 
-// "Slightly slower, slightly lower": calm and even rather than the shrill default.
-export const TTS = { rate: 0.95, pitch: 0.9, volume: 1 };
-
+// Shared by replies and the settings preview: calm, slightly slower/lower.
+export const TTS = { rate: 0.92, pitch: 0.88, volume: 1 };
+export const TTS_TEST_TEXT = "Hey, I'm Nova. Ready when you are.";
 export const TTS_VOICE_KEY = 'nova.tts.voice';
 
-// Voices whose names mark them out as the good ones. Tiered so a neural voice
-// always outranks a merely pleasant-sounding older one.
-const QUALITY_TIERS = [
-  { pattern: /\(natural\)|\bnatural\b|\bneural\b/i, score: 70 },
-  { pattern: /\bpremium\b|\benhanced\b|\bsiri\b/i, score: 55 },
-  { pattern: /^google\b/i, score: 40 },
+// These are stock voice names, not branding. Explicit priorities always outrank
+// generic quality hints, locale preferences, offline capability and the default.
+const VOICE_PRIORITY = [
+  'Microsoft Aria Online',
+  'Microsoft Guy Online',
+  'Google UK English Female',
+  'Google US English',
 ];
-
-// Well-regarded local voices, by the names the major platforms use. These are voice
-// names, not app names: "aria" is here because Microsoft ships a good voice called
-// that, and it earns its place on quality alone.
-const PREFERRED_NAMES = ['aria', 'samantha', 'ava', 'allison', 'serena', 'zoe', 'jenny', 'evan', 'nathan', 'karen', 'moira', 'tessa', 'daniel'];
-// A voice named after the assistant itself is the nicest outcome, so it leads.
-const ASSISTANT_NAME_BONUS = 30;
-const PREFERRED_NAME_BONUS = 16;
-
-// Derived from the brand so the preference follows a rename instead of going stale.
-const ASSISTANT_NAME = APP_NAME.toLowerCase();
-
-// A local voice keeps working with no connection; a network voice does not.
-const LOCAL_BONUS = 14;
+const PRIORITY_PATTERNS = VOICE_PRIORITY.map((name) => new RegExp(`\\b${name}\\b`, 'i'));
 
 export function listVoices() {
   try {
@@ -38,15 +26,14 @@ export function listVoices() {
   }
 }
 
-// voiceURI is the closest thing to a stable id; fall back to the name, since some
-// platforms leave it blank.
+// voiceURI is the closest thing to a stable id; names support older saved choices.
 export function voiceKey(voice) {
   if (!voice) return '';
   return voice.voiceURI || voice.name || '';
 }
 
 export function isEnglish(voice) {
-  return /^en\b/i.test(voice?.lang || '');
+  return /^en(?:-|_|$)/i.test(voice?.lang || '');
 }
 
 export function englishRank(voice) {
@@ -57,56 +44,41 @@ export function englishRank(voice) {
   return 0;
 }
 
+export function isNaturalVoice(voice) {
+  return /natural|online/i.test(voice?.name || '');
+}
+
+export function voicePriority(voice) {
+  const name = (voice?.name || '').trim().replace(/\s+/g, ' ');
+  const named = PRIORITY_PATTERNS.findIndex((pattern) => pattern.test(name));
+  return named >= 0 ? named : isNaturalVoice(voice) ? 4 : 5;
+}
+
+// Locale only breaks ties within a tier (e.g. English vs German Aria variants).
 export function scoreVoice(voice) {
-  if (!voice) return 0;
-  const name = (voice.name || '').toLowerCase();
-  let score = 0;
-
-  for (const tier of QUALITY_TIERS) {
-    if (tier.pattern.test(name)) {
-      score += tier.score;
-      break;
-    }
-  }
-
-  if (name.includes(ASSISTANT_NAME)) score += ASSISTANT_NAME_BONUS;
-  else if (PREFERRED_NAMES.some((preferred) => name.includes(preferred))) score += PREFERRED_NAME_BONUS;
-
-  score += englishRank(voice) * 4;
-  if (voice.localService) score += LOCAL_BONUS;
-  if (voice.default) score += 2;
-
-  return score;
+  return voice ? (5 - voicePriority(voice)) * 100 + englishRank(voice) : 0;
 }
 
-// The most natural English voice on the machine, judged by name and language.
-export function defaultVoice(voices) {
-  const english = (voices || []).filter(isEnglish);
-  const candidates = english.length ? english : (voices || []);
-  if (!candidates.length) return null;
-
-  return [...candidates].sort((a, b) => scoreVoice(b) - scoreVoice(a)
-    || englishRank(b) - englishRank(a)
-    || (a.name || '').localeCompare(b.name || ''))[0];
-}
-
-// Best first, with locale as a tiebreak rather than the primary key, so a
-// high-quality en-GB voice still outranks a plain en-US one.
 export function sortVoices(voices) {
-  return [...(voices || [])].sort((a, b) => {
-    const score = scoreVoice(b) - scoreVoice(a);
-    if (score) return score;
-    const language = englishRank(b) - englishRank(a);
-    if (language) return language;
-    return (a.name || '').localeCompare(b.name || '');
-  });
+  return [...(voices || [])].filter(Boolean).sort((a, b) => scoreVoice(b) - scoreVoice(a)
+    || Number(Boolean(b.default)) - Number(Boolean(a.default))
+    || (a.name || '').localeCompare(b.name || '')
+    || voiceKey(a).localeCompare(voiceKey(b)));
+}
+
+export function defaultVoice(voices) {
+  const list = (voices || []).filter(Boolean);
+  const preferred = sortVoices(list).find((voice) => voicePriority(voice) < 5);
+  // Never fall back to a basic voice while any named/Natural/Online option exists.
+  // Some engines omit the default flag; their first exposed voice is the last resort.
+  return preferred || list.find((voice) => voice.default) || list[0] || null;
 }
 
 export function groupVoices(voices) {
   const sorted = sortVoices(voices);
   return {
-    english: sorted.filter(isEnglish),
-    others: sorted.filter((voice) => !isEnglish(voice)),
+    natural: sorted.filter(isNaturalVoice),
+    basic: sorted.filter((voice) => !isNaturalVoice(voice)),
   };
 }
 

@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createAppHarness, createAudioDouble, createClock, createRecognitionDouble } from './speech-test-fixtures.mjs';
 import { verifyMemory } from './memory-checks.mjs';
+import { verifyVoices } from './voice-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -42,21 +43,20 @@ try {
   await rm(directory, { recursive: true, force: true }).catch(() => {});
 }
 
-const { TTS, defaultVoice, describeVoice, groupVoices, resolveVoice, scoreVoice, sortVoices, voiceKey, voiceOptionLabel,
+const { TTS, TTS_TEST_TEXT, defaultVoice, describeVoice, groupVoices, isNaturalVoice, resolveVoice, scoreVoice, sortVoices, voiceKey, voiceOptionLabel, voicePriority,
   WAKE_WORD, WAKE_UNSUPPORTED_MESSAGE, parseWakeWord, createVoiceListener, createWakeChime } = speech;
 
 const voice = (name, lang, extra = {}) => ({ name, lang, voiceURI: `${name}-uri`, localService: true, default: false, ...extra });
 
 // --------------------------------------------------------- speaking parameters
-check('rate is 0.95', TTS.rate === 0.95, String(TTS.rate));
-check('pitch is 0.9', TTS.pitch === 0.9, String(TTS.pitch));
-check('volume is 1.0', TTS.volume === 1, String(TTS.volume));
+check('rate is 0.92', TTS.rate === 0.92, String(TTS.rate));
+check('pitch is 0.88', TTS.pitch === 0.88, String(TTS.pitch));
+check('volume stays 1.0', TTS.volume === 1, String(TTS.volume));
+check('preview says the exact requested phrase', TTS_TEST_TEXT === "Hey, I'm Nova. Ready when you are.");
 
 // -------------------------------------------------- a representative machine
-// Roughly what Chrome on Windows reports: a mix of local legacy, cloud, and the
-// newer neural voices, plus non-English entries that must never win by accident.
 const MACHINE = [
-  voice('Microsoft David - English (United States)', 'en-US'),
+  voice('Microsoft David - English (United States)', 'en-US', { default: true }),
   voice('Microsoft Zira - English (United States)', 'en-US'),
   voice('Google US English', 'en-US', { localService: false }),
   voice('Google UK English Female', 'en-GB', { localService: false }),
@@ -69,55 +69,47 @@ const MACHINE = [
   voice('Microsoft Aria Online (Natural) - German (Germany)', 'de-DE', { localService: false }),
   voice('Amelie', 'fr-CA'),
 ];
-
 const best = defaultVoice(MACHINE);
-check('picks a natural English voice', /natural/i.test(best.name) && /^en/i.test(best.lang), best.name);
-check('picks the voice named after the app', /nova/i.test(best.name), best.name);
-check('prefers it over an equally natural rival', /nova/i.test(best.name) && /aria/i.test(MACHINE.find(
-  (entry) => /^Microsoft Aria Online/.test(entry.name)).name), best.name);
-check('never picks a non-English voice', /^en/i.test(defaultVoice(MACHINE).lang), defaultVoice(MACHINE).lang);
+check('first priority is Microsoft Aria Online, not an app-name bonus', best === MACHINE[4], best.name);
+check('English wins among variants within the same named tier', best.lang === 'en-US');
+check('selection is independent of voice enumeration order', defaultVoice([...MACHINE].reverse()) === best);
 
-// Without a voice matching the app name, plain quality still decides.
-const noNova = MACHINE.filter((entry) => !/nova/i.test(entry.name));
-check('still prefers natural without a NOVA voice', /natural/i.test(defaultVoice(noNova).name), defaultVoice(noNova).name);
-
-// With no neural voices at all, the well-regarded local ones should surface.
-const LOCAL_ONLY = [
-  voice('Microsoft David - English (United States)', 'en-US'),
-  voice('Samantha', 'en-US'),
-  voice('Albert', 'en-US'),
-  voice('Microsoft Zira - English (United States)', 'en-US'),
-];
-check('falls back to a preferred local voice', defaultVoice(LOCAL_ONLY).name === 'Samantha', defaultVoice(LOCAL_ONLY).name);
-
-// Offline capability is rewarded, so a tie breaks toward the voice that keeps working.
-const TIE = [
-  voice('Generic Voice A', 'en-US', { localService: false }),
-  voice('Generic Voice B', 'en-US', { localService: true }),
-];
-check('prefers an offline voice when quality is equal', defaultVoice(TIE).name === 'Generic Voice B', defaultVoice(TIE).name);
-
-// Degenerate inputs must not throw.
+// Remove each tier in turn to verify every edge of the ordered fallback chain.
+const PRIORITY_CHAIN = [MACHINE[4], MACHINE[6], MACHINE[3], MACHINE[2], MACHINE[5], MACHINE[0]];
+for (let i = 0; i < PRIORITY_CHAIN.length; i += 1) {
+  const candidates = [...PRIORITY_CHAIN.slice(i)].reverse();
+  check(`priority ${i + 1}: ${PRIORITY_CHAIN[i].name}`, defaultVoice(candidates) === PRIORITY_CHAIN[i]);
+}
+check('generic Online-only names outrank the default', defaultVoice([MACHINE[0], voice('Jenny Online', 'en-US')])?.name === 'Jenny Online');
+check('generic Natural-only names outrank the default', defaultVoice([MACHINE[0], voice('Ava Natural', 'en-US')])?.name === 'Ava Natural');
+check('voice-name priorities are case/whitespace insensitive', voicePriority(voice('  microsoft   aRiA ONLINE (nAtUrAl)', 'en-US')) === 0);
+check('lookalike names cannot impersonate a named priority', voicePriority(voice('Microsoft Aria Onlinely', 'en-US')) !== 0);
+check('named priority beats a default/local/language bonus', defaultVoice([
+  voice('Google US English', 'en-US', { default: true }), MACHINE[3],
+]) === MACHINE[3]);
+check('any Natural/Online voice is preferred before a basic fallback', defaultVoice([
+  MACHINE[0], voice('French Natural', 'fr-FR'),
+])?.name === 'French Natural');
+const LOCAL_ONLY = [voice('Samantha', 'en-US'), voice('System Default', 'de-DE', { default: true })];
+check('no preferred voice: use the marked browser default, not an old heuristic', defaultVoice(LOCAL_ONLY) === LOCAL_ONLY[1]);
+check('no default flag: use the first exposed voice as the last resort', defaultVoice([MACHINE[7], voice('Basic', 'en-US')]) === MACHINE[7]);
 check('handles an empty voice list', defaultVoice([]) === null);
 check('handles a missing list', defaultVoice(undefined) === null);
 check('handles voices with no English option', Boolean(defaultVoice([voice('Hedda', 'de-DE')])));
 check('handles a voice with no name', Boolean(defaultVoice([{ lang: 'en-US', voiceURI: 'x', localService: true }])));
 
-// ------------------------------------------------------------------ ordering
-const { english, others } = groupVoices(MACHINE);
-check('groups English separately', english.length === 9 && others.length === 3, `${english.length}/${others.length}`);
-check('every English voice is in the English group', english.every((entry) => /^en/i.test(entry.lang)));
-check('no English voice leaks into the other group', !others.some((entry) => /^en/i.test(entry.lang)));
-check('English group is best first', scoreVoice(english[0]) >= scoreVoice(english[1]));
-check('other languages are best first too', scoreVoice(others[0]) >= scoreVoice(others[1]),
-  others.map((entry) => entry.name).join(' | '));
-check('locale is a tiebreak, not the primary key', sortVoices([
-  voice('Plain', 'en-US'),
-  voice('Microsoft Aria Online (Natural) - English (United Kingdom)', 'en-GB', { localService: false }),
-])[0].lang === 'en-GB', sortVoices([
-  voice('Plain', 'en-US'),
-  voice('Microsoft Aria Online (Natural) - English (United Kingdom)', 'en-GB', { localService: false }),
-])[0].name);
+// ------------------------------------------------------------------ grouping
+const { natural, basic } = groupVoices(MACHINE);
+check('Natural/Online voices and basic voices are separate', natural.length === 4 && basic.length === 8, `${natural.length}/${basic.length}`);
+check('only names containing Natural/Online enter the top group', natural.every(isNaturalVoice));
+check('basic group has no Natural/Online names', basic.every((entry) => !isNaturalVoice(entry)));
+check('grouping retains every voice without duplicates', new Set([...natural, ...basic]).size === MACHINE.length);
+check('top group is priority-sorted', natural[0] === best && natural.every((entry, i) => !i || scoreVoice(natural[i - 1]) >= scoreVoice(entry)));
+check('Google voices keep their named priority within the basic group', basic[0] === MACHINE[3] && basic[1] === MACHINE[2]);
+check('locale cannot override a higher named tier', sortVoices([
+  voice('Plain', 'en-US'), voice('Microsoft Aria Online (Natural) - English (United Kingdom)', 'en-GB'),
+])[0].lang === 'en-GB');
+check('voice sorting does not mutate the browser list', MACHINE[0].default && MACHINE[4] === best);
 
 // ------------------------------------------------------------------ selection
 const chosen = MACHINE[4];
@@ -173,6 +165,7 @@ async function renderPanel(voices, savedKey, memories = [], memoryError = '') {
         process.stdout.write(renderToStaticMarkup(createElement(SettingsPanel, {
           settings, voices, memories: ${JSON.stringify(memories)}, memoryError: ${JSON.stringify(memoryError)}, connection: 'connected', modelAvailable: true, standalone: false,
           onClose() {}, onSave() {}, onConnectionChange() {}, openerRef: { current: null },
+          onTestVoice() {}, onStopVoiceTest() {}, speechAvailable: true, voiceTestDisabled: false,
         })));
       `,
       resolveDir: root,
@@ -204,22 +197,29 @@ const options = [...panel.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/optio
 
 check('panel renders the NOVA Voice selector', /<label[^>]*for="nova-voice"[^>]*>NOVA Voice<\/label>|>NOVA Voice</.test(panel));
 check('panel renders a select bound to nova-voice', /<select[^>]*id="nova-voice"/.test(panel));
-check('selector lists every voice', options.length === MACHINE.length, `${options.length} of ${MACHINE.length}`);
-check('selector groups English and other languages', /<optgroup label="English">/.test(panel) && /<optgroup label="Other languages">/.test(panel));
-check('English voices appear before other languages', panel.indexOf('<optgroup label="English">') < panel.indexOf('<optgroup label="Other languages">'));
+check('selector lists every voice plus Automatic', options.length === MACHINE.length + 1, `${options.length - 1} of ${MACHINE.length}`);
+check('selector separates Natural/Online from basic system voices', /<optgroup label="Natural \/ Online">/.test(panel) && /<optgroup label="Basic system voices">/.test(panel));
+check('Natural/Online voices appear above basic voices', panel.indexOf('<optgroup label="Natural / Online">') < panel.indexOf('<optgroup label="Basic system voices">'));
 check('labels mark which voices work offline', options.some((option) => option.label.includes('· offline')) && options.some((option) => option.label.includes('· network')));
 
 const bestKey = voiceKey(best);
 const selectedOption = options.find((option) => option.value === bestKey);
 check('the natural voice is offered as an option', Boolean(selectedOption), bestKey);
-check('the app-named voice is pre-selected', panel.includes(`value="${bestKey}" selected`),
-  `pre-selected: ${bestKey}`);
+check('Automatic is selected and names the priority winner', /<option value="" selected/.test(panel) && panel.includes(`Automatic — ${best.name}`));
 check('panel states the speaking parameters', panel.includes(`rate ${TTS.rate}`) && panel.includes(`pitch ${TTS.pitch}`) && panel.includes(`volume ${TTS.volume}`));
+
+const naturalOptions = panel.match(/<optgroup label="Natural \/ Online">([\s\S]*?)<\/optgroup>/)?.[1] ?? '';
+check('rendered top group contains only Natural/Online voices', [...naturalOptions.matchAll(/<option[^>]*>([^<]*)<\/option>/g)]
+  .every((match) => /natural|online/i.test(match[1])));
+check('Test Voice is a non-submit button', /<button[^>]*class="[^"]*test-voice-button[^>]*type="button"[^>]*>Test Voice<\/button>/.test(panel));
+check('panel shows the exact sample phrase', panel.includes("Hey, I&#x27;m Nova. Ready when you are."));
 
 // A saved choice must win over the automatic one.
 const savedPanel = await renderPanel(MACHINE, 'Samantha-uri');
 check('a saved voice is selected', /<option value="Samantha-uri"[^>]*selected/.test(savedPanel)
   || savedPanel.includes('value="Samantha-uri" selected'), 'Samantha-uri');
+const legacyVoicePanel = await renderPanel(MACHINE, 'Samantha');
+check('legacy name selections normalize to the dropdown URI', /<option value="Samantha-uri"[^>]*selected/.test(legacyVoicePanel));
 
 // A voice that has since been uninstalled must be reported, not silently swapped.
 const missingPanel = await renderPanel(MACHINE, 'Ghost-uri');
@@ -466,7 +466,7 @@ check('a question enters thinking and disables the mic button', ui.find('status-
 mic.end();
 await ui.settle();
 const reply = ui.utterances[0];
-check('App speaks the answer with the selected browser voice and parameters', reply?.voice?.name === 'Samantha' && reply.rate === .95 && reply.pitch === .9 && reply.volume === 1);
+check('App speaks the answer with the selected browser voice and parameters', reply?.voice?.name === 'Samantha' && reply.rate === .92 && reply.pitch === .88 && reply.volume === 1);
 check('queued speech stays speaking, not happy or standby', ui.find('status-word')?.props.children === 'NOVA SPEAKING' && !ui.find('wake-indicator') && !ui.find('avatar-container')?.props.className.includes('is-happy'));
 const beforeSpeechEnd = mic.starts.length;
 ui.clock.tick(10000);
@@ -637,6 +637,8 @@ deniedUi.clock.tick(60000);
 check('App explains denied microphone permission without repeated prompts', deniedUi.find('wake-message')?.props.children.includes('Microphone access is blocked') && deniedUi.recognition.instances[0].starts.length === 1 && !deniedUi.find('wake-indicator'));
 deniedUi.unmount();
 
+// Voice preview/selection and memory use the same compiled App fixture.
+await verifyVoices(check);
 await verifyMemory(check, renderPanel);
 
 const failed = problems.length;

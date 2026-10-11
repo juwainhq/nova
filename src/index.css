@@ -229,6 +229,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 .is-offline .robot-avatar { animation: orb-sad-sway 4s ease-in-out infinite; }
 .is-offline .avatar-backlight { opacity: .38; }
 
+.active-voice-label { max-width: min(420px, 86vw); margin: 4px 0 0; color: var(--muted); font: 9px/1.4 var(--mono); opacity: .8; overflow-wrap: anywhere; }
+
 .tagline {
   max-width: min(760px, 90vw);
   margin: 27px 0 0;
@@ -348,6 +350,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 .settings-select option { background: #160d08; color: #fff0df; }
 .field-hint { margin: 7px 0 0; color: #a38a72; font-size: 9px; line-height: 1.55; }
 .field-hint-error { color: #e49b70; }
+.voice-preview { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .field-help { margin-top: 10px; }
 .field-help summary {
   color: #d4ad89;

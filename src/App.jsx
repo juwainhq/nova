@@ -7,6 +7,7 @@ import {
 } from './memory.js';
 import {
   TTS,
+  TTS_TEST_TEXT,
   TTS_VOICE_KEY,
   WAKE_WORD,
   WAKE_UNSUPPORTED_MESSAGE,
@@ -244,7 +245,8 @@ function hasOllamaModel(models, model) {
 // Exported so scripts/verify-speech.mjs can render the panel and inspect the
 // voice selector it produces.
 export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef,
-  memories = [], memoryError = '', onDeleteMemory = () => {}, onClearMemory = () => false }) {
+  memories = [], memoryError = '', onDeleteMemory = () => {}, onClearMemory = () => false,
+  onTestVoice = null, onStopVoiceTest = null, voiceTestPlaying = false, voiceTestDisabled = true, speechAvailable = false }) {
   const [draft, setDraft] = useState(settings);
   const [testStatus, setTestStatus] = useState('idle');
   const [testMessage, setTestMessage] = useState('');
@@ -280,9 +282,10 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
     return () => {
       window.removeEventListener('keydown', handleKey);
       testControllerRef.current?.abort();
+      onStopVoiceTest?.();
       openerRef.current?.focus();
     };
-  }, [onClose, openerRef]);
+  }, [onClose, onStopVoiceTest, openerRef]);
 
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -343,10 +346,10 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
     }
   };
 
-  const { english: englishVoices, others: otherVoices } = groupVoices(voices);
-  // Until the user picks one, the dropdown reflects the voice the app would choose.
+  const { natural: naturalVoices, basic: basicVoices } = groupVoices(voices);
+  // An empty key follows the priority list, including voices arriving after load.
   const autoVoice = defaultVoice(voices);
-  const selectedKey = resolveVoice(voices, draft.voiceKey) ? draft.voiceKey : voiceKey(autoVoice);
+  const selectedKey = voiceKey(resolveVoice(voices, draft.voiceKey));
   const selectedVoice = resolveVoice(voices, selectedKey) || autoVoice;
   // A saved voice can vanish if the user uninstalls it; say so rather than silently
   // switching under them.
@@ -433,19 +436,23 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 className="settings-select"
                 value={selectedKey}
                 disabled={!voiceCount}
-                onChange={(event) => setDraft((current) => ({ ...current, voiceKey: event.target.value }))}
+                onChange={(event) => {
+                  onStopVoiceTest?.();
+                  setDraft((current) => ({ ...current, voiceKey: event.target.value }));
+                }}
               >
-                {!voiceCount && <option value="">No voices available in this browser</option>}
-                {englishVoices.length > 0 && (
-                  <optgroup label="English">
-                    {englishVoices.map((voice) => (
+                <option value="">{voiceCount ? `Automatic — ${autoVoice?.name || 'browser default'}`
+                  : speechAvailable ? 'No voices available yet — browser default' : 'No voices available in this browser'}</option>
+                {naturalVoices.length > 0 && (
+                  <optgroup label="Natural / Online">
+                    {naturalVoices.map((voice) => (
                       <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
                     ))}
                   </optgroup>
                 )}
-                {otherVoices.length > 0 && (
-                  <optgroup label="Other languages">
-                    {otherVoices.map((voice) => (
+                {basicVoices.length > 0 && (
+                  <optgroup label="Basic system voices">
+                    {basicVoices.map((voice) => (
                       <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
                     ))}
                   </optgroup>
@@ -453,15 +460,25 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               </select>
               <p className="field-hint" aria-live="polite">
                 {voiceCount
-                  ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} from this ${standalone ? 'device' : 'browser'}, best first. “offline” voices need no connection.`
-                  : 'This browser exposes no speech voices yet. Reopen the panel if the list is still loading.'}
+                  ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} from this ${standalone ? 'device' : 'browser'}. Natural / Online first, basic voices separate. “network” voices need a connection.`
+                  : speechAvailable ? 'The voice list is still empty. The browser default can speak while voices load.'
+                    : 'No speech voices are available in this browser.'}
               </p>
               <p className={`field-hint ${savedVoiceMissing ? 'field-hint-error' : ''}`}>
                 {savedVoiceMissing && selectedVoice
                   ? `Your saved voice is no longer installed. Falling back to ${describeVoice(selectedVoice)}.`
                   : selectedVoice
-                    ? `Speaking with ${describeVoice(selectedVoice)} at rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
-                    : 'Speech runs in your browser — no API key and no network needed.'}
+                    ? `Selected: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
+                    : `Browser default · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
+              </p>
+              <div className="voice-preview">
+                <button className="test-ollama-button test-voice-button" type="button" disabled={voiceTestDisabled || voiceTestPlaying} onClick={() => onTestVoice?.(draft.voiceKey)}>Test Voice</button>
+                {voiceTestPlaying && <button className="text-button voice-test-stop" type="button" onClick={onStopVoiceTest}>Stop test</button>}
+              </div>
+              <p className="field-hint">
+                {!speechAvailable ? 'Speech synthesis is not supported in this browser.'
+                  : voiceTestDisabled && !voiceTestPlaying ? `Wait until ${APP_NAME} finishes answering to test a voice.`
+                  : `Preview: “${TTS_TEST_TEXT}”`}
               </p>
             </div>
 
@@ -594,6 +611,15 @@ function App() {
   // Brief wake and post-reply flourishes; busy stages always take visual priority.
   const [mood, setMood] = useState('idle');
   const voices = useSpeechVoices();
+  const [speechVoiceName, setSpeechVoiceName] = useState('');
+  const [voiceTestPlaying, setVoiceTestPlaying] = useState(false);
+  const voiceTestRef = useRef(false);
+  const speechAvailable = typeof window !== 'undefined' && typeof window.speechSynthesis?.speak === 'function'
+    && typeof SpeechSynthesisUtterance === 'function';
+  const preferredVoice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
+  const activeVoiceName = speechVoiceName || (speechAvailable
+    ? (preferredVoice ? preferredVoice.name || 'Unnamed voice' : 'Browser default')
+    : 'Speech unavailable');
   const moodTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const settingsTriggerRef = useRef(null);
@@ -615,6 +641,12 @@ function App() {
     setNotice(message);
     window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(''), 4600);
+  }, []);
+
+  const stopVoiceTest = useCallback(() => {
+    if (!voiceTestRef.current) return; // Closing settings must never stop a normal reply.
+    speechFinishRef.current?.();
+    window.speechSynthesis?.cancel();
   }, []);
 
   const celebrate = useCallback(() => {
@@ -805,13 +837,14 @@ function App() {
 
   // Resolve only when speech ends, not when it is queued. Otherwise standby
   // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
-  const speakAnswer = useCallback((text) => {
-    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+  const speakAnswer = useCallback((text, selectedVoiceKey = settings.voiceKey, preview = false) => {
+    if (typeof window.speechSynthesis?.speak !== 'function' || typeof SpeechSynthesisUtterance !== 'function') {
       setStage('ready');
       notify('This browser has no speech synthesis, so replies will stay silent.');
       return Promise.resolve();
     }
 
+    voiceListenerRef.current?.setMode(null);
     speechFinishRef.current?.(false);
     window.speechSynthesis.cancel();
     return new Promise((resolve) => {
@@ -820,7 +853,7 @@ function App() {
       let speechPulseTimer;
       let finished = false;
 
-      const voice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
+      const voice = resolveVoice(voices, selectedVoiceKey) || defaultVoice(voices);
       if (voice) {
         utterance.voice = voice;
         if (voice.lang) utterance.lang = voice.lang;
@@ -835,11 +868,15 @@ function App() {
         window.clearTimeout(speechPulseTimer);
         avatarElement?.classList.remove('speech-boundary-active');
         avatarElement?.style.removeProperty('--audio-pulse');
-        if (speechFinishRef.current === finishSpeech) speechFinishRef.current = null;
+        if (speechFinishRef.current === finishSpeech) {
+          speechFinishRef.current = null;
+          voiceTestRef.current = false;
+          setVoiceTestPlaying(false);
+          setSpeechVoiceName('');
+        }
         if (resume) setStage('ready');
         resolve();
       };
-      speechFinishRef.current = finishSpeech;
       utterance.onstart = () => { if (!finished) setStage('speaking'); };
       // No word events: neutral eye light/scale, with the CSS speaking bounce intact.
       utterance.onboundary = (event) => {
@@ -853,7 +890,17 @@ function App() {
         }, 125);
       };
       utterance.onend = () => finishSpeech();
-      utterance.onerror = () => finishSpeech();
+      utterance.onerror = () => {
+        if (finished) return;
+        finishSpeech();
+        if (preview) notify('Voice preview could not play. Check your browser’s voice service or connection.');
+      };
+      speechFinishRef.current = finishSpeech;
+      // Publish only after configuration succeeds, and freeze the actual utterance's
+      // name even if voiceschanged updates the automatic pick while it is queued.
+      setSpeechVoiceName(voice ? voice.name || 'Unnamed voice' : 'Browser default');
+      voiceTestRef.current = preview;
+      setVoiceTestPlaying(preview);
       setStage('speaking'); // Also covers an engine's queue before onstart.
       try {
         window.speechSynthesis.speak(utterance);
@@ -867,6 +914,17 @@ function App() {
   // Both refs are refreshed on every render, so callbacks that outlive a render still
   // reach the current speaker and the current request handler.
   speakRef.current = speakAnswer;
+
+  const testVoice = useCallback((key) => {
+    if (!settingsOpen || stage === 'thinking' || stage === 'speaking' || requestControllerRef.current || speechFinishRef.current) return;
+    window.clearTimeout(moodTimerRef.current);
+    setMood('idle');
+    void speakRef.current?.(TTS_TEST_TEXT, key, true)?.catch(() => {
+      stopVoiceTest();
+      setStage('ready');
+      notify('Voice preview could not start in this browser.');
+    });
+  }, [notify, settingsOpen, stage, stopVoiceTest]);
 
   // Keep the recognizer's event handler pointed at the latest assistant request.
   promptRef.current = (text) => {
@@ -1010,12 +1068,13 @@ function App() {
       notify('Settings could not be saved in this browser.');
       return;
     }
+    stopVoiceTest();
     setSettings(updatedSettings);
     setSettingsOpen(false);
     notify('Settings saved.');
   };
 
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => { stopVoiceTest(); setSettingsOpen(false); }, [stopVoiceTest]);
   const updateConnectionStatus = useCallback((nextConnection, nextModelAvailable) => {
     setConnection(nextConnection);
     setModelAvailable(nextModelAvailable);
@@ -1045,6 +1104,7 @@ function App() {
               <RobotAvatar />
             </div>
           </div>
+          <p className="active-voice-label" title={activeVoiceName} aria-label={`Active voice: ${activeVoiceName}`} aria-live="polite" aria-atomic="true">{activeVoiceName}</p>
           {connection === 'offline' && (
             <div className="avatar-offline-display" role="status" aria-live="polite">
               <span>{APP_NAME} OFFLINE —</span>
@@ -1090,6 +1150,11 @@ function App() {
         <SettingsPanel
           settings={settings}
           voices={voices}
+          speechAvailable={speechAvailable}
+          voiceTestPlaying={voiceTestPlaying}
+          voiceTestDisabled={!speechAvailable || stage === 'thinking' || stage === 'speaking'}
+          onTestVoice={testVoice}
+          onStopVoiceTest={stopVoiceTest}
           memories={memoryState.facts}
           memoryError={memoryState.error}
           onDeleteMemory={deleteSavedMemory}

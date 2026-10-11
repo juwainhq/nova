@@ -29,7 +29,7 @@ const SOURCE_FILES = [
   'index.dev.html', 'vite.config.js', 'package.json',
   'src/App.jsx', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/memory.js', 'src/index.css', 'src/brand.js',
   'scripts/build-standalone.mjs', 'scripts/verify-standalone.mjs',
-  'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/sync-pages.mjs',
+  'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/voice-checks.mjs', 'scripts/sync-pages.mjs',
 ];
 const sources = Object.fromEntries(await Promise.all(
   SOURCE_FILES.map(async (file) => [file, await read(file)]),
@@ -82,7 +82,8 @@ check('app imports the brand name', /import \{ APP_NAME \} from '\.\/brand\.js'/
 check('status messages are built from the brand name',
   /ready: `\$\{APP_NAME\} READY`/.test(appSource) && /speaking: `\$\{APP_NAME\} SPEAKING`/.test(appSource));
 check('system prompt is built from the brand name', /You are \$\{APP_NAME\}/.test(appSource));
-check('voice preference follows the brand name', /ASSISTANT_NAME = APP_NAME\.toLowerCase\(\)/.test(sources['src/speech.js']));
+check('stock voice priorities are not confused with branding', sources['src/speech.js'].includes("'Microsoft Aria Online'")
+  && sources['src/speech.js'].includes("'Microsoft Guy Online'") && !/ASSISTANT_NAME_BONUS/.test(sources['src/speech.js']));
 
 // --------------------------------------------------- the real UI, actually rendered
 // Renders App itself, so the name is confirmed in the markup a user would see rather

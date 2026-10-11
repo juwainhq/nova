@@ -185,7 +185,8 @@ const appBuild = build({
 });
 
 export async function createAppHarness({ continuous = true, missingRecognition = false, speech = true,
-  storage = createStorageDouble(), panelProps = null, modelsOffline = false } = {}) {
+  storage = createStorageDouble(), panelProps = null, modelsOffline = false, missingSynthesis = false,
+  voices = [{ name: 'Samantha', lang: 'en-US', voiceURI: 'samantha', localService: true }] } = {}) {
   const clock = createClock();
   const recognition = createRecognitionDouble(clock, { continuous });
   const audio = createAudioDouble();
@@ -193,6 +194,9 @@ export async function createAppHarness({ continuous = true, missingRecognition =
   const requests = [];
   const pendingChats = [];
   let cancellations = 0;
+  let voiceList = voices;
+  let voiceReads = 0;
+  let voiceReadError = false;
   const window = Object.assign(eventTarget(), {
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -201,11 +205,16 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     localStorage: storage,
     location: { origin: 'https://nova.test' },
     speechSynthesis: Object.assign(eventTarget(), {
-      getVoices: () => [{ name: 'Samantha', lang: 'en-US', voiceURI: 'samantha', localService: true }],
+      getVoices() {
+        voiceReads += 1;
+        if (voiceReadError) throw new Error('Test voice enumeration failure');
+        return [...voiceList];
+      },
       cancel() { cancellations += 1; },
       speak(utterance) { utterances.push(utterance); },
     }),
   });
+  if (missingSynthesis) delete window.speechSynthesis;
   const document = Object.assign(eventTarget(), { hidden: false });
   const slots = [];
   let cursor = 0;
@@ -305,7 +314,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     },
   };
   if (avatar) avatar.props.ref.current = avatarElement;
-  window.speechSynthesis.speak = (utterance) => {
+  if (window.speechSynthesis) window.speechSynthesis.speak = (utterance) => {
     if (speechThrows) throw new Error('Test synthesis failure');
     utterances.push(utterance);
   };
@@ -315,6 +324,13 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     updatePanel(next) { Object.assign(props, next); dirty = true; flush(); },
     get tree() { return tree; },
     get cancellations() { return cancellations; },
+    get voiceReads() { return voiceReads; },
+    set voiceReadError(value) { voiceReadError = value; },
+    updateVoices(next, emit = true) {
+      voiceList = next;
+      if (emit) window.speechSynthesis?.dispatch('voiceschanged');
+      flush();
+    },
     set chatError(value) { chatError = value; },
     set chatAnswer(value) { chatAnswer = value; },
     set deferChat(value) { deferChat = value; },
