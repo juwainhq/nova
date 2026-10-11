@@ -11,6 +11,37 @@ function readSetting(key, fallback = '') {
   }
 }
 
+function trimTrailingSlashes(url) {
+  return url.trim().replace(/\/+$/, '');
+}
+
+// Same-origin Vite proxy paths. They only resolve when the app is served by the
+// local Vite dev/preview server; static hosts (GitHub Pages) have no backend.
+const OLLAMA_PROXY_PATH = '/api/ollama';
+const ELEVENLABS_PROXY_PATH = '/api/elevenlabs';
+
+// Ollama exposes an OpenAI-compatible API under `/v1`. Without a custom URL we
+// keep using the Vite proxy so the browser stays same-origin in local dev.
+function ollamaEndpoint(settings) {
+  const custom = trimTrailingSlashes(settings.ollamaUrl || '');
+  if (!custom) return OLLAMA_PROXY_PATH;
+  return /\/v1$/i.test(custom) ? custom : `${custom}/v1`;
+}
+
+function elevenLabsEndpoint(settings) {
+  const custom = trimTrailingSlashes(settings.elevenlabsUrl || '');
+  return custom || ELEVENLABS_PROXY_PATH;
+}
+
+function endpointWarning(value) {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return '';
+  if (!/^https?:\/\/\S+$/i.test(trimmed)) {
+    return 'Enter a full URL starting with http:// or https://';
+  }
+  return '';
+}
+
 function SettingsIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -183,8 +214,8 @@ async function attachAvatarAudioMeter(audio, avatarElement) {
   }
 }
 
-async function fetchOllamaModels(signal) {
-  const response = await fetch('/api/ollama/models', { signal });
+async function fetchOllamaModels(endpoint, signal) {
+  const response = await fetch(`${endpoint}/models`, { signal });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error?.message || `Ollama returned ${response.status}.`);
@@ -252,7 +283,7 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
     setVoiceLoading(true);
     const timer = window.setTimeout(async () => {
       try {
-        const response = await fetch('/api/elevenlabs/v1/voices', {
+        const response = await fetch(`${elevenLabsEndpoint(draft)}/v1/voices`, {
           headers: { 'xi-api-key': apiKey },
           signal: controller.signal,
         });
@@ -277,7 +308,7 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [draft.apiKey, voiceRefresh]);
+  }, [draft.apiKey, draft.elevenlabsUrl, voiceRefresh]);
 
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -289,9 +320,9 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
     const controller = new AbortController();
     testControllerRef.current = controller;
     setTestStatus('checking');
-    setTestMessage('Checking the local Ollama endpoint…');
+    setTestMessage('Checking the configured Ollama endpoint…');
     try {
-      const models = await fetchOllamaModels(controller.signal);
+      const models = await fetchOllamaModels(ollamaEndpoint(draft), controller.signal);
       const requestedModel = draft.model.trim() || OLLAMA_MODEL;
       const installed = hasOllamaModel(models, requestedModel);
       const savedModel = settings.model.trim() || OLLAMA_MODEL;
@@ -357,6 +388,30 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
               <p className="field-hint">Used for local responses. Default: {OLLAMA_MODEL}</p>
             </div>
 
+            <div className="settings-field">
+              <label className="field-label" htmlFor="ollama-url">Ollama endpoint <span>OPTIONAL</span></label>
+              <input
+                id="ollama-url"
+                className="settings-input"
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck="false"
+                placeholder="http://localhost:11434"
+                value={draft.ollamaUrl}
+                onChange={(event) => {
+                  setDraft((current) => ({ ...current, ollamaUrl: event.target.value }));
+                  setTestStatus('idle');
+                  setTestMessage('');
+                }}
+              />
+              <p className={`field-hint ${endpointWarning(draft.ollamaUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
+                {endpointWarning(draft.ollamaUrl)
+                  || 'Leave blank to use the local Vite proxy. On a static host such as GitHub Pages, enter a backend the browser can reach that also allows this site’s origin (CORS).'}
+              </p>
+            </div>
+
             <div className="settings-divider" />
 
             <div className="settings-field">
@@ -402,6 +457,26 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
               </p>
             </div>
 
+            <div className="settings-field">
+              <label className="field-label" htmlFor="eleven-url">ElevenLabs endpoint <span>OPTIONAL</span></label>
+              <input
+                id="eleven-url"
+                className="settings-input"
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck="false"
+                placeholder="https://api.elevenlabs.io"
+                value={draft.elevenlabsUrl}
+                onChange={(event) => setDraft((current) => ({ ...current, elevenlabsUrl: event.target.value }))}
+              />
+              <p className={`field-hint ${endpointWarning(draft.elevenlabsUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
+                {endpointWarning(draft.elevenlabsUrl)
+                  || 'Leave blank to use the local Vite proxy or the default ElevenLabs host.'}
+              </p>
+            </div>
+
             <div className="settings-divider" />
 
             <label className="settings-toggle-row" htmlFor="show-transcript">
@@ -424,7 +499,7 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
             <div className="settings-test">
               <div className="settings-test-heading">
                 <div>
-                  <span className="config-title">Local Ollama</span>
+                  <span className="config-title">Ollama connection</span>
                   <span className="config-detail">{connectionLabel}</span>
                 </div>
                 <button className="test-ollama-button" type="button" onClick={testOllama} disabled={testStatus === 'checking'}>
@@ -454,8 +529,10 @@ function App() {
   const [modelAvailable, setModelAvailable] = useState(null);
   const [settings, setSettings] = useState(() => ({
     model: readSetting('aria.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
+    ollamaUrl: readSetting('aria.ollama.url'),
     apiKey: readSetting('aria.elevenlabs.apiKey'),
     voiceId: readSetting('aria.elevenlabs.voiceId', DEFAULT_ELEVENLABS_VOICE),
+    elevenlabsUrl: readSetting('aria.elevenlabs.url'),
     showTranscript: readSetting('aria.transcript.visible', 'false') === 'true',
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -487,7 +564,7 @@ function App() {
     setModelAvailable(null);
     const checkOllama = async () => {
       try {
-        const models = await fetchOllamaModels(controller.signal);
+        const models = await fetchOllamaModels(ollamaEndpoint(settings), controller.signal);
         setConnection('connected');
         setModelAvailable(hasOllamaModel(models, settings.model || OLLAMA_MODEL));
       } catch (error) {
@@ -499,7 +576,7 @@ function App() {
     };
     checkOllama();
     return () => controller.abort();
-  }, [settings.model]);
+  }, [settings.model, settings.ollamaUrl]);
 
   const askAria = useCallback(async (text) => {
     const prompt = text.trim();
@@ -517,7 +594,7 @@ function App() {
     ];
 
     try {
-      const result = await fetch('/api/ollama/chat/completions', {
+      const result = await fetch(`${ollamaEndpoint(settings)}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true }),
@@ -537,7 +614,7 @@ function App() {
       await speakAnswer(answer);
     } catch (error) {
       try {
-        const models = await fetchOllamaModels();
+        const models = await fetchOllamaModels(ollamaEndpoint(settings));
         setConnection('connected');
         setModelAvailable(hasOllamaModel(models, settings.model || OLLAMA_MODEL));
       } catch {
@@ -546,7 +623,7 @@ function App() {
       }
       setStage('ready');
       const detail = error.message === 'Failed to fetch'
-        ? 'I could not reach Ollama. Check that it is running at localhost:11434 and the model is installed.'
+        ? `I could not reach Ollama at ${(settings.ollamaUrl || '').trim() || 'localhost:11434'}. Check that the endpoint is running, reachable from this page, and allows cross-origin requests.`
         : `I couldn't get a response from Ollama. ${error.message}`;
       notify(detail);
     }
@@ -562,7 +639,7 @@ function App() {
       let stopAudioMeter = () => {};
       try {
         const voiceId = settings.voiceId.trim() || DEFAULT_ELEVENLABS_VOICE;
-        const result = await fetch(`/api/elevenlabs/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+        const result = await fetch(`${elevenLabsEndpoint(settings)}/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -750,14 +827,18 @@ function App() {
   const saveSettings = (nextSettings) => {
     const updatedSettings = {
       model: nextSettings.model.trim() || OLLAMA_MODEL,
+      ollamaUrl: trimTrailingSlashes(nextSettings.ollamaUrl || ''),
       apiKey: nextSettings.apiKey.trim(),
       voiceId: nextSettings.voiceId.trim() || DEFAULT_ELEVENLABS_VOICE,
+      elevenlabsUrl: trimTrailingSlashes(nextSettings.elevenlabsUrl || ''),
       showTranscript: Boolean(nextSettings.showTranscript),
     };
     try {
       window.localStorage.setItem('aria.ollama.model', updatedSettings.model);
+      window.localStorage.setItem('aria.ollama.url', updatedSettings.ollamaUrl);
       window.localStorage.setItem('aria.elevenlabs.apiKey', updatedSettings.apiKey);
       window.localStorage.setItem('aria.elevenlabs.voiceId', updatedSettings.voiceId);
+      window.localStorage.setItem('aria.elevenlabs.url', updatedSettings.elevenlabsUrl);
       window.localStorage.setItem('aria.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
       notify('Settings could not be saved in this browser.');
@@ -794,7 +875,7 @@ function App() {
             {connection === 'offline' && (
               <div className="avatar-offline-display" role="status" aria-live="polite">
                 <span>ARIA OFFLINE —</span>
-                <span>Start Ollama to connect</span>
+                <span>{(settings.ollamaUrl || '').trim() ? 'Check your Ollama endpoint' : 'Start Ollama to connect'}</span>
               </div>
             )}
           </div>

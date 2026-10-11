@@ -17,16 +17,35 @@ const apiProxy = {
   },
 };
 
+// The repository root also holds the built, Pages-ready `index.html`. Without
+// this, `npm run dev` would serve that stale bundle at `/` instead of the
+// hot-reloading source entry. Production builds are untouched.
+function serveDevEntryAtRoot() {
+  return {
+    name: 'aria-serve-dev-entry-at-root',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const [pathname, search = ''] = (req.url || '').split('?');
+        if (pathname === '/' || pathname === '/index.html') {
+          req.url = `/index.dev.html${search ? `?${search}` : ''}`;
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
   base: './',
-  plugins: [react()],
+  plugins: [react(), serveDevEntryAtRoot()],
   build: {
     rollupOptions: {
       input: { index: 'index.dev.html' },
     },
   },
   server: {
-    open: '/index.dev.html',
+    open: '/',
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
