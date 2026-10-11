@@ -3,6 +3,26 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
 const DEFAULT_ELEVENLABS_VOICE = '21m00Tcm4TlvDq8ikWAM';
 
+// Replaced at build time by scripts/build-standalone.mjs. The standalone file is
+// opened from a file:// URL, where there is no origin server, so the Vite proxy
+// paths cannot resolve and the only sensible default is a direct local endpoint.
+const STANDALONE_BUILD = typeof __ARIA_STANDALONE__ !== 'undefined' && __ARIA_STANDALONE__ === true;
+
+function defaultOllamaUrl() {
+  return STANDALONE_BUILD ? 'http://localhost:11434' : '';
+}
+
+function defaultElevenLabsUrl() {
+  return STANDALONE_BUILD ? 'https://api.elevenlabs.io' : '';
+}
+
+// What the operator must allow for this page's origin to reach their Ollama.
+function ollamaOriginsCommand() {
+  if (STANDALONE_BUILD) return 'OLLAMA_ORIGINS=* ollama serve';
+  const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : '';
+  return origin ? `OLLAMA_ORIGINS=${origin} ollama serve` : 'OLLAMA_ORIGINS=* ollama serve';
+}
+
 function readSetting(key, fallback = '') {
   try {
     return window.localStorage.getItem(key) ?? fallback;
@@ -19,6 +39,10 @@ function trimTrailingSlashes(url) {
 // local Vite dev/preview server; static hosts (GitHub Pages) have no backend.
 const OLLAMA_PROXY_PATH = '/api/ollama';
 const ELEVENLABS_PROXY_PATH = '/api/elevenlabs';
+
+// The standalone single-file build, published beside index.html at the site root.
+const STANDALONE_PAGE = './aria.html';
+const STANDALONE_FILENAME = 'aria.html';
 
 // Ollama exposes an OpenAI-compatible API under `/v1`. Without a custom URL we
 // keep using the Vite proxy so the browser stays same-origin in local dev.
@@ -40,6 +64,47 @@ function endpointWarning(value) {
     return 'Enter a full URL starting with http:// or https://';
   }
   return '';
+}
+
+// A hint that tells the operator exactly how to let this page reach Ollama.
+function ConnectionHelp() {
+  const originsCommand = ollamaOriginsCommand();
+  return (
+    <details className="field-help">
+      <summary>Can’t connect? Enable CORS on your Ollama server</summary>
+      <div className="field-help-body">
+        <p>
+          Ollama only accepts browser requests from a fixed list of origins, so it rejects
+          this page until you allow it. Plain <code>http</code> is not the obstacle: browsers
+          treat <code>http://localhost</code> as a secure origin, so this page may call it
+          directly. A <code>file://</code> copy sends <code>Origin: null</code> instead, which
+          no default entry matches — use the setting below for that.
+        </p>
+        <ol>
+          <li>
+            <span>Restart Ollama allowing this page’s origin.</span>
+            <code className="field-help-command">{originsCommand}</code>
+          </li>
+          <li>
+            <span>
+              {STANDALONE_BUILD
+                ? 'A single-file copy cannot know its own origin, so it needs the wildcard above.'
+                : `Narrower than the wildcard: the exact value for this page is ${originsCommand.split('=')[1]?.split(' ollama')[0] || 'this page’s origin'}.`}
+            </span>
+          </li>
+          <li>
+            <span>Or, if you cannot restart it, install a CORS-unblocking browser extension.</span>
+          </li>
+        </ol>
+        <p className="field-help-note">
+          Recent Chrome additionally asks for permission before a public site may reach your
+          local network — allow it when prompted. Hosting Ollama behind HTTPS (a reverse proxy
+          or a tunnel such as ngrok or a Cloudflare tunnel) also works and needs no CORS
+          opening, but exposes your machine to anyone holding the URL.
+        </p>
+      </div>
+    </details>
+  );
 }
 
 function SettingsIcon() {
@@ -229,7 +294,7 @@ function hasOllamaModel(models, model) {
   return models.some((entry) => entry.id === requestedModel || entry.id?.startsWith(`${requestedModel}:`));
 }
 
-function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, onConnectionChange, openerRef }) {
+function SettingsPanel({ settings, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef }) {
   const [draft, setDraft] = useState(settings);
   const [voiceOptions, setVoiceOptions] = useState([]);
   const [voiceLoading, setVoiceLoading] = useState(false);
@@ -237,6 +302,8 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
   const [voiceRefresh, setVoiceRefresh] = useState(0);
   const [testStatus, setTestStatus] = useState('idle');
   const [testMessage, setTestMessage] = useState('');
+  const [downloadStatus, setDownloadStatus] = useState('idle');
+  const [downloadMessage, setDownloadMessage] = useState('');
   const modelInputRef = useRef(null);
   const panelRef = useRef(null);
   const testControllerRef = useRef(null);
@@ -339,6 +406,36 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
     }
   };
 
+  // Fetch the standalone build and download it byte-for-byte. A dev server that
+  // rewrites HTML (Vite HMR injection) would corrupt the file, so the response is
+  // verified against the parsed document before it is offered as a download.
+  const downloadStandalone = async () => {
+    setDownloadStatus('working');
+    setDownloadMessage('Preparing the standalone file…');
+    try {
+      const response = await fetch(STANDALONE_PAGE, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`The standalone file returned ${response.status}.`);
+      const markup = await response.text();
+      const parsed = new DOMParser().parseFromString(markup, 'text/html');
+      if (parsed.querySelectorAll('script').length !== 1) {
+        throw new Error('This is not the standalone build. Serve the repository, or download it from the GitHub Pages site.');
+      }
+      const url = URL.createObjectURL(new Blob([markup], { type: 'text/html' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = STANDALONE_FILENAME;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+      setDownloadStatus('success');
+      setDownloadMessage(`Saved ${STANDALONE_FILENAME}. Open it in Chrome, then allow the local network prompt.`);
+    } catch (error) {
+      setDownloadStatus('error');
+      setDownloadMessage(error.message || 'The standalone file could not be downloaded.');
+    }
+  };
+
   const voiceIsListed = voiceOptions.some((voice) => voice.voice_id === draft.voiceId);
   const fallbackVoiceLabel = !draft.apiKey.trim()
     ? (draft.voiceId === DEFAULT_ELEVENLABS_VOICE ? 'Default voice · add a key to browse' : 'Saved voice · add a key to browse')
@@ -408,8 +505,11 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
               />
               <p className={`field-hint ${endpointWarning(draft.ollamaUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
                 {endpointWarning(draft.ollamaUrl)
-                  || 'Leave blank to use the local Vite proxy. On a static host such as GitHub Pages, enter a backend the browser can reach that also allows this site’s origin (CORS).'}
+                  || (standalone
+                    ? 'This standalone copy is opened from a file on your disk, so it calls Ollama directly. Keep the default unless Ollama listens elsewhere.'
+                    : 'Leave blank to use the local Vite proxy. On a hosted page, point this at a backend the browser can reach.')}
               </p>
+              <ConnectionHelp />
             </div>
 
             <div className="settings-divider" />
@@ -511,6 +611,33 @@ function SettingsPanel({ settings, connection, modelAvailable, onClose, onSave, 
                 {testMessage || 'Ping the local endpoint and check the selected model.'}
               </p>
             </div>
+
+            <div className="settings-divider" />
+
+            <div className="settings-field">
+              <span className="field-label">Offline copy <span>OPTIONAL</span></span>
+              {standalone ? (
+                <p className="field-hint">
+                  You are already running the standalone file, so it works straight from your disk.
+                  Ollama still has to accept this file’s origin — expand the CORS help above.
+                </p>
+              ) : (
+                <>
+                  <button
+                    className="standalone-button"
+                    type="button"
+                    onClick={downloadStandalone}
+                    disabled={downloadStatus === 'working'}
+                  >
+                    {downloadStatus === 'working' ? 'Preparing…' : `Download ${STANDALONE_FILENAME}`}
+                  </button>
+                  <p className={`field-hint ${downloadStatus === 'error' ? 'field-hint-error' : ''}`} role="status" aria-live="polite">
+                    {downloadMessage
+                      || 'One self-contained HTML file with no build step. Open it in Chrome and it calls Ollama directly.'}
+                  </p>
+                </>
+              )}
+            </div>
           </div>
 
           <footer className="settings-panel-footer">
@@ -529,10 +656,10 @@ function App() {
   const [modelAvailable, setModelAvailable] = useState(null);
   const [settings, setSettings] = useState(() => ({
     model: readSetting('aria.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
-    ollamaUrl: readSetting('aria.ollama.url'),
+    ollamaUrl: readSetting('aria.ollama.url', defaultOllamaUrl()),
     apiKey: readSetting('aria.elevenlabs.apiKey'),
     voiceId: readSetting('aria.elevenlabs.voiceId', DEFAULT_ELEVENLABS_VOICE),
-    elevenlabsUrl: readSetting('aria.elevenlabs.url'),
+    elevenlabsUrl: readSetting('aria.elevenlabs.url', defaultElevenLabsUrl()),
     showTranscript: readSetting('aria.transcript.visible', 'false') === 'true',
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -623,7 +750,7 @@ function App() {
       }
       setStage('ready');
       const detail = error.message === 'Failed to fetch'
-        ? `I could not reach Ollama at ${(settings.ollamaUrl || '').trim() || 'localhost:11434'}. Check that the endpoint is running, reachable from this page, and allows cross-origin requests.`
+        ? `I could not reach Ollama at ${(settings.ollamaUrl || '').trim() || 'localhost:11434'}. Check that it is running and that its CORS settings accept this page — open Settings for the exact command.`
         : `I couldn't get a response from Ollama. ${error.message}`;
       notify(detail);
     }
@@ -911,6 +1038,7 @@ function App() {
       {settingsOpen && (
         <SettingsPanel
           settings={settings}
+          standalone={STANDALONE_BUILD}
           connection={connection}
           modelAvailable={modelAvailable}
           onClose={closeSettings}

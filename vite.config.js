@@ -36,9 +36,34 @@ function serveDevEntryAtRoot() {
   };
 }
 
+// Vite rewrites the HTML it serves — it injects the HMR client, including into
+// plain root-level .html files. The standalone download must be byte-exact, so
+// serve that one file from disk untouched. Dev only; production is unaffected.
+function serveStandaloneRaw() {
+  return {
+    name: 'aria-serve-standalone-raw',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const [pathname] = (req.url || '').split('?');
+        if (pathname !== '/aria.html') return next();
+        try {
+          const { readFile } = await import('node:fs/promises');
+          const file = readFile('aria.html');
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(await file);
+        } catch {
+          next();
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
   base: './',
-  plugins: [react(), serveDevEntryAtRoot()],
+  plugins: [react(), serveDevEntryAtRoot(), serveStandaloneRaw()],
   build: {
     rollupOptions: {
       input: { index: 'index.dev.html' },

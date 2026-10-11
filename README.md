@@ -41,7 +41,11 @@ The backend must also permit this page's origin, because the browser calls it di
 OLLAMA_ORIGINS=https://juwainhq.github.io ollama serve
 ```
 
-`http://localhost:11434` from a hosted page targets the **viewer's** own machine, not the deploy host, and browsers treat `localhost` as a secure origin, so it is not blocked as mixed content. Requests still fail if the endpoint is unreachable or rejects the origin.
+`http://localhost:11434` from a hosted page targets the **viewer's** own machine, not the deploy host. Plain HTTP is not what blocks this call: per the Fetch and Secure Contexts specs, `http://localhost` and `http://127.0.0.1` are *potentially trustworthy* origins, so browsers do not treat them as mixed content even on an HTTPS page. What actually rejects the request is Ollama's own CORS allow-list — it answers only a fixed set of origins and sends no `Access-Control-Allow-Origin` for anything else.
+
+So the failing call is a CORS failure, not a mixed-content failure. The settings panel has a "Can't connect?" disclosure that names the exact origin to allow and the command to run, which is generated from the page's real origin, so it stays correct for a Pages deploy, a local preview, or a fork.
+
+Do not reach for `--disable-web-security` or `--allow-running-insecure-content`: neither is needed, and both weaken every site you visit while Chrome runs that way.
 
 Press Space from the main view to toggle the microphone. Microphone access requires a secure browser context (HTTPS or localhost). The live preview must be able to reach Ollama from the machine running its Vite server; `localhost` always refers to that server, not the computer viewing a remote preview.
 
@@ -55,3 +59,26 @@ npm run preview
 After changing the app, run `npm run build:pages` to refresh the root `index.html` and `assets/` bundle used by branch-based GitHub Pages. Commit those generated root files with the source changes. GitHub Pages is static hosting and cannot use the local Vite proxy, so the hosted UI renders but starts in the offline state until you set the Ollama endpoint described above.
 
 In development, `npm run dev` serves the hot-reloading source entry at `/` and `/index.html`, so the stale root Pages bundle is never served from the dev server. `index.dev.html` remains the direct source entry and the build input; the root `index.html` is only ever the published artifact.
+
+## Standalone single file (`aria.html`)
+
+`aria.html` is one self-contained HTML file — CSS and JS inlined, no build step, no server, no `node_modules`. Open it from disk with `file://` and it runs. Settings expose it as **Download aria.html** so the hosted site can hand out a copy.
+
+```bash
+npm run build:standalone   # builds and verifies aria.html
+```
+
+`build:pages` runs this automatically, so the published site always ships a current copy.
+
+The standalone build differs from the hosted page in two ways, both decided at build time by the `__ARIA_STANDALONE__` flag in `src/App.jsx`:
+
+- The Ollama endpoint defaults to `http://localhost:11434` and the ElevenLabs endpoint to `https://api.elevenlabs.io`, instead of the same-origin proxy paths that cannot exist without a server.
+- The CORS helper prints `OLLAMA_ORIGINS=* ollama serve`, because a file has no stable origin to name.
+
+### What a `file://` copy does and does not solve
+
+It sidesteps proxy setup and it avoids mixed-content concerns entirely, since a `file://` document is not an HTTPS document. It does **not** bypass CORS: the browser sends `Origin: null` for a local file, Ollama's default allow-list contains `file://*` rather than `null`, and a response carrying no `Access-Control-Allow-Origin` is refused. Ollama must be started with `OLLAMA_ORIGINS=*` (or the request must pass through something that adds the header) or the file will show the offline state just like the hosted page.
+
+`file://` is also not a normal web origin, so a copy cannot be narrowed to a specific allowed origin and any embedded link would have to be absolute. If a copy is blocked anyway, run `npm run dev` and use the served page instead — `http://localhost:5173` is an allowed Ollama origin by default.
+
+`scripts/verify-standalone.mjs` asserts the properties above on every build: no external references, one inline style and script block, the flag substituted, and — by extracting and executing the compiled defaults — that the file really does fall back to direct endpoints.
