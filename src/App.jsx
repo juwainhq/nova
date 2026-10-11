@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import RobotAvatar from './RobotAvatar.jsx';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
 const DEFAULT_ELEVENLABS_VOICE = '21m00Tcm4TlvDq8ikWAM';
@@ -131,51 +132,6 @@ function MicIcon({ stopped = false }) {
   );
 }
 
-function RobotAvatar() {
-  return (
-    <svg className="robot-avatar" viewBox="0 0 280 280" fill="none" role="img" aria-label="ARIA, a softly glowing white orb">
-      <defs>
-        <radialGradient id="orbSurface" cx="0" cy="0" r="1" gradientTransform="matrix(145 164 -153 135 93 76)" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#FFFDF9" />
-          <stop offset=".48" stopColor="#FFF8EF" />
-          <stop offset=".8" stopColor="#F2E5D5" />
-          <stop offset="1" stopColor="#D8C4AE" />
-        </radialGradient>
-        <radialGradient id="orbHighlight" cx="0" cy="0" r="1" gradientTransform="matrix(48 54 -49 44 91 72)" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#FFFFFF" stopOpacity=".9" />
-          <stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-        </radialGradient>
-        <filter id="orbBloom" x="-45%" y="-45%" width="190%" height="190%" colorInterpolationFilters="sRGB">
-          <feGaussianBlur stdDeviation="15" />
-        </filter>
-        <filter id="orbShadow" x="-35%" y="-25%" width="170%" height="180%" colorInterpolationFilters="sRGB">
-          <feDropShadow dx="0" dy="11" stdDeviation="10" floodColor="#000000" floodOpacity=".28" />
-        </filter>
-        <filter id="mouthBloom" x="-70%" y="-180%" width="240%" height="460%" colorInterpolationFilters="sRGB">
-          <feGaussianBlur stdDeviation="5" />
-        </filter>
-      </defs>
-
-      <circle className="orb-bloom" cx="140" cy="140" r="106" fill="#FFF0DB" filter="url(#orbBloom)" />
-      <path className="blob-shape" d="M141 29C202 29 251 77 251 139C251 199 207 247 146 251C83 254 31 208 29 146C27 84 74 32 134 29C136 29 139 29 141 29Z" fill="url(#orbSurface)" stroke="#FFFDFC" strokeOpacity=".88" strokeWidth="2" filter="url(#orbShadow)" />
-      <ellipse cx="116" cy="83" rx="52" ry="39" fill="url(#orbHighlight)" opacity=".72" />
-      <path d="M63 171C73 215 108 237 146 237" stroke="#C6AD92" strokeOpacity=".22" strokeWidth="2" strokeLinecap="round" />
-      <path d="M217 76C237 95 246 119 246 144" stroke="#FFFFFF" strokeOpacity=".58" strokeWidth="2" strokeLinecap="round" />
-
-      <g className="robot-eye robot-eye-left">
-        <ellipse cx="105" cy="129" rx="5.2" ry="7.2" fill="#5C4636" />
-        <ellipse cx="103.4" cy="126.8" rx="1.5" ry="1.8" fill="#FFFDF8" opacity=".9" />
-      </g>
-      <g className="robot-eye robot-eye-right">
-        <ellipse cx="175" cy="129" rx="5.2" ry="7.2" fill="#5C4636" />
-        <ellipse cx="173.4" cy="126.8" rx="1.5" ry="1.8" fill="#FFFDF8" opacity=".9" />
-      </g>
-      <path className="mouth-glow" d="M108 160Q140 186 172 160" stroke="#FF9A56" strokeWidth="14" strokeLinecap="round" filter="url(#mouthBloom)" />
-      <path className="orb-smile mouth-light" d="M111 160Q140 182 169 160" stroke="#7D5B40" strokeOpacity=".76" strokeWidth="3.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 async function readChatCompletionStream(response) {
   if (!response.body) throw new Error('Ollama did not return a response stream.');
 
@@ -254,8 +210,8 @@ async function attachAvatarAudioMeter(audio, avatarElement) {
       for (let index = 2; index < highIndex; index += 1) total += frequencies[index];
       const average = total / Math.max(1, highIndex - 2);
       const level = Math.max(0, Math.min(1, (average - 5) / 58));
+      // Drives eye glow and the body's per-word swell; the mouth is gone.
       avatarElement.style.setProperty('--audio-pulse', (0.12 + level * 0.88).toFixed(3));
-      avatarElement.style.setProperty('--mouth-scale', (0.78 + level * 0.58).toFixed(3));
       frame = window.requestAnimationFrame(update);
     };
     update();
@@ -266,14 +222,12 @@ async function attachAvatarAudioMeter(audio, avatarElement) {
       window.cancelAnimationFrame(frame);
       avatarElement.classList.remove('audio-meter-active');
       avatarElement.style.removeProperty('--audio-pulse');
-      avatarElement.style.removeProperty('--mouth-scale');
       context?.close().catch(() => {});
     };
   } catch {
     active = false;
     avatarElement.classList.remove('audio-meter-active');
     avatarElement.style.removeProperty('--audio-pulse');
-    avatarElement.style.removeProperty('--mouth-scale');
     context?.close().catch(() => {});
     return () => {};
   }
@@ -665,6 +619,9 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lastResponse, setLastResponse] = useState('');
   const [notice, setNotice] = useState('');
+  // A brief celebratory flourish after a reply lands, then back to idle.
+  const [mood, setMood] = useState('idle');
+  const moodTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const settingsTriggerRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -683,6 +640,17 @@ function App() {
     setNotice(message);
     window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(''), 4600);
+  }, []);
+
+  const celebrate = useCallback(() => {
+    setMood('happy');
+    window.clearTimeout(moodTimerRef.current);
+    moodTimerRef.current = window.setTimeout(() => setMood('idle'), 1500);
+  }, []);
+
+  useEffect(() => () => {
+    window.clearTimeout(moodTimerRef.current);
+    window.clearTimeout(noticeTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -739,6 +707,7 @@ function App() {
         { role: 'assistant', content: answer },
       ].slice(-6);
       await speakAnswer(answer);
+      celebrate();
     } catch (error) {
       try {
         const models = await fetchOllamaModels(ollamaEndpoint(settings));
@@ -756,7 +725,7 @@ function App() {
     }
   // speakAnswer is assigned immediately below and kept current through promptRef.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notify, settings]);
+  }, [notify, settings, celebrate]);
 
   const speakAnswer = useCallback(async (text) => {
     const finish = () => setStage('ready');
@@ -819,7 +788,6 @@ function App() {
         window.clearTimeout(speechPulseTimer);
         avatarElement?.classList.remove('speech-boundary-active');
         avatarElement?.style.removeProperty('--audio-pulse');
-        avatarElement?.style.removeProperty('--mouth-scale');
         finish();
       };
       utterance.rate = 0.97;
@@ -830,12 +798,11 @@ function App() {
         if (!avatarElement) return;
         avatarElement.classList.add('speech-boundary-active');
         const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
+        // Each spoken word lifts the eyes and swells the body a little.
         avatarElement.style.setProperty('--audio-pulse', (0.58 + wordLength * 0.035).toFixed(3));
-        avatarElement.style.setProperty('--mouth-scale', (0.88 + wordLength * 0.045).toFixed(3));
         window.clearTimeout(speechPulseTimer);
         speechPulseTimer = window.setTimeout(() => {
           avatarElement.style.setProperty('--audio-pulse', '.16');
-          avatarElement.style.setProperty('--mouth-scale', '.78');
         }, 125);
       };
       utterance.onend = finishSpeech;
@@ -995,17 +962,23 @@ function App() {
 
       <main className="main-stage">
         <section className="assistant-stage" aria-label="ARIA voice assistant">
-          <div ref={avatarContainerRef} className={`avatar-container ${stage === 'listening' ? 'is-listening' : ''} ${stage === 'speaking' ? 'is-speaking' : ''} ${stage === 'thinking' ? 'is-thinking' : ''}`}>
+          <div
+            ref={avatarContainerRef}
+            className={`avatar-container ${stage === 'listening' ? 'is-listening' : ''} ${stage === 'speaking' ? 'is-speaking' : ''} ${stage === 'thinking' ? 'is-thinking' : ''} ${mood === 'happy' && connection !== 'offline' ? 'is-happy' : ''} ${connection === 'offline' ? 'is-offline' : ''}`}
+          >
             <div className="avatar-backlight" />
             <div className="listen-ring" aria-hidden="true" />
-            <RobotAvatar />
-            {connection === 'offline' && (
-              <div className="avatar-offline-display" role="status" aria-live="polite">
-                <span>ARIA OFFLINE —</span>
-                <span>{(settings.ollamaUrl || '').trim() ? 'Check your Ollama endpoint' : 'Start Ollama to connect'}</span>
-              </div>
-            )}
+            {/* Pose on the wrapper, per-state rhythm on the SVG: nested transforms compose. */}
+            <div className="avatar-figure">
+              <RobotAvatar />
+            </div>
           </div>
+          {connection === 'offline' && (
+            <div className="avatar-offline-display" role="status" aria-live="polite">
+              <span>ARIA OFFLINE —</span>
+              <span>{(settings.ollamaUrl || '').trim() ? 'Check your Ollama endpoint' : 'Start Ollama to connect'}</span>
+            </div>
+          )}
           <h1 className="tagline">Your voice, your world.</h1>
           <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
           {settings.showTranscript && lastResponse && (

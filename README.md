@@ -49,6 +49,37 @@ Do not reach for `--disable-web-security` or `--allow-running-insecure-content`:
 
 Press Space from the main view to toggle the microphone. Microphone access requires a secure browser context (HTTPS or localhost). The live preview must be able to reach Ollama from the machine running its Vite server; `localhost` always refers to that server, not the computer viewing a remote preview.
 
+## Avatar states
+
+The avatar has no mouth. Every expression comes from two channels only — the eyes and the body — so the SVG in `src/RobotAvatar.jsx` stays purely presentational and `src/index.css` drives all of it from state classes on `.avatar-container`.
+
+Eyes are layered three deep so the kinds of motion compose instead of overwriting each other, because nested transforms multiply while a shared element would let the animation win outright:
+
+| Layer | Carries | Mechanism |
+| --- | --- | --- |
+| `.robot-eye` | gaze | animated `translateX` |
+| `.eye-scale` | size: grow, squint, droop | transitioned `scale()` driven by `--eye-sx` / `--eye-sy` |
+| `.eye-lid` | blinking, iris glow | animated `scaleY`, `drop-shadow` |
+
+Body motion is split the same way: `.avatar-figure` holds the pose (`--figure-scale`, `--figure-tilt`) as a transitioned transform, and `.robot-avatar` carries the rhythm (`orb-float`, `orb-wobble`, …) as an animation, so pose and rhythm never share a `transform`.
+
+| State | Eyes | Body |
+| --- | --- | --- |
+| Idle | soft steady glow, occasional slow blink | gentle float up and down |
+| Listening | grow 16% and brighten | 5° tilt in, slow float, pulse ring |
+| Thinking | gaze side to side, left eye squints | wobble, 3% smaller |
+| Speaking | wider, brighten with the voice, rapid blinks | 5% bigger, swells on each word |
+| Happy | crescents replace the iris | quick jump, then small bounces |
+| Offline | droop, dim to half brightness | slow sad sway |
+
+Speaking is driven by real data, not a guess: the Web Audio meter measures the ElevenLabs stream and the speech-synthesis fallback reads word boundaries, both publishing `--audio-pulse` on the container. Eye glow and the body's per-word swell both read that one value, so the movement tracks the voice.
+
+"Happy" is inferred from a reply completing without error, held for 1.5 s and then released — the counterpart to Offline. It is one state change in `askAria`; swapping it for sentiment analysis of the answer text would be a small change.
+
+The offline notice sits **below** the orb rather than over it, so the drooping eyes stay visible.
+
+`npm run verify:avatar` checks all of the above — it renders the avatar through React and inspects the stylesheet, so a reworded selector or a dropped layer fails the build rather than silently flattening the animation. It also writes `avatar-states.html`, a sheet of every state built from the real stylesheet and the real markup, so the motion can be reviewed without a microphone, a model or a network. `build:pages` runs it.
+
 ## Build and publish
 
 ```bash

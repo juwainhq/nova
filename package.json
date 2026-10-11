@@ -1,13 +1,14 @@
 {
   "name": "aria-voice-assistant",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build && node scripts/rename-build-entry.mjs",
     "build:standalone": "node scripts/build-standalone.mjs",
-    "build:pages": "npm run build && npm run build:standalone && node scripts/sync-pages.mjs",
+    "verify:avatar": "node scripts/verify-avatar.mjs",
+    "build:pages": "npm run build && npm run build:standalone && npm run verify:avatar && node scripts/sync-pages.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
