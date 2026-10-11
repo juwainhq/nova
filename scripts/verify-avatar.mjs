@@ -116,14 +116,16 @@ check('renders an accessible SVG with lowercase aria-label', svg?.tag === 'svg' 
   && Object.keys(svg.attrs).filter((name) => /^aria-/i.test(name)).every((name) => name === name.toLowerCase()));
 check('keeps the mouthless orb body and bloom', byClass('blob-shape').length === 1 && byClass('orb-bloom').length === 1 && !/mouth/i.test(markup));
 check('has exactly two named eyes', eyeGroups.length === 2 && hasClass(eyeGroups[0], 'robot-eye-left') && hasClass(eyeGroups[1], 'robot-eye-right'));
-check('both base eyes are real SVG ellipses, never border pills', irises.length === 2 && irises.every((node) => node.tag === 'ellipse'));
+check('both base eyes restore the SVG capsule silhouette with semicircular ends', irises.length === 2 && irises.every((node) =>
+  node.tag === 'rect' && near(Number(node.attrs.rx), Number(node.attrs.width) / 2)
+  && near(Number(node.attrs.ry), Number(node.attrs.rx)) && Number(node.attrs.height) > Number(node.attrs.width)));
 check('both eyes have identical shape, paint and pose children', eyeGroups.length === 2
   && JSON.stringify(eyeGroups[0].children) === JSON.stringify(eyeGroups[1].children));
 check('one shared gaze > blink > voice hierarchy contains both eyes', byClass('eyes-gaze').length === 1
   && byClass('eyes-blink').length === 1 && byClass('eyes-voice').length === 1
   && gaze?.children[0] === blink && blink?.children[0] === voice
   && voice?.children.length === 2 && voice.children.every((node) => hasClass(node, 'robot-eye')));
-check('each eye has one identical local scale containing ellipse and crescent', eyeGroups.length === 2 && eyeGroups.every((node) =>
+check('each eye has one identical local scale containing capsule and crescent', eyeGroups.length === 2 && eyeGroups.every((node) =>
   node.children.length === 1 && hasClass(node.children[0], 'eye-scale') && node.children[0].children.length === 2));
 check('no pupil, gleam, lid, drift or tilt layers remain', !/eye-spark|eye-lid|eye-drift|eye-tilt/.test(markup + cssCode));
 check('no eye uses a rotation, skew, stroke or CSS border', eyeGroups.length === 2
@@ -145,10 +147,10 @@ const eyes = eyeGroups.map((node, i) => {
   const scale = match ? +match[3] : NaN;
   return {
     scale,
-    x: ((match ? +match[1] : NaN) + Number(shape.cx) * scale) * unit,
-    y: ((match ? +match[2] : NaN) + Number(shape.cy) * scale) * unit,
-    w: Number(shape.rx) * 2 * scale * unit,
-    h: Number(shape.ry) * 2 * scale * unit,
+    x: ((match ? +match[1] : NaN) + (Number(shape.x) + Number(shape.width) / 2) * scale) * unit,
+    y: ((match ? +match[2] : NaN) + (Number(shape.y) + Number(shape.height) / 2) * scale) * unit,
+    w: Number(shape.width) * scale * unit,
+    h: Number(shape.height) * scale * unit,
   };
 });
 const [left = {}, right = {}] = eyes;
@@ -158,10 +160,11 @@ const margins = [left.x - left.w / 2 - 29 * unit, 251 * unit - (right.x + right.
 check('default avatar is 160px with an unchanged 280-square viewBox', boxSize === 160 && viewBox.join(' ') === '0 0 280 280');
 check('SVG CSS box inherits the same size in both dimensions', value('.robot-avatar', 'width') === 'var(--avatar-size, 160px)'
   && value('.robot-avatar', 'height') === 'var(--avatar-size, 160px)');
-check('both ellipses have the exact 28px × 42px on-screen size', eyes.length === 2 && eyes.every((eye) => near(eye.w, 28) && near(eye.h, 42)),
+check('both capsules keep the exact 28px × 42px on-screen size', eyes.length === 2 && eyes.every((eye) => near(eye.w, 28) && near(eye.h, 42)),
   eyes.map((eye) => `${eye.w}×${eye.h}px`).join(' / '));
 check('conversion from local pixels to SVG units is uniform', eyes.length === 2 && eyes.every((eye) => near(eye.scale, 280 / 160)));
-check('ellipse centers are local zero, not bounding-box dependent', irises.length === 2 && irises.every(({ attrs: shape }) => shape.cx === '0' && shape.cy === '0'));
+check('capsule centers stay at local zero, not bounding-box dependent', irises.length === 2 && irises.every(({ attrs: shape }) =>
+  near(Number(shape.x) + Number(shape.width) / 2, 0) && near(Number(shape.y) + Number(shape.height) / 2, 0)));
 check('pair has an exact 18px inner gap', near(innerGap, 18), `${innerGap}px`);
 check('pair is perfectly centered with matching vertical centers', near((left.x + right.x) / 2, boxSize / 2) && near(left.y, right.y));
 check('eyes are in the upper half at y=60px', eyes.length === 2 && eyes.every((eye) => near(eye.y, 60) && eye.y < boxSize / 2));
@@ -177,11 +180,11 @@ check('eye well is a centered radial gradient, not the old linear fill', well?.t
   && well.attrs.cx === '.5' && well.attrs.cy === '.5' && well.attrs.r === '.5' && !well.attrs.gradientTransform);
 check('base eye surface is #1a1a1a with a subtle #161616 center', shades.join(' ') === '#161616 #1a1a1a'
   && stops[0]?.attrs.offset === '0' && stops[1]?.attrs.offset === '1');
-check('both ellipses and crescents share that same fill', [...irises, ...crescents].length === 4
+check('both capsules and crescents share that same fill', [...irises, ...crescents].length === 4
   && [...irises, ...crescents].every((node) => node.attrs.fill === 'url(#eyeWell)'));
 check('gradient defaults agree with rendered neutral colors', value('.eye-surface', 'stop-color') === 'var(--eye-color, #1a1a1a)'
   && value('.eye-shade', 'stop-color') === 'var(--eye-shadow, #161616)');
-check('no capsule-era eye glow filter remains', poseRules.every(({ selectors, body }) =>
+check('no old independent eye glow filter remains', poseRules.every(({ selectors, body }) =>
   selectors.includes('.eyes-voice') || !/drop-shadow|url\(/.test(body)));
 
 // ---------------------------------------------------------------- state transitions & idle
@@ -256,7 +259,7 @@ check('speaking: retains the shared blink, never rapid or independent blinks', !
 // ---------------------------------------------------------------- happy / wake
 check('happy/wake: both eyes have identical filled SVG crescents', crescents.length === 2 && crescents.every((node) => node.tag === 'path')
   && crescents[0].attrs.d === crescents[1].attrs.d);
-// These mirrored cubic curves have extrema x=±14, y=±21: the same local oval
+// These mirrored cubic curves have extrema x=±14, y=±21: the same local eye
 // bounds before the requested scaleX(1.2)/scaleY(.4) pose is applied.
 check('crescent geometry is symmetric within the original 28×42 bounds', crescents.every((node) =>
   node.attrs.d === 'M-14 21C-14 -35 14 -35 14 21C8 -11 -8 -11 -14 21Z'));
@@ -271,7 +274,7 @@ const jumpFrames = keyframes('orb-double-bounce');
 check('double bounce: exactly two peaks with grounded landings', jumpFrames.length === 6
   && [0, 40, 80, 100].every((at) => transformAt(jumpFrames, at) === 'translateY(0)')
   && transformAt(jumpFrames, 20) === 'translateY(-12px)' && transformAt(jumpFrames, 60) === 'translateY(-6px)');
-check('offline: both eyes dim and droop equally, preserving tall ovals', value('.is-offline', '--eye-sy') === '.9'
+check('offline: both eyes dim and droop equally, preserving tall capsules', value('.is-offline', '--eye-sy') === '.9'
   && value('.is-offline .robot-eye', 'opacity') === '.5' && left.h * .9 > left.w);
 check('offline: slow lateral sway never tilts the eyes', animation('.is-offline .robot-avatar') === 'orb-sad-sway 4s ease-in-out infinite'
   && keyframes('orb-sad-sway').length && keyframes('orb-sad-sway').every(({ body }) => !/rotate|skew/.test(body)));
@@ -297,11 +300,11 @@ const reduced = cssCode.slice(cssCode.indexOf('@media (prefers-reduced-motion: r
 check('reduced motion disables float, gaze and blink, not just their durations', /\.robot-avatar, \.eyes-gaze, \.eyes-blink\s*\{[^}]*animation: none !important; transform: none;/.test(reduced));
 check('reduced motion suppresses rotation, word swell, brightness and rings', /--figure-scale: 1 !important; --figure-y: 0deg !important/.test(reduced)
   && /\.eyes-voice\s*\{\s*filter: none !important;/.test(reduced) && /\.listen-ring\s*\{[^}]*opacity: 0;/.test(reduced));
-check('no mouth selectors or obsolete capsule animations remain', !/\.mouth-|\.orb-smile|mouth-(?:glow|light)-pulse|orb-wobble|orb-happy-hop|eye-drift|eye-tilt/.test(cssCode));
+check('no mouth selectors or obsolete eye animations remain', !/\.mouth-|\.orb-smile|mouth-(?:glow|light)-pulse|orb-wobble|orb-happy-hop|eye-drift|eye-tilt/.test(cssCode));
 
 // ---------------------------------------------------------------- real-CSS state sheet
 const STATES = [
-  ['idle', 'IDLE', '28×42px ovals · 4s blink / 200ms · 3s float'],
+  ['idle', 'IDLE', '28×42px capsules · 4s blink / 200ms · 3s float'],
   ['is-listening', 'LISTENING', '115% · #222 · rotateY(5°) · 1.5s orange ring'],
   ['is-thinking', 'THINKING', 'shared ±6px gaze · 800ms holds · 97% sway'],
   ['is-speaking', 'SPEAKING', 'shared word light · 100–104% · gentle quick bounce'],

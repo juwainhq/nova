@@ -22,7 +22,17 @@ function Eye({ side, cx }) {
       {/* A fixed local origin prevents a changing blink bounding box from moving
           the eyes' pivot. Both copies receive exactly the same pose and paint. */}
       <g className="eye-scale">
-        <ellipse className="eye-iris" cx="0" cy="0" rx={EYE.width / 2} ry={EYE.height / 2} fill="url(#eyeWell)" />
+        {/* Previous capsule silhouette; the current size, center and motion stay intact. */}
+        <rect
+          className="eye-iris"
+          x={-EYE.width / 2}
+          y={-EYE.height / 2}
+          width={EYE.width}
+          height={EYE.height}
+          rx={EYE.width / 2}
+          ry={EYE.width / 2}
+          fill="url(#eyeWell)"
+        />
         {/* A filled, symmetric crescent occupying the same 28 × 42 local bounds.
             The happy/wake pose squashes it to 33.6 × 16.8 on-screen pixels. */}
         <path className="eye-crescent" d="M-14 21C-14 -35 14 -35 14 21C8 -11 -8 -11 -14 21Z" fill="url(#eyeWell)" />
