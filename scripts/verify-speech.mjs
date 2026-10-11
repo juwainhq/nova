@@ -13,6 +13,7 @@ import { createAppHarness, createAudioDouble, createClock, createRecognitionDoub
 import { verifyMemory } from './memory-checks.mjs';
 import { verifyVoices } from './voice-checks.mjs';
 import { verifyPersonality } from './personality-checks.mjs';
+import { verifyRich } from './rich-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -641,6 +642,7 @@ check('App explains denied microphone permission without repeated prompts', deni
 deniedUi.unmount();
 
 // Voice preview/selection and memory use the same compiled App fixture.
+await verifyRich(check);
 await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);

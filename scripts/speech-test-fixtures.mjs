@@ -76,6 +76,7 @@ export function createRecognitionDouble(clock, { continuous = true, autoStart = 
     }
     end() { this.active = false; this.onend?.(); }
     error(error) { this.onerror?.({ error }); }
+    speechStart() { this.onspeechstart?.(); }
     result(text, isFinal = true) { this.results([{ text, isFinal }]); }
     results(entries, resultIndex = 0) {
       this.onresult?.({
@@ -253,7 +254,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
   const sandbox = {
     module: { exports: {} }, hooks, window, document,
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
-    Date: { now: clock.now }, AbortController, TextDecoder, Uint8Array,
+    Date: { now: clock.now }, AbortController, TextDecoder, Uint8Array, URL,
     SpeechSynthesisUtterance: speech ? class { constructor(text) { this.text = text; } } : undefined,
     fetch: async (url, options) => {
       requests.push({ url, options });

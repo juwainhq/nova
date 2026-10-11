@@ -124,6 +124,7 @@ export function createVoiceListener({
   onStandbyChange = () => {},
   onInputStart = () => {},
   onInputEnd = () => {},
+  onSpeechDetected = () => {},
   onUnsupported = () => {},
   onError = () => {},
   timers = globalThis,
@@ -248,13 +249,20 @@ export function createVoiceListener({
       reportStandby();
       onInputStart(activeMode);
     };
+    recognition.onspeechstart = () => {
+      if (!disposed && phase === 'running' && mode === activeMode) onSpeechDetected();
+    };
     recognition.onresult = (event) => {
       if (disposed || phase !== 'running' || mode !== activeMode) return;
       const finals = [];
+      let heardSpeech = false;
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
-        if (result.isFinal) finals.push(result[0]?.transcript || '');
+        const transcript = result[0]?.transcript || '';
+        if (transcript.trim()) heardSpeech = true;
+        if (result.isFinal) finals.push(transcript);
       }
+      if (heardSpeech) onSpeechDetected(); // Fallback for engines without speechstart.
       const text = finals.join(' ').trim();
       if (mode === 'standby') {
         if (!text) return;
@@ -328,7 +336,7 @@ export function createVoiceListener({
       phase = 'idle';
       reportStandby();
       if (!recognition) return;
-      recognition.onstart = recognition.onresult = recognition.onerror = recognition.onend = null;
+      recognition.onstart = recognition.onspeechstart = recognition.onresult = recognition.onerror = recognition.onend = null;
       try { recognition.abort(); } catch { /* Already idle. */ }
     },
   };

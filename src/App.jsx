@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
+import RichResponsePanel from './RichResponsePanel.jsx';
+import {
+  RICH_FADE_MS, RICH_VISIBLE_MS, hasRichResponse, imageSearchQuery, richResponse,
+} from './rich-response.js';
 import { APP_NAME } from './brand.js';
 import {
   OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT,
@@ -607,6 +611,12 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryState, setMemoryState] = useState(readMemoryStore);
   const [lastResponse, setLastResponse] = useState('');
+  const [richContent, setRichContent] = useState(null);
+  const richContentRef = useRef(null);
+  const richVersionRef = useRef(0);
+  const richTimersRef = useRef({ expiry: null, removal: null });
+  const richSlotRef = useRef(null);
+  const micButtonRef = useRef(null);
   const [notice, setNotice] = useState('');
   const [wakeStandby, setWakeStandby] = useState(false);
   const [wakeMessage, setWakeMessage] = useState('');
@@ -643,6 +653,47 @@ function App() {
     setNotice(message);
     window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(''), 4600);
+  }, []);
+
+  const dismissRichResponse = useCallback((immediate = false) => {
+    richVersionRef.current += 1; // Invalidates a pending answer's late publication.
+    window.clearTimeout(richTimersRef.current.expiry);
+    const current = richContentRef.current;
+    if (!immediate && current?.closing) return; // Repeated words never extend the fade.
+    window.clearTimeout(richTimersRef.current.removal);
+    if (richSlotRef.current?.contains?.(document.activeElement)) micButtonRef.current?.focus?.();
+    if (immediate || !current) {
+      richContentRef.current = null;
+      setRichContent(null);
+      return;
+    }
+    const closing = { ...current, closing: true };
+    richContentRef.current = closing;
+    setRichContent(closing);
+    richTimersRef.current.removal = window.setTimeout(() => {
+      if (richContentRef.current !== closing) return;
+      richContentRef.current = null;
+      setRichContent(null);
+    }, RICH_FADE_MS);
+  }, []);
+
+  const showRichResponse = useCallback((content, version) => {
+    if (version !== richVersionRef.current || !hasRichResponse(content)) return;
+    window.clearTimeout(richTimersRef.current.expiry);
+    window.clearTimeout(richTimersRef.current.removal);
+    const panel = { content, closing: false };
+    richContentRef.current = panel;
+    setRichContent(panel);
+    richTimersRef.current.expiry = window.setTimeout(() => {
+      if (richContentRef.current === panel) dismissRichResponse();
+    }, RICH_VISIBLE_MS);
+  }, [dismissRichResponse]);
+
+  useEffect(() => () => {
+    richVersionRef.current += 1;
+    richContentRef.current = null;
+    window.clearTimeout(richTimersRef.current.expiry);
+    window.clearTimeout(richTimersRef.current.removal);
   }, []);
 
   const stopVoiceTest = useCallback(() => {
@@ -691,6 +742,7 @@ function App() {
     if (!changed && !forceReset) return;
     conversationRef.current = []; // Removed/replaced facts must not survive in chat history.
     if (interrupt) {
+      dismissRichResponse(true); // Forgotten facts must not survive in a visual card.
       requestControllerRef.current?.abort();
       speechFinishRef.current?.(false);
       window.speechSynthesis?.cancel();
@@ -699,7 +751,7 @@ function App() {
       setLastResponse('');
       setStage('ready');
     }
-  }, []);
+  }, [dismissRichResponse]);
 
   const refreshMemories = useCallback((interrupt = true) => {
     const next = readMemoryStore();
@@ -744,6 +796,8 @@ function App() {
   const askAria = useCallback(async (text) => {
     const prompt = text.trim();
     if (!prompt) return;
+    dismissRichResponse();
+    const richVersion = richVersionRef.current;
     voiceListenerRef.current?.setMode(null);
     setStage('thinking');
     requestControllerRef.current?.abort();
@@ -752,6 +806,7 @@ function App() {
 
     const currentMemory = refreshMemories(false);
     const intent = parseMemoryIntent(prompt);
+    const imageQuery = intent ? null : imageSearchQuery(prompt);
 
     try {
       let answer;
@@ -784,7 +839,15 @@ function App() {
           }
         }
       }
-      if (!intent) {
+      if (imageQuery) {
+        // A search link, not a claim that an image was fetched or generated.
+        answer = `Here’s a Google Images search for “${imageQuery}”. Tap View Images below to take a look.`;
+        conversationRef.current = [
+          ...conversationRef.current,
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: answer },
+        ].slice(-6);
+      } else if (!intent) {
         const conversation = conversationRef.current.slice(-6);
         const messages = [
           {
@@ -814,10 +877,14 @@ function App() {
       }
       if (controller.signal.aborted) return;
       setLastResponse(answer);
-      await speakRef.current?.(answer);
-      if (!controller.signal.aborted) celebrate();
+      const speechCompleted = await speakRef.current?.(answer);
+      if (!controller.signal.aborted) {
+        celebrate();
+        if (speechCompleted) showRichResponse(richResponse(answer, imageQuery), richVersion);
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
+      dismissRichResponse(true);
       try {
         const models = await fetchOllamaModels(ollamaEndpoint(settings), controller.signal);
         setConnection('connected');
@@ -832,7 +899,7 @@ function App() {
     } finally {
       if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
-  }, [notify, settings, celebrate, refreshMemories, commitMemories]);
+  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse]);
 
   // Resolve only when speech ends, not when it is queued. Otherwise standby
   // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
@@ -840,7 +907,7 @@ function App() {
     if (typeof window.speechSynthesis?.speak !== 'function' || typeof SpeechSynthesisUtterance !== 'function') {
       setStage('ready');
       notify("I can’t speak aloud in this browser. Turn on Show last response in Settings to read my replies, or try Chrome or Edge.");
-      return Promise.resolve();
+      return Promise.resolve(true); // Silent browsers can still use the visual reply.
     }
 
     voiceListenerRef.current?.setMode(null);
@@ -861,7 +928,7 @@ function App() {
       utterance.pitch = TTS.pitch;
       utterance.volume = TTS.volume;
 
-      const finishSpeech = (resume = true) => {
+      const finishSpeech = (resume = true, completed = false) => {
         if (finished) return;
         finished = true;
         window.clearTimeout(speechPulseTimer);
@@ -874,7 +941,7 @@ function App() {
           setSpeechVoiceName('');
         }
         if (resume) setStage('ready');
-        resolve();
+        resolve(completed);
       };
       utterance.onstart = () => { if (!finished) setStage('speaking'); };
       // No word events: neutral eye light/scale, with the CSS speaking bounce intact.
@@ -888,7 +955,7 @@ function App() {
           avatarElement.style.setProperty('--audio-pulse', '0');
         }, 125);
       };
-      utterance.onend = () => finishSpeech();
+      utterance.onend = () => finishSpeech(true, true);
       utterance.onerror = () => {
         if (finished) return;
         finishSpeech();
@@ -948,11 +1015,13 @@ function App() {
     const listener = createVoiceListener({
       Recognition: SpeechRecognition,
       onStandbyChange: setWakeStandby,
+      onSpeechDetected: () => dismissRichResponse(),
       onUnsupported: () => setWakeMessage(WAKE_UNSUPPORTED_MESSAGE),
       onInputStart: () => {
         if (listener.wakeSupported) setWakeMessage('');
       },
       onWake: () => {
+        dismissRichResponse();
         window.clearTimeout(moodTimerRef.current);
         setMood('wake');
         moodTimerRef.current = window.setTimeout(() => setMood('idle'), 800);
@@ -985,7 +1054,7 @@ function App() {
       listener.dispose();
       voiceListenerRef.current = null;
     };
-  }, [SpeechRecognition, notify]);
+  }, [SpeechRecognition, notify, dismissRichResponse]);
 
   // Standby is automatic on load / after a reply. Never listen to the speaker,
   // settings edits, or a hidden tab; resume when the main view is idle again.
@@ -1014,6 +1083,7 @@ function App() {
       return;
     }
     if (stage !== 'ready') return;
+    dismissRichResponse();
     if (!voiceListenerRef.current?.available) {
       notify("I can’t use the microphone in this browser. Try a recent version of Chrome or Edge so we can talk.");
       return;
@@ -1030,14 +1100,14 @@ function App() {
     const handleShortcut = (event) => {
       if ((event.code !== 'Space' && event.key !== ' ') || settingsOpen) return;
       const target = event.target;
-      if (target?.isContentEditable || target?.closest?.('button, input, textarea, select')) return;
+      if (target?.isContentEditable || target?.closest?.('button, input, textarea, select, a, .rich-content-panel')) return;
       if (stage !== 'ready' && stage !== 'listening') return;
       event.preventDefault();
       if (!event.repeat) toggleListening();
     };
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
-  }, [settingsOpen, stage]);
+  }, [settingsOpen, stage, dismissRichResponse]);
 
   const statusText = stage === 'ready' && connection === 'checking'
     ? STATUS_TEXT.starting : STATUS_TEXT[stage];
@@ -1077,11 +1147,13 @@ function App() {
 
 
 
+  const showRichPanel = Boolean(richContent && !settingsOpen);
+
   return (
-    <div className={`app-shell stage-${stage}`}>
+    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}`}>
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
-        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}>
+        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
           <SettingsIcon />
         </button>
       </header>
@@ -1117,6 +1189,10 @@ function App() {
         </section>
       </main>
 
+      {showRichPanel && <div className="rich-content-slot" ref={richSlotRef}>
+        <RichResponsePanel content={richContent.content} closing={richContent.closing} onClose={() => dismissRichResponse()} />
+      </div>}
+
       <footer className="control-dock">
         {wakeStandby && stage === 'ready' && !settingsOpen && (
           <div className="wake-indicator" role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
@@ -1127,6 +1203,7 @@ function App() {
         <div className="mic-control-wrap">
           <div className={`mic-halo ${stage === 'listening' ? 'mic-halo-active' : ''}`} />
           <button
+            ref={micButtonRef}
             className={`mic-button ${stage === 'listening' ? 'mic-button-active' : ''}`}
             type="button"
             onClick={toggleListening}

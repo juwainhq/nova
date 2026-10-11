@@ -26,7 +26,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   position: relative;
   isolation: isolate;
   display: grid;
-  grid-template-rows: 76px minmax(0, 1fr) 112px;
+  --topbar-height: 76px;
+  --dock-height: 112px;
+  grid-template-rows: var(--topbar-height) minmax(0, 1fr) var(--dock-height);
   width: 100%;
   height: 100vh;
   height: 100dvh;
@@ -451,6 +453,36 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 .response-transcript > span { color: #967b62; font: 8px var(--mono); letter-spacing: .16em; }
 .response-transcript p { max-height: 82px; overflow-y: auto; margin: 6px 0 0; color: #c4ad95; font-size: 10px; line-height: 1.65; white-space: pre-wrap; }
 
+/* A separate grid row, never a fixed overlay. Short screens scroll instead of
+   squeezing the avatar; the slot clips the sheet's downward entrance motion. */
+.app-shell.has-rich-content { height: auto; min-height: 100dvh; grid-template-rows: var(--topbar-height) minmax(min-content, 1fr) auto var(--dock-height); }
+.has-rich-content .main-stage { padding: 16px 0; }
+.rich-content-slot { --rich-height: clamp(144px, 32dvh, 280px); position: relative; z-index: 2; justify-self: center; width: min(780px, 100%); min-width: 0; max-height: var(--rich-height); overflow: hidden; border-radius: 18px; }
+.rich-content-panel { max-height: var(--rich-height); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 16px; border: 1px solid rgba(245, 201, 154, .18); border-radius: inherit; background: linear-gradient(145deg, rgba(36, 22, 14, .96), rgba(20, 12, 7, .98)); box-shadow: inset 0 1px 0 rgba(255, 247, 239, .035); animation: rich-panel-in .38s ease-out both; }
+.rich-content-panel.is-closing { pointer-events: none; animation: rich-panel-out .28s ease-out both; }
+.rich-content-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rich-content-header h2, .rich-image-card h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.rich-content-header p, .rich-image-card p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.rich-content-close { flex-shrink: 0; width: 28px; height: 28px; font-size: 22px; line-height: 1; }
+.rich-links, .rich-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px; margin-top: 12px; }
+.rich-link-card, .rich-image-card, .rich-item-card { min-width: 0; border: 1px solid rgba(245, 201, 154, .13); border-radius: 12px; background: rgba(245, 201, 154, .035); color: #e8d4c0; overflow-wrap: anywhere; }
+.rich-link-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; text-decoration: none; transition: border-color .2s, background .2s; }
+.rich-link-card span, .rich-image-card > div { min-width: 0; }
+.rich-link-card strong { font-size: 12px; font-weight: 500; }
+.rich-link-card small { display: block; margin-top: 5px; color: var(--muted); font: 9px/1.4 var(--mono); }
+.rich-link-card:hover, .rich-image-button:hover { border-color: rgba(245, 201, 154, .4); background: rgba(245, 201, 154, .07); }
+.rich-open-icon { flex: 0 0 14px; width: 14px; height: 14px; opacity: .58; }
+.rich-image-card { display: flex; align-items: center; gap: 12px; padding: 12px; }
+.rich-image-placeholder { flex: 0 0 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; height: 76px; border-radius: 8px; background: linear-gradient(145deg, rgba(204, 68, 0, .16), rgba(245, 201, 154, .04)); color: var(--cream); }
+.rich-image-placeholder svg { width: 58px; height: 40px; opacity: .55; }
+.rich-image-placeholder span { color: var(--muted); font: 8px var(--mono); }
+.rich-image-button { display: inline-flex; align-items: center; gap: 8px; margin-top: 9px; padding: 6px 9px; border: 1px solid rgba(245, 201, 154, .24); border-radius: 6px; color: var(--cream); font-size: 10px; text-decoration: none; }
+.rich-items { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.rich-item-card { flex: 1 1 170px; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
+.rich-content-panel:focus-visible, .rich-content-panel a:focus-visible { outline: 2px solid var(--orange); outline-offset: -3px; }
+@keyframes rich-panel-in { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes rich-panel-out { from { opacity: 1; } to { opacity: 0; } }
+
 @keyframes brand-fade-in { from { opacity: 0; transform: translateY(-5px); filter: blur(4px); } to { opacity: 1; transform: translateY(0); filter: blur(0); } }
 @keyframes offline-display-in { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes nebula-drift { 0% { transform: translate3d(-2%, -1%, 0) scale(.96) rotate(-2deg); opacity: .54; } 50% { transform: translate3d(1.5%, 1%, 0) scale(1.04) rotate(2deg); opacity: .8; } 100% { transform: translate3d(3%, -1.5%, 0) scale(1.08) rotate(-1deg); opacity: .62; } }
@@ -483,7 +515,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 @keyframes panel-slide-in { from { opacity: .82; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
 
 @media (max-height: 720px) {
-  .app-shell { grid-template-rows: 64px minmax(0, 1fr) 98px; }
+  .app-shell { --topbar-height: 64px; --dock-height: 98px; }
   .avatar-container { height: 158px; }
   .tagline { margin-top: 18px; }
   .status-word { margin-top: 15px; }
@@ -491,7 +523,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 }
 
 @media (max-width: 700px) {
-  .app-shell { grid-template-rows: 64px minmax(0, 1fr) 100px; padding: 0 22px 8px; }
+  .app-shell { --topbar-height: 64px; --dock-height: 100px; padding: 0 22px 8px; }
   .brand-name { font-size: 17px; }
   .icon-button { width: 38px; height: 38px; }
   .assistant-stage { padding-bottom: 0; }
@@ -516,7 +548,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 }
 
 @media (max-height: 560px) {
-  .app-shell { grid-template-rows: 52px minmax(0, 1fr) 76px; padding-bottom: 4px; }
+  .app-shell { --topbar-height: 52px; --dock-height: 76px; padding-bottom: 4px; }
   .avatar-container { height: 116px; --avatar-size: 108px; }
   .tagline { margin-top: 10px; font-size: clamp(24px, 5vh, 34px); }
   .status-word { margin-top: 8px; }
@@ -528,7 +560,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 }
 
 @media (max-height: 420px) {
-  .app-shell { grid-template-rows: 44px minmax(0, 1fr) 66px; padding-bottom: 2px; }
+  .app-shell { --topbar-height: 44px; --dock-height: 66px; padding-bottom: 2px; }
   .avatar-container { height: 92px; --avatar-size: 92px; }
   .tagline { margin-top: 7px; font-size: clamp(22px, 5vh, 29px); }
   .status-word { margin-top: 6px; }

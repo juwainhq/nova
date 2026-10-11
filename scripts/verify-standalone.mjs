@@ -100,6 +100,12 @@ check('ships the friendly personality and conditional voice brevity rules', scri
 check('ships warm startup and connection messages', script.includes('Waking up...')
   && script.includes("Hmm, I can't reach Ollama right now. Is it running?"));
 check('does not ship obsolete personality or robotic status copy', !/warm and witty|100% locally|NOVA READY|Query processed\.|Initializing\.\.\./.test(script));
+check('ships response link cards with safe new-tab navigation', script.includes('rich-link-card') && script.includes('noopener noreferrer') && script.includes('_blank'));
+check('ships Google Images searches with a local placeholder and View Images action', script.includes('https://www.google.com/search')
+  && script.includes('rich-image-placeholder') && script.includes('View Images'));
+check('ships numbered/bulleted response item cards', script.includes('rich-items') && script.includes('rich-item-card'));
+check('keeps rich content in its own sliding/fading row, not an avatar overlay', styleMatch[1].includes('.app-shell.has-rich-content')
+  && styleMatch[1].includes('minmax(min-content,1fr)') && styleMatch[1].includes('rich-panel-in') && styleMatch[1].includes('rich-panel-out'));
 
 // Guards the `</script>` escaping: a mangled inline script would otherwise still
 // satisfy every structural check above.

@@ -152,6 +152,22 @@ Two caveats worth knowing:
 - Voice availability and sound depend on your browser and OS. **Online/network** voices may send spoken text to the browser's speech provider and need a connection; select an `offline` voice if that is not suitable. No speech backend or API key is configured by NOVA.
 - Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally. The eyes and per-word scale stay neutral; the gentle speaking bounce still runs.
 
+## Rich responses
+
+After NOVA finishes speaking, replies with useful extra content open a soft panel **below the avatar and response area**, above the microphone controls:
+
+- **Links:** `http://` and `https://` URLs become clickable cards with the actual domain, a short path, and a subtle open icon. Clicking opens a new tab using `noopener noreferrer`. Markdown/prose punctuation is cleaned up, canonical duplicates are removed, and malformed/non-web/credential-bearing links are not made clickable. No page previews, favicons, or remote thumbnails are fetched automatically.
+- **Image requests:** say **“show me a picture of cats”**, **“find photos of the Eiffel Tower”**, or **“search Google Images for sunsets.”** NOVA handles these locally with a friendly spoken introduction and an encoded Google Images search link in a visual card. The thumbnail is clearly a **placeholder**, not a claimed photo; **View Images** opens the real search in a new tab. This does not require Ollama to be running and never saves the query as a memory.
+- **Lists:** numbered (`1.`, `1)`) and bulleted (`-`, `*`, `•`, etc.) lines become clean cards/chips. Common Markdown emphasis is removed from visual labels, and code fences are not mistaken for lists. The original reply is still spoken in full and unchanged.
+
+The panel appears only after the actual speech-end event, not when text arrives or audio is queued. Silent/unsupported-speech browsers can still use visual replies once the text is ready; failed or canceled utterances do not publish unfinished content. Cards work independently of the optional **Show last response** transcript.
+
+Cards fade out after **30 seconds**, or as soon as the next speech/wake phrase is detected. Manual mic/Space input and the close control dismiss them too. Recognition restarting in standby is **not** treated as new user speech. The fade lasts 280ms, cannot be prolonged by repeated transcripts, and old timers or canceled responses cannot revive/erase newer content. Settings, memory edits, and unmounting clear stale content safely.
+
+Rich content uses its own grid row, **never a fixed overlay over the avatar**. The panel has a bounded internal scroller; short viewports can scroll the page rather than squeeze or cover the face. The avatar's SVG, sizes, animation timing, voice selection, rate, and pitch are unchanged. Reduced motion respects the existing motion preference. Links and the panel are keyboard-accessible; Space within the panel scrolls instead of activating the mic.
+
+For predictable rendering, previews show up to 24 distinct links and 60 list items. If there is more, the panel points you to the full reply via **Show last response**; speech itself is not truncated. Rich response parsing/rendering lives in `src/rich-response.js` and `src/RichResponsePanel.jsx`. Tests cover URL safety/encoding, real React markup, speech-end publication, expiry, dismissal, cleanup, races, and separate-row layout contracts without claiming a browser visual or audio review.
+
 ## Avatar states
 
 The mouthless orb now has **two identical SVG capsules**, restoring the previous rounded-end eye shape while retaining the current sizing: **28×42 CSS pixels** each at the default 160px avatar size, with an **18px gap** and a shared center line at **y=60px**, in the upper half. A neutral radial well runs subtly from `#161616` at the center to `#1a1a1a` at the edge. Both eyes remain upright and matching: no per-eye rotation, skew, squint, independent drift or staggered blinks.
@@ -186,7 +202,7 @@ Reduced motion disables float, gaze, blinks, jumps, pulsing light and rings whil
 
 `npm run verify:avatar` renders the real SVG through React and checks pixel geometry, symmetry, radial colors, fixed pivots, exact timing, scale bounds, reduced motion and orb/ring/backlight sizing at all three viewport sizes. It also generates **`avatar-states.html`**, a real-CSS state sheet with a happy/wake replay button. Each cell has unique SVG definition IDs so its gradient colors cannot accidentally resolve to another state. The sheet holds a clearly labelled sample speech pulse; it does not generate audio.
 
-`npm run verify:speech` checks the exact personality prompt and friendly statuses/error copy, all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
+`npm run verify:speech` checks rich response parsing/rendering and post-speech lifecycle, the exact personality prompt and friendly statuses/error copy, all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
 
 `build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
 

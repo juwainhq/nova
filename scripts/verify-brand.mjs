@@ -27,9 +27,9 @@ const OLD_NAME = 'ARIA';
 
 const SOURCE_FILES = [
   'index.dev.html', 'vite.config.js', 'package.json',
-  'src/App.jsx', 'src/personality.js', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/memory.js', 'src/index.css', 'src/brand.js',
+  'src/App.jsx', 'src/RichResponsePanel.jsx', 'src/rich-response.js', 'src/personality.js', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/memory.js', 'src/index.css', 'src/brand.js',
   'scripts/build-standalone.mjs', 'scripts/verify-standalone.mjs',
-  'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/voice-checks.mjs', 'scripts/personality-checks.mjs', 'scripts/sync-pages.mjs',
+  'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/voice-checks.mjs', 'scripts/personality-checks.mjs', 'scripts/rich-checks.mjs', 'scripts/sync-pages.mjs',
 ];
 const sources = Object.fromEntries(await Promise.all(
   SOURCE_FILES.map(async (file) => [file, await read(file)]),
