@@ -290,15 +290,27 @@ export async function createAppHarness({ continuous = true, missingRecognition =
   flush();
   // React would attach this ref during commit; supply only the pulse APIs it uses.
   const avatar = find('avatar-container');
-  if (avatar) avatar.props.ref.current = {
-    classList: { add() {}, remove() {} }, style: { setProperty() {}, removeProperty() {} },
+  const avatarProperties = new Map();
+  const avatarClasses = new Set();
+  const avatarElement = {
+    classList: {
+      add(name) { avatarClasses.add(name); },
+      remove(name) { avatarClasses.delete(name); },
+      contains(name) { return avatarClasses.has(name); },
+    },
+    style: {
+      setProperty(name, value) { avatarProperties.set(name, String(value)); },
+      removeProperty(name) { avatarProperties.delete(name); },
+      getPropertyValue(name) { return avatarProperties.get(name) ?? ''; },
+    },
   };
+  if (avatar) avatar.props.ref.current = avatarElement;
   window.speechSynthesis.speak = (utterance) => {
     if (speechThrows) throw new Error('Test synthesis failure');
     utterances.push(utterance);
   };
   return {
-    clock, window, document, recognition, audio, utterances, requests, storage, pendingChats, flush, find, nodes,
+    clock, window, document, recognition, audio, utterances, requests, storage, pendingChats, avatarElement, flush, find, nodes,
     findButton: (text) => nodes().find((node) => node.type === 'button' && node.props.children === text),
     updatePanel(next) { Object.assign(props, next); dirty = true; flush(); },
     get tree() { return tree; },

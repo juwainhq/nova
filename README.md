@@ -55,7 +55,7 @@ Press Space from the main view to toggle the microphone. Microphone access requi
 
 ## Wake word
 
-NOVA attempts to start continuous microphone recognition as soon as the page loads. A dim microphone in the bottom-left corner means it is in **wake word standby**. Say **“hey nova”** to brighten and grow the avatar’s eyes, change the status to **LISTENING**, and hear a short, soft two-note chime. Ask your question after the cue, or say the wake phrase and question in one utterance — “hey nova, what time is it?” works too.
+NOVA attempts to start continuous microphone recognition as soon as the page loads. A dim microphone in the bottom-left corner means it is in **wake word standby**. Say **“hey nova”** for a brief crescent-eyed double bounce, followed by brighter, larger listening eyes. The status changes immediately to **LISTENING**, with a short, soft two-note chime. Ask your question after the cue, or say the wake phrase and question in one utterance — “hey nova, what time is it?” works too.
 
 Standby requests final transcripts only, with one recognition alternative, and discards everything except the wake phrase. Unrelated background speech is not saved or sent to Ollama. Full question input uses interim results as well. Recognition pauses while NOVA thinks and speaks, then automatically returns to standby **after speech actually finishes** (or an error is handled). A wake without a question returns to standby after 15 seconds of silence. Opening settings or hiding the tab also suspends listening; returning to the idle main view resumes it.
 
@@ -115,42 +115,45 @@ Until you choose one, NOVA picks the most natural English voice the machine offe
 Two caveats worth knowing:
 
 - The most natural voices on a machine are often **cloud-backed** (Google's and Microsoft's "Online (Natural)" entries), so they stop working offline. The label says which is which; pick an `offline` voice if the machine is ever disconnected.
-- Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally, but the avatar's per-word pulse stays steady instead of reacting.
+- Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally. The eyes and per-word scale stay neutral; the gentle speaking bounce still runs.
 
 `nova.tts.voice` in local storage holds your choice. If that voice is later uninstalled, the panel says so and falls back to the automatic pick rather than switching silently.
 
 ## Avatar states
 
-The avatar has no mouth. Every expression comes from two channels only — the eyes and the body — so the SVG in `src/RobotAvatar.jsx` stays purely presentational and `src/index.css` drives all of it from state classes on `.avatar-container`.
+The mouthless orb now has **two identical true SVG ellipses**, not border-drawn pills: **28×42 CSS pixels** each at the default 160px avatar size, with an **18px gap** and a shared center line at **y=60px**, in the upper half. A neutral radial well runs subtly from `#161616` at the center to `#1a1a1a` at the edge. Both eyes remain upright and matching: no per-eye rotation, skew, squint, independent drift or staggered blinks.
 
-Eyes are layered three deep so the kinds of motion compose instead of overwriting each other, because nested transforms multiply while a shared element would let the animation win outright:
+The SVG keeps its 280-unit viewBox. A uniform 1.75 conversion makes the eye dimensions real on-screen pixels rather than accidentally smaller SVG units. Compact 108px / 92px avatars scale the whole face proportionally. The orange ring is sized against the **visible 222/280 orb**, plus movement clearance, and the backlight uses the same avatar-size variable.
 
-| Layer | Carries | Mechanism |
-| --- | --- | --- |
-| `.robot-eye` | gaze | animated `translateX` |
-| `.eye-scale` | size: grow, squint, droop | transitioned `scale()` driven by `--eye-sx` / `--eye-sy` |
-| `.eye-lid` | blinking, iris glow | animated `scaleY`, `drop-shadow` |
+Shared motion layers keep the pair synchronized:
 
-Body motion is split the same way: `.avatar-figure` holds the pose (`--figure-scale`, `--figure-tilt`) as a transitioned transform, and `.robot-avatar` carries the rhythm (`orb-float`, `orb-wobble`, …) as an animation, so pose and rhythm never share a `transform`.
+| Layer | Carries |
+| --- | --- |
+| `.eyes-gaze` | the pair’s horizontal gaze |
+| `.eyes-blink` | one blink clock and one fixed center for both eyes |
+| `.eyes-voice` | shared word-boundary brightness |
+| `.eye-scale` inside each eye | identical size/expression scaling about a fixed local origin |
+
+Body pose is separate from rhythm: `.avatar-figure` holds transitioned scale and `rotateY`, while `.robot-avatar` carries translation-only keyframes. No body state rotates on Z. There is no perspective that could make one eye appear larger than the other. Pose, eye color and ellipse/crescent crossfades use **400ms ease-in-out** transitions; timed blinks and rapid word-light beats keep their own timings.
 
 | State | Eyes | Body |
 | --- | --- | --- |
-| Idle | soft steady glow, occasional slow blink | gentle float up and down |
-| Listening | grow 16% and brighten | 5° tilt in, slow float, pulse ring |
-| Thinking | gaze side to side, left eye squints | wobble, 3% smaller |
-| Speaking | wider, brighten with the voice, rapid blinks | 5% bigger, swells on each word |
-| Happy | crescents replace the iris | quick jump, then small bounces |
-| Offline | droop, dim to half brightness | slow sad sway |
+| Idle | shared blink every **4s**, **42→4→42px over 200ms** | **0↔−8px** float, **3s ease-in-out infinite** |
+| Listening | both **115%**, brighter **#222** background | **rotateY(5deg)**; soft orange expanding/fading ring every **1.5s** |
+| Thinking | shared **left/right 6px** gaze, **800ms holds** and 400ms moves | slow lateral sway, **97%** scale |
+| Speaking | rapid shared brightness on actual speech word boundaries; no fake rapid blinks | gentle quick Y bounces, boundary-driven scale bounded to **100–104%** |
+| Happy / wake | matching filled wide crescents, **scaleX(1.2), scaleY(.4)** | one **800ms double-bounce jump** |
+| Offline | identical slight droop, half opacity | slow lateral sway; no eye tilt |
 
-Speaking is driven by real data, not a guess: the speech engine's word-boundary events publish `--audio-pulse` on the container. Eye glow and the body's per-word swell both read that one value, so the movement tracks the voice. Engines that never fire boundary events simply hold the speaking animation steady.
+`speechSynthesis` word-boundary events publish a single `--audio-pulse`: capped at 1, decayed to 0 after 125ms, and removed on speech completion/cancellation. Both eye light and body scale read that value. Without boundary events the word light/scale stays neutral rather than being simulated.
 
-"Happy" is inferred from a reply completing without error, held for 1.5 s and then released — the counterpart to Offline. It is one state change in `askAria`; swapping it for sentiment analysis of the answer text would be a small change.
+The wake flourish lasts **800ms** and then settles into listening. A same-utterance question moves directly to thinking/speaking without the wake expression masking it. Happy follows response completion and holds its crescent pose for **1.5s**; the double jump itself happens only once. Offline styling applies only at rest, so local memory replies still get the full speaking animation even when Ollama is unavailable. The offline notice stays below the orb.
 
-The offline notice sits **below** the orb rather than over it, so the drooping eyes stay visible.
+Reduced motion disables float, gaze, blinks, jumps, pulsing light and rings while preserving the current static expression.
 
-`npm run verify:avatar` checks all of the above — it renders the avatar through React and inspects the stylesheet, so a reworded selector or a dropped layer fails the build rather than silently flattening the animation. It also writes `avatar-states.html`, a sheet of every state built from the real stylesheet and the real markup, so the motion can be reviewed without a microphone, a model or a network.
+`npm run verify:avatar` renders the real SVG through React and checks pixel geometry, symmetry, radial colors, fixed pivots, exact timing, scale bounds, reduced motion and orb/ring/backlight sizing at all three viewport sizes. It also generates **`avatar-states.html`**, a real-CSS state sheet with a happy/wake replay button. Each cell has unique SVG definition IDs so its gradient colors cannot accidentally resolve to another state. The sheet holds a clearly labelled sample speech pulse; it does not generate audio.
 
-`npm run verify:speech` does the same job for voice selection: it runs the real scorer against a synthetic machine and asserts what it picks, that the speaking parameters are the specified values, and that a non-English voice cannot displace an available English voice. It also exercises the real wake-word controller, chime scheduling, persistent memory helpers, settings controls, and compiled App lifecycle with recognition, timer, audio, and storage doubles — including waiting for speech completion, permission failures, restarts, manual fallback, cross-session memory, remembered-fact prompt context, forgetting, storage failures, and cleanup. These checks verify behaviour structurally, not microphone accuracy or how the chime sounds.
+`npm run verify:speech` checks voice selection and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
 
 `build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
 

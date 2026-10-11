@@ -450,6 +450,14 @@ mic.result('Hey Nova');
 ui.flush();
 check('wake changes status to LISTENING and enables listening eyes', ui.find('status-word')?.props.children === 'NOVA LISTENING' && ui.find('avatar-container')?.props.className.includes('is-listening'));
 check('wake hides the standby icon and plays the chime', !ui.find('wake-indicator') && ui.audio.instances[0]?.oscillators.length === 2);
+check('wake immediately starts the matching crescent/double-jump pose', ui.find('avatar-container')?.props.className.includes('is-waking'));
+ui.clock.tick(799);
+ui.flush();
+check('wake flourish lasts through 799ms', ui.find('avatar-container')?.props.className.includes('is-waking'));
+ui.clock.tick(1);
+ui.flush();
+check('wake flourish ends at 800ms without ending listening', !ui.find('avatar-container')?.props.className.includes('is-waking')
+  && ui.find('avatar-container')?.props.className.includes('is-listening') && ui.find('status-word')?.props.children === 'NOVA LISTENING');
 mic.end();
 ui.clock.tick(150);
 mic.result('How are you?');
@@ -466,8 +474,22 @@ ui.flush();
 check('standby cannot restart while speech is queued', mic.starts.length === beforeSpeechEnd);
 reply?.onstart();
 ui.flush();
+check('speaking: no fabricated pulse before a real word boundary', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '');
+reply?.onboundary({ name: 'sentence', charLength: 10 });
+check('speaking: sentence boundaries do not fabricate word beats', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '');
 reply?.onboundary({ name: 'word', charLength: 4 });
-ui.clock.tick(125);
+check('speaking: a real word publishes one shared brightness/scale signal', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '0.790'
+  && ui.avatarElement.classList.contains('speech-boundary-active'));
+ui.clock.tick(124);
+check('speaking: word pulse persists until the 125ms decay', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '0.790');
+ui.clock.tick(1);
+check('speaking: decay reaches zero, allowing a 100% body pose', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '0');
+reply?.onboundary({ name: 'word', charLength: 100 });
+check('speaking: long words cap at one, giving a 104% maximum', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '1.000');
+ui.clock.tick(100);
+reply?.onboundary({ name: 'word', charLength: 1 });
+ui.clock.tick(25);
+check('speaking: a new word cancels the previous decay timer', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '0.685');
 check('standby stays paused while speech is playing', mic.starts.length === beforeSpeechEnd && !ui.find('wake-indicator'));
 reply?.onend();
 await ui.settle();
@@ -475,6 +497,11 @@ ui.clock.tick();
 ui.flush();
 check('actual speech end automatically restores wake standby', mic.starts.length === beforeSpeechEnd + 1 && Boolean(ui.find('wake-indicator')));
 check('celebration happens after speech, not before', ui.find('avatar-container')?.props.className.includes('is-happy'));
+check('speech end removes both pulse property and boundary marker', ui.avatarElement.style.getPropertyValue('--audio-pulse') === ''
+  && !ui.avatarElement.classList.contains('speech-boundary-active'));
+reply?.onboundary({ name: 'word', charLength: 10 });
+ui.clock.tick(125);
+check('late boundaries and cleared decay timers cannot revive a finished pulse', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '');
 reply?.onerror();
 await ui.settle();
 ui.clock.tick();
@@ -506,6 +533,61 @@ ui.flush();
 check('visible idle tabs resume wake listening', mic.starts.length === beforeHidden + 1 && Boolean(ui.find('wake-indicator')));
 ui.unmount();
 check('App unmount detaches recognition and closes audio', mic.onresult === null && ui.audio.instances[0]?.closes === 1);
+
+// A same-utterance question must bypass the wake face as soon as work begins.
+const inlineUi = await createAppHarness();
+inlineUi.clock.tick();
+await inlineUi.settle();
+inlineUi.deferChat = true;
+const inlineMic = inlineUi.recognition.instances[0];
+inlineMic.result('hey nova tell me a joke');
+inlineUi.flush();
+check('inline wake: thinking overrides the still-active wake mood', inlineUi.find('avatar-container')?.props.className.includes('is-thinking')
+  && !inlineUi.find('avatar-container')?.props.className.includes('is-waking'));
+inlineMic.end();
+await inlineUi.settle();
+inlineUi.pendingChats[0]?.resolve();
+await inlineUi.settle();
+check('inline wake: speech overrides wake/happy before the 800ms timer', inlineUi.clock.now() < 800
+  && inlineUi.find('avatar-container')?.props.className.includes('is-speaking')
+  && !/is-waking|is-happy/.test(inlineUi.find('avatar-container')?.props.className ?? ''));
+inlineUi.utterances[0]?.onend();
+await inlineUi.settle();
+inlineUi.clock.tick(800);
+inlineUi.flush();
+check('post-reply celebration cancels the earlier wake expiry timer', inlineUi.find('avatar-container')?.props.className.includes('is-happy'));
+inlineUi.clock.tick(699);
+inlineUi.flush();
+check('post-reply crescent pose is held for 1.5 seconds', inlineUi.find('avatar-container')?.props.className.includes('is-happy'));
+inlineUi.clock.tick(1);
+inlineUi.flush();
+check('post-reply pose releases to idle at 1500ms', !inlineUi.find('avatar-container')?.props.className.includes('is-happy'));
+inlineUi.unmount();
+check('wake and celebration timers are cleaned up on unmount', inlineUi.clock.pending === 0);
+
+// Local memory commands still speak offline: the offline face must not mask them.
+const offlineAvatarUi = await createAppHarness({ modelsOffline: true });
+offlineAvatarUi.clock.tick();
+await offlineAvatarUi.settle();
+check('offline avatar appears only at rest', offlineAvatarUi.find('avatar-container')?.props.className.includes('is-offline'));
+offlineAvatarUi.recognition.instances[0].result('hey nova');
+offlineAvatarUi.flush();
+check('offline wake uses the wake/listening face, not dim offline eyes', /is-waking/.test(offlineAvatarUi.find('avatar-container')?.props.className ?? '')
+  && !/is-offline/.test(offlineAvatarUi.find('avatar-container')?.props.className ?? ''));
+offlineAvatarUi.recognition.instances[0].end();
+offlineAvatarUi.clock.tick(150);
+offlineAvatarUi.recognition.instances[0].result('what do you remember');
+offlineAvatarUi.recognition.instances[0].end();
+await offlineAvatarUi.settle();
+check('offline local speech is never masked by offline or wake poses', offlineAvatarUi.utterances.length === 1
+  && offlineAvatarUi.find('avatar-container')?.props.className.includes('is-speaking')
+  && !/is-offline|is-waking|is-happy/.test(offlineAvatarUi.find('avatar-container')?.props.className ?? ''));
+offlineAvatarUi.utterances[0]?.onboundary({ name: 'word', charLength: 10 });
+check('offline local speech receives the same live full-strength pulse', offlineAvatarUi.avatarElement.style.getPropertyValue('--audio-pulse') === '1.000');
+offlineAvatarUi.unmount();
+check('unmount clears live word pulse and its timer', offlineAvatarUi.avatarElement.style.getPropertyValue('--audio-pulse') === '' && offlineAvatarUi.clock.pending === 0);
+offlineAvatarUi.utterances[0]?.onboundary({ name: 'word', charLength: 10 });
+check('unmounted speech callbacks cannot restart eye brightness', offlineAvatarUi.avatarElement.style.getPropertyValue('--audio-pulse') === '');
 
 const unsupportedUi = await createAppHarness({ continuous: false });
 await unsupportedUi.settle();

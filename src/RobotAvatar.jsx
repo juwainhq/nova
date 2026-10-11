@@ -1,84 +1,31 @@
 import { APP_NAME } from './brand.js';
 
-// NOVA's avatar. Purely presentational: every expression is driven by state classes
-// on `.avatar-container` from index.css, so all motion lives in one place.
-//
-// There is deliberately no mouth. Expression comes from the eyes and the body only,
-// so the eye markup is layered to let each kind of motion compose without fighting:
-//
-//   .robot-eye   — the outermost group; state transforms (the happy lift) apply here
-//   .eye-drift   — slow independent rise and settle, so the eyes have some weight
-//   .eye-scale   — size: grow, squint, droop; a transitioned static transform
-//   .eye-lid     — blinking, the only animated scaleY, plus iris glow
-//
-// Separate elements keep a blink from overriding a size change: nested transforms
-// multiply, whereas sharing one element would make the animation win outright.
-//
-// The eyes stand perfectly upright. An earlier version leaned them a few degrees the
-// same way, and it read as a squint rather than as poise at this size.
-
-// Eye geometry, in viewBox units on a 280-wide canvas. The pair is the face's focal
-// point: each pill is about a fifth of the avatar's width, and the two together with
-// the gap between them span a little over half of it. Larger than this and they stop
-// looking like eyes and start looking like goggles.
-const EYE = {
-  width: 46,
-  height: 74,
-  // Between the facing edges, not between the centres. Wide enough that the two eyes
-  // read as separate eyes rather than as one split shape, without pushing the pair out
-  // toward the edges of the face — at 44 they start to look like they belong to a
-  // different face.
-  gap: 38,
-  cy: 112, // above the orb's midpoint, so the face reads as upper-centred
-};
-
-// A gap is measured between the facing edges, so each centre sits half a gap plus
-// half an eye either side of the midline.
-const EYE_CX = {
-  left: 140 - (EYE.gap + EYE.width) / 2,
-  right: 140 + (EYE.gap + EYE.width) / 2,
-};
-
-// A closed, upward-curving eye for the happy state, scaled to the pill it replaces.
-function crescentPath(cx) {
-  const half = EYE.width * 0.37;
-  const lift = EYE.height * 0.22;
-  const foot = EYE.height * 0.09;
-  return `M${cx - half} ${EYE.cy + foot}Q${cx} ${EYE.cy - lift} ${cx + half} ${EYE.cy + foot}`;
-}
-
-const EYES = ['left', 'right'].map((side) => ({ side, cx: EYE_CX[side] }));
+// Eye dimensions are CSS pixels at the default 160px avatar size. SVG geometry
+// lives in a 280-unit viewBox, so the uniform scale below makes 28 × 42 mean real
+// on-screen pixels, not accidentally smaller viewBox units. Compact layouts scale
+// the entire face proportionally; verify-avatar checks both coordinate systems.
+const VIEWBOX = 280;
+const AVATAR_SIZE = 160;
+const EYE = { width: 28, height: 42, gap: 18, cy: 60 };
+const PIXEL_TO_SVG = VIEWBOX / AVATAR_SIZE;
+const CENTER = VIEWBOX / 2;
+const EYE_Y = EYE.cy * PIXEL_TO_SVG;
+const EYE_OFFSET = (EYE.width + EYE.gap) / 2 * PIXEL_TO_SVG;
+const EYES = [
+  { side: 'left', cx: CENTER - EYE_OFFSET },
+  { side: 'right', cx: CENTER + EYE_OFFSET },
+];
 
 function Eye({ side, cx }) {
-  const x = cx - EYE.width / 2;
-  const y = EYE.cy - EYE.height / 2;
-  const radius = EYE.width / 2;
   return (
-    <g className={`robot-eye robot-eye-${side}`}>
-      <g className="eye-drift">
-        <g className="eye-scale">
-          <g className="eye-lid">
-            {/* A capsule: corner radius equal to half the width, so both ends are
-                true semicircles. The vertical gradient is the inner shadow — the well
-                is dark where it turns away from the light at the top and lifts toward
-                the bottom, which is what stops a solid dark shape reading as flat. */}
-            <rect
-              className="eye-iris"
-              x={x}
-              y={y}
-              width={EYE.width}
-              height={EYE.height}
-              rx={radius}
-              ry={radius}
-              fill="url(#eyeWell)"
-            />
-            {/* No highlight. A gleam this size reads as a pupil and makes the eye look
-                like a ball; the depth comes from the well gradient instead. */}
-          </g>
-        </g>
-        {/* Inside the drift layer, so a blink and a drift never fight: the crescent
-            has to travel with the eye it replaces. */}
-        <path className="eye-crescent" d={crescentPath(cx)} stroke="#2A1C13" strokeWidth={EYE.width * 0.1} strokeLinecap="round" />
+    <g className={`robot-eye robot-eye-${side}`} transform={`translate(${cx} ${EYE_Y}) scale(${PIXEL_TO_SVG})`}>
+      {/* A fixed local origin prevents a changing blink bounding box from moving
+          the eyes' pivot. Both copies receive exactly the same pose and paint. */}
+      <g className="eye-scale">
+        <ellipse className="eye-iris" cx="0" cy="0" rx={EYE.width / 2} ry={EYE.height / 2} fill="url(#eyeWell)" />
+        {/* A filled, symmetric crescent occupying the same 28 × 42 local bounds.
+            The happy/wake pose squashes it to 33.6 × 16.8 on-screen pixels. */}
+        <path className="eye-crescent" d="M-14 21C-14 -35 14 -35 14 21C8 -11 -8 -11 -14 21Z" fill="url(#eyeWell)" />
       </g>
     </g>
   );
@@ -86,7 +33,7 @@ function Eye({ side, cx }) {
 
 function RobotAvatar() {
   return (
-    <svg className="robot-avatar" viewBox="0 0 280 280" fill="none" role="img" aria-label={`${APP_NAME}, a softly glowing orb with expressive eyes`}>
+    <svg className="robot-avatar" viewBox={`0 0 ${VIEWBOX} ${VIEWBOX}`} fill="none" role="img" aria-label={`${APP_NAME}, a softly glowing orb with expressive eyes`}>
       <defs>
         <radialGradient id="orbSurface" cx="0" cy="0" r="1" gradientTransform="matrix(145 164 -153 135 93 76)" gradientUnits="userSpaceOnUse">
           <stop stopColor="#FFFDF9" />
@@ -104,11 +51,10 @@ function RobotAvatar() {
         <filter id="orbShadow" x="-35%" y="-25%" width="170%" height="180%" colorInterpolationFilters="sRGB">
           <feDropShadow dx="0" dy="11" stdDeviation="10" floodColor="#000000" floodOpacity=".28" />
         </filter>
-        <linearGradient id="eyeWell" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#0A0604" />
-          <stop offset=".5" stopColor="#180F0A" />
-          <stop offset="1" stopColor="#2B1C14" />
-        </linearGradient>
+        <radialGradient id="eyeWell" cx=".5" cy=".5" r=".5">
+          <stop className="eye-shade" offset="0" stopColor="#161616" />
+          <stop className="eye-surface" offset="1" stopColor="#1a1a1a" />
+        </radialGradient>
       </defs>
 
       <circle className="orb-bloom" cx="140" cy="140" r="106" fill="#FFF0DB" filter="url(#orbBloom)" />
@@ -117,7 +63,15 @@ function RobotAvatar() {
       <path d="M63 171C73 215 108 237 146 237" stroke="#C6AD92" strokeOpacity=".22" strokeWidth="2" strokeLinecap="round" />
       <path d="M217 76C237 95 246 119 246 144" stroke="#FFFFFF" strokeOpacity=".58" strokeWidth="2" strokeLinecap="round" />
 
-      {EYES.map((eye) => <Eye key={eye.side} {...eye} />)}
+      {/* Gaze, blink and speech light each act on the pair, never on just one eye.
+          Only pose scale is local to an eye, with identical centered origins. */}
+      <g className="eyes-gaze" style={{ '--eye-shift': `${6 * PIXEL_TO_SVG}px` }}>
+        <g className="eyes-blink" style={{ transformOrigin: `${CENTER}px ${EYE_Y}px` }}>
+          <g className="eyes-voice">
+            {EYES.map((eye) => <Eye key={eye.side} {...eye} />)}
+          </g>
+        </g>
+      </g>
     </svg>
   );
 }

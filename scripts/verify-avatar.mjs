@@ -1,9 +1,5 @@
-// Check the avatar still matches its specification after an edit.
-//
-// Verified two ways: the SVG is rendered to real markup through React (so the
-// element structure is checked, not the source text), and index.css is checked for
-// the eye and body behaviour each state is supposed to have.
-//
+// Browserless specification checks: real React-rendered SVG geometry plus the
+// real state/keyframe rules. This is structural validation, not a visual audition.
 //   node scripts/verify-avatar.mjs
 import { build } from 'esbuild';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -14,13 +10,9 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const root = process.cwd();
-
-const problems = [];
 const checks = [];
-function check(label, ok, detail = '') {
-  checks.push({ label, ok, detail });
-  if (!ok) problems.push(label);
-}
+function check(label, ok, detail = '') { checks.push({ label, ok: Boolean(ok), detail }); }
+const near = (a, b, tolerance = .0001) => Number.isFinite(a) && Math.abs(a - b) < tolerance;
 
 async function renderAvatar() {
   const result = await build({
@@ -37,20 +29,16 @@ async function renderAvatar() {
     bundle: true,
     write: false,
     platform: 'node',
-    // CJS, not ESM: react-dom/server requires node builtins, which an ESM bundle
-    // cannot express. Bundling everything keeps the probe runnable from /tmp,
-    // where bare imports would not resolve against this project's node_modules.
+    // CJS lets bundled react-dom/server require Node builtins from the temp probe.
     format: 'cjs',
     jsx: 'automatic',
     logLevel: 'warning',
   });
-
   const directory = await mkdtemp(join(tmpdir(), 'nova-avatar-'));
-  const file = join(directory, 'probe.cjs');
   try {
+    const file = join(directory, 'probe.cjs');
     await writeFile(file, result.outputFiles[0].text, 'utf8');
-    const { stdout } = await run(process.execPath, [file], { cwd: root });
-    return stdout;
+    return (await run(process.execPath, [file], { cwd: root })).stdout;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -58,239 +46,273 @@ async function renderAvatar() {
 
 const markup = await renderAvatar();
 const css = await readFile(resolve(root, 'src/index.css'), 'utf8');
-// Comments explain the absence of a mouth, so strip them before searching.
 const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, '');
 
-// ---------------------------------------------------------------- SVG structure
-check('renders an svg', /^<svg class="robot-avatar"/.test(markup));
-check('has no mouth element', !/mouth/i.test(markup), markup.match(/class="[^"]*mouth[^"]*"/g)?.join(', ') ?? '');
-check('has no mouthBloom filter', !/mouthBloom/.test(markup));
-check('keeps the orb body', markup.includes('class="blob-shape"'));
-check('has exactly two eyes', (markup.match(/class="robot-eye robot-eye-/g) || []).length === 2);
-check('has a left and a right eye', /robot-eye-left/.test(markup) && /robot-eye-right/.test(markup));
-check('lays eyes out as drift > size > blink',
-  (markup.match(/class="eye-drift"/g) || []).length === 2
-  && (markup.match(/class="eye-scale"/g) || []).length === 2
-  && (markup.match(/class="eye-lid"/g) || []).length === 2);
-check('includes a crescent shape per eye', (markup.match(/class="eye-crescent"/g) || []).length === 2);
-check('keeps an iris per eye', (markup.match(/class="eye-iris"/g) || []).length === 2);
-// The highlight was removed deliberately: at this size a gleam reads as a pupil and
-// makes the eye look like a ball. Depth comes from the well gradient instead.
-check('has no pupil-like highlight', !/eye-spark/.test(markup));
-// The crescent has to sit inside the drift layer, or it would not travel with the eye
-// it replaces during the happy state.
-check('crescent drifts with its eye', /class="eye-drift">[\s\S]{0,400}?class="eye-crescent"/.test(
-  markup.split('robot-eye-right')[0]));
+// Tiny SVG tree reader: inspect real parent/child relationships and attributes,
+// not source constants or JSX ordering. No DOM package or browser is required.
+const attrs = (tag) => Object.fromEntries([...tag.matchAll(/([\w:-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]]));
+const tree = { tag: 'root', children: [] };
+const stack = [tree];
+for (const [tag] of markup.matchAll(/<[^>]+>/g)) {
+  if (tag.startsWith('</')) { stack.pop(); continue; }
+  const node = { tag: /^<([\w]+)/.exec(tag)?.[1], attrs: attrs(tag), children: [] };
+  stack.at(-1).children.push(node);
+  if (!tag.endsWith('/>')) stack.push(node);
+}
+const nodes = (node = tree) => [node, ...node.children.flatMap((child) => nodes(child))];
+const hasClass = (node, name) => node?.attrs?.class?.split(' ').includes(name);
+const byClass = (name) => nodes().filter((node) => hasClass(node, name));
+const svg = tree.children[0];
+const eyeGroups = byClass('robot-eye');
+const irises = byClass('eye-iris');
+const crescents = byClass('eye-crescent');
+const gaze = byClass('eyes-gaze')[0];
+const blink = byClass('eyes-blink')[0];
+const voice = byClass('eyes-voice')[0];
 
-// ------------------------------------------------------------------- eye geometry
-// Measured from the rendered rects, not the source constants, so a bad formula in the
-// component cannot slip through. This is exactly the class of bug that made the eyes
-// sit near the orb's edges: the centre offset had subtracted a full width rather than
-// half a width, so the intended gap rendered four times too wide.
-const irisRects = [...markup.matchAll(/class="eye-iris" x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="([\d.]+)"/g)]
-  .map((m) => ({ x: +m[1], y: +m[2], w: +m[3], h: +m[4], rx: +m[5] }));
-
-check('both eyes are the same size',
-  irisRects.length === 2 && irisRects[0].w === irisRects[1].w && irisRects[0].h === irisRects[1].h,
-  `${irisRects.length} rects`);
-
-const eye = irisRects[0] ?? { x: 0, y: 0, w: 0, h: 0, rx: 0 };
-check('eyes are tall pills, not dots', eye.h > eye.w * 1.3, `h/w = ${(eye.h / eye.w).toFixed(2)}`);
-// The pair should carry the face without becoming goggles. Measured against an orb
-// spanning ~222 units, so this is roughly 19-24% of the width per eye.
-const eyeShareOfOrb = eye.w / 222;
-check('eyes are large enough to carry the face', eyeShareOfOrb >= .17,
-  `${eye.w}/222 = ${(eyeShareOfOrb * 100).toFixed(1)}% of the orb width`);
-check('eyes are not oversized', eyeShareOfOrb <= .24,
-  `${eye.w}/222 = ${(eyeShareOfOrb * 100).toFixed(1)}% of the orb width`);
-
-// A true capsule: corner radius is exactly half the width, so both ends are semicircles.
-check('eyes are true capsules', eye.rx === eye.w / 2, `rx ${eye.rx} vs half-width ${eye.w / 2}`);
-
-const [leftEye, rightEye] = irisRects;
-const innerGap = rightEye.x - (leftEye.x + leftEye.w);
-const gapRatio = innerGap / eye.w;
-check('eyes are separated, not touching', gapRatio >= .3,
-  `${innerGap} units = ${gapRatio.toFixed(2)}x eye width`);
-
-// The spacing has been widened more than once on request, so a ratio ceiling here would
-// just keep getting raised. Assert the thing that actually constrains it: the pair has
-// to stay inside the orb with a visible margin of cheek. The orb spans x 29..251.
-const ORB = { left: 29, right: 251 };
-const leftMargin = leftEye.x - ORB.left;
-const rightMargin = ORB.right - (rightEye.x + rightEye.w);
-check('pair stays inside the orb', leftMargin > 0 && rightMargin > 0,
-  `margins ${leftMargin.toFixed(0)} / ${rightMargin.toFixed(0)} units`);
-check('eyes leave a margin of cheek, not crowding the rim',
-  Math.min(leftMargin, rightMargin) >= (ORB.right - ORB.left) * .15,
-  `${Math.min(leftMargin, rightMargin).toFixed(0)} units = ${(Math.min(leftMargin, rightMargin) / 222 * 100).toFixed(0)}% of the orb width`);
-check('pair is centred inside the orb', Math.abs(leftMargin - rightMargin) < 1,
-  `left ${leftMargin.toFixed(1)} vs right ${rightMargin.toFixed(1)}`);
-check('eyes sit in the upper half', eye.y + eye.h / 2 < 140, `centre y = ${eye.y + eye.h / 2}`);
-check('eyes are centred as a pair',
-  Math.abs((leftEye.x + rightEye.x + eye.w) / 2 - 140) < 0.01,
-  `midpoint ${(leftEye.x + rightEye.x + eye.w) / 2}`);
-
-// The eyes must stand perfectly upright. An earlier version leaned both of them a few
-// degrees the same way and it read as a squint, so no group carries a rotation and the
-// base .robot-eye rule sets no transform for a state rule to inherit.
-check('eyes are perfectly upright', !/rotate\(/.test(markup));
-// `.is-happy .robot-eye` legitimately sets one, so only the bare rule is checked.
-// `transform-box` and `transform-origin` do not count — they set the box, not the pose.
-const baseRuleSetsTransform = [...cssCode.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(([, selector, body]) =>
-  selector.split(',').map((part) => part.trim()).includes('.robot-eye')
-  && /(^|[\s;])transform:/.test(body));
-check('no state rule can tilt the eyes', !baseRuleSetsTransform);
-check('no stale tilt layer in the stylesheet', !/\.eye-tilt/.test(cssCode));
-
-// ------------------------------------------------------------- inner shadow
-check('inner shadow gradient exists for the eye well', /id="eyeWell"/.test(markup));
-const wellStops = [...markup.matchAll(/<stop offset="[\d.]+" stop-color="#([0-9A-Fa-f]{6})"/g)]
-  .map((m) => m[1]);
-const well = markup.slice(markup.indexOf('id="eyeWell"'), markup.indexOf('id="eyeWell"') + 320);
-const wellShades = [...well.matchAll(/stop-color="#([0-9A-Fa-f]{6})"/g)].map((m) => +('0x' + m[1].slice(0, 2)));
-check('eye well is dark inside', /id="eyeWell"/.test(markup) && wellShades.length >= 3
-  && Math.max(...wellShades) < 0x40,
-  `darkest-to-lightest red channels: ${wellShades.join(', ')}`);
-check('eye well lightens toward the bottom, so it reads as depth not flat fill',
-  wellShades.length >= 3 && wellShades[wellShades.length - 1] > wellShades[0],
-  `${wellShades[0]} -> ${wellShades[wellShades.length - 1]}`);
-void wellStops;
-
-// ------------------------------------------------------------- motion plumbing
-check('pose and rhythm use separate elements',
-  /\.avatar-figure\s*\{[^}]*transform:/.test(cssCode) && /\.robot-avatar\s*\{[^}]*animation:/.test(cssCode));
-check('eyes define all three motion layers',
-  /\.eye-scale\s*\{[^}]*scale\(var\(--eye-sx/.test(cssCode) && /\.eye-lid\s*\{[^}]*animation: eye-blink/.test(cssCode));
-
-const keyframes = (name) => new RegExp(`@keyframes\\s+${name}\\b`).test(cssCode);
-
-function rulesFor(selector) {
-  // Collect the bodies of every rule whose selector list contains `selector`.
-  const bodies = [];
-  const pattern = /([^{}]+)\{([^{}]*)\}/g;
-  let match;
-  while ((match = pattern.exec(cssCode)) !== null) {
-    const selectors = match[1].split(',').map((part) => part.trim());
-    if (selectors.some((part) => part === selector || part.split(/\s+/).includes(selector)
-      || part.startsWith(`${selector} `) || part.includes(`${selector}:`))) {
-      bodies.push(match[2]);
+// Read balanced CSS blocks so default rules can compose while media overrides
+// remain separate. This also catches rules split across a shared selector list.
+function blocks(code) {
+  const result = [];
+  for (let cursor = 0; cursor < code.length;) {
+    const open = code.indexOf('{', cursor);
+    if (open < 0) break;
+    let end = open + 1, depth = 1;
+    while (end < code.length && depth) {
+      if (code[end] === '{') depth += 1;
+      if (code[end] === '}') depth -= 1;
+      end += 1;
     }
+    result.push({ header: code.slice(cursor, open).trim(), body: code.slice(open + 1, end - 1) });
+    cursor = end;
   }
-  return bodies.join('\n');
+  return result;
+}
+const cssBlocks = blocks(cssCode);
+const styleRules = [];
+function collectRules(items, conditional = false) {
+  for (const { header, body } of items) {
+    if (/^@media/.test(header)) collectRules(blocks(body), true);
+    else if (!header.startsWith('@')) styleRules.push({ selectors: header.split(',').map((part) => part.trim()), body, conditional });
+  }
+}
+collectRules(cssBlocks);
+const rule = (selector) => styleRules.filter(({ selectors, conditional }) => !conditional && selectors.includes(selector))
+  .map(({ body }) => body).join(';');
+const property = (body, name) => [...body.matchAll(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, 'g'))].at(-1)?.[1]?.trim() ?? '';
+const value = (selector, name) => property(rule(selector), name);
+const animation = (selector) => value(selector, 'animation');
+function keyframes(name) {
+  const body = cssBlocks.find(({ header }) => header === `@keyframes ${name}`)?.body ?? '';
+  return blocks(body).flatMap(({ header, body }) => header.split(',').map((time) => ({ at: parseFloat(time), body })))
+    .sort((a, b) => a.at - b.at);
+}
+const transformAt = (frames, at) => property(frames.find((frame) => frame.at === at)?.body ?? '', 'transform');
+const poseRules = styleRules.filter(({ selectors }) => selectors.some((selector) => /\.(?:eye-|eyes-|robot-eye)/.test(selector)));
+
+// ---------------------------------------------------------------- SVG & symmetry
+check('renders an accessible SVG with lowercase aria-label', svg?.tag === 'svg' && svg.attrs.role === 'img'
+  && svg.attrs['aria-label']?.startsWith('NOVA,')
+  && Object.keys(svg.attrs).filter((name) => /^aria-/i.test(name)).every((name) => name === name.toLowerCase()));
+check('keeps the mouthless orb body and bloom', byClass('blob-shape').length === 1 && byClass('orb-bloom').length === 1 && !/mouth/i.test(markup));
+check('has exactly two named eyes', eyeGroups.length === 2 && hasClass(eyeGroups[0], 'robot-eye-left') && hasClass(eyeGroups[1], 'robot-eye-right'));
+check('both base eyes are real SVG ellipses, never border pills', irises.length === 2 && irises.every((node) => node.tag === 'ellipse'));
+check('both eyes have identical shape, paint and pose children', eyeGroups.length === 2
+  && JSON.stringify(eyeGroups[0].children) === JSON.stringify(eyeGroups[1].children));
+check('one shared gaze > blink > voice hierarchy contains both eyes', byClass('eyes-gaze').length === 1
+  && byClass('eyes-blink').length === 1 && byClass('eyes-voice').length === 1
+  && gaze?.children[0] === blink && blink?.children[0] === voice
+  && voice?.children.length === 2 && voice.children.every((node) => hasClass(node, 'robot-eye')));
+check('each eye has one identical local scale containing ellipse and crescent', eyeGroups.length === 2 && eyeGroups.every((node) =>
+  node.children.length === 1 && hasClass(node.children[0], 'eye-scale') && node.children[0].children.length === 2));
+check('no pupil, gleam, lid, drift or tilt layers remain', !/eye-spark|eye-lid|eye-drift|eye-tilt/.test(markup + cssCode));
+check('no eye uses a rotation, skew, stroke or CSS border', eyeGroups.length === 2
+  && nodes(voice).every((node) => !/rotate|skew/.test(node.attrs?.transform ?? '') && !node.attrs?.stroke)
+  && poseRules.every(({ body }) => !/rotate|skew|(?:^|;)\s*(?:border|perspective)/.test(body)));
+check('no side-specific, staggered or nth-child eye styles', poseRules.every(({ selectors, body }) =>
+  selectors.every((selector) => !/robot-eye-(?:left|right)|nth-|first-child|last-child/.test(selector))
+  && !/animation-delay|--eye-blink/.test(body)));
+check('local eye pivot is fixed at zero in view-box coordinates', value('.eye-scale', 'transform-box') === 'view-box'
+  && value('.eye-scale', 'transform-origin') === '0 0');
+
+// ---------------------------------------------------------------- true CSS-pixel geometry
+const viewBox = svg?.attrs.viewBox?.split(' ').map(Number) ?? [];
+const boxSize = parseFloat(value('.avatar-container', '--avatar-size'));
+const unit = boxSize / viewBox[2];
+const eyes = eyeGroups.map((node, i) => {
+  const match = /^translate\(([-\d.]+) ([-\d.]+)\) scale\(([\d.]+)\)$/.exec(node.attrs.transform ?? '');
+  const shape = irises[i]?.attrs ?? {};
+  const scale = match ? +match[3] : NaN;
+  return {
+    scale,
+    x: ((match ? +match[1] : NaN) + Number(shape.cx) * scale) * unit,
+    y: ((match ? +match[2] : NaN) + Number(shape.cy) * scale) * unit,
+    w: Number(shape.rx) * 2 * scale * unit,
+    h: Number(shape.ry) * 2 * scale * unit,
+  };
+});
+const [left = {}, right = {}] = eyes;
+const orbWidth = boxSize * 222 / 280;
+const innerGap = right.x - right.w / 2 - (left.x + left.w / 2);
+const margins = [left.x - left.w / 2 - 29 * unit, 251 * unit - (right.x + right.w / 2)];
+check('default avatar is 160px with an unchanged 280-square viewBox', boxSize === 160 && viewBox.join(' ') === '0 0 280 280');
+check('SVG CSS box inherits the same size in both dimensions', value('.robot-avatar', 'width') === 'var(--avatar-size, 160px)'
+  && value('.robot-avatar', 'height') === 'var(--avatar-size, 160px)');
+check('both ellipses have the exact 28px × 42px on-screen size', eyes.length === 2 && eyes.every((eye) => near(eye.w, 28) && near(eye.h, 42)),
+  eyes.map((eye) => `${eye.w}×${eye.h}px`).join(' / '));
+check('conversion from local pixels to SVG units is uniform', eyes.length === 2 && eyes.every((eye) => near(eye.scale, 280 / 160)));
+check('ellipse centers are local zero, not bounding-box dependent', irises.length === 2 && irises.every(({ attrs: shape }) => shape.cx === '0' && shape.cy === '0'));
+check('pair has an exact 18px inner gap', near(innerGap, 18), `${innerGap}px`);
+check('pair is perfectly centered with matching vertical centers', near((left.x + right.x) / 2, boxSize / 2) && near(left.y, right.y));
+check('eyes are in the upper half at y=60px', eyes.length === 2 && eyes.every((eye) => near(eye.y, 60) && eye.y < boxSize / 2));
+check('equal cheek margins keep the pair away from the rim', near(margins[0], margins[1]) && Math.min(...margins) >= orbWidth * .15);
+check('blink pivot is the shared pair center, not either eye', blink?.attrs.style === 'transform-origin:140px 105px'
+  && value('.eyes-blink', 'transform-box') === 'view-box');
+
+// ---------------------------------------------------------------- neutral radial well
+const well = nodes().find((node) => node.attrs?.id === 'eyeWell');
+const stops = well?.children ?? [];
+const shades = stops.map((node) => node.attrs['stop-color']);
+check('eye well is a centered radial gradient, not the old linear fill', well?.tag === 'radialGradient'
+  && well.attrs.cx === '.5' && well.attrs.cy === '.5' && well.attrs.r === '.5' && !well.attrs.gradientTransform);
+check('base eye surface is #1a1a1a with a subtle #161616 center', shades.join(' ') === '#161616 #1a1a1a'
+  && stops[0]?.attrs.offset === '0' && stops[1]?.attrs.offset === '1');
+check('both ellipses and crescents share that same fill', [...irises, ...crescents].length === 4
+  && [...irises, ...crescents].every((node) => node.attrs.fill === 'url(#eyeWell)'));
+check('gradient defaults agree with rendered neutral colors', value('.eye-surface', 'stop-color') === 'var(--eye-color, #1a1a1a)'
+  && value('.eye-shade', 'stop-color') === 'var(--eye-shadow, #161616)');
+check('no capsule-era eye glow filter remains', poseRules.every(({ selectors, body }) =>
+  selectors.includes('.eyes-voice') || !/drop-shadow|url\(/.test(body)));
+
+// ---------------------------------------------------------------- state transitions & idle
+for (const [selector, prop] of [['.avatar-figure', 'transform'], ['.eyes-gaze', 'transform'], ['.eye-scale', 'transform'],
+  ['.eye-iris', 'opacity'], ['.eye-crescent', 'opacity'], ['.robot-eye', 'opacity'], ['.eye-surface', 'stop-color'], ['.eye-shade', 'stop-color']]) {
+  check(`${selector}: state transitions use 400ms ease-in-out`, value(selector, 'transition') === `${prop} 400ms ease-in-out`);
+}
+check('body pose and animated rhythm are on separate elements', /rotateY\(var\(--figure-y, 0deg\)\) scale\(var\(--figure-scale, 1\)\)/.test(value('.avatar-figure', 'transform'))
+  && !value('.avatar-figure', 'animation') && !value('.robot-avatar', '--figure-scale'));
+check('body never rotates on Z or applies skew/perspective', styleRules.filter(({ selectors }) => selectors.some((selector) => /\.(?:avatar-figure|robot-avatar|avatar-container)/.test(selector)))
+  .every(({ body }) => !/rotate\(|rotateZ|skew|perspective/.test(body)));
+const entranceFrames = blocks(cssBlocks.find(({ header }) => header === '@keyframes fade-in')?.body ?? '');
+check('entrance: 400ms opacity-only fade cannot overshoot the speaking scale', animation('.avatar-container') === 'fade-in .4s ease-in-out both'
+  && entranceFrames.length === 2 && entranceFrames.every(({ body }) => !property(body, 'transform'))
+  && entranceFrames.map(({ body }) => property(body, 'opacity')).join(' ') === '0 1');
+check('idle: float repeats every 3s with ease-in-out', animation('.robot-avatar') === 'orb-float 3s ease-in-out infinite');
+const floatFrames = keyframes('orb-float');
+check('idle: body travels exactly 0 → −8px → 0 on Y', transformAt(floatFrames, 0) === 'translateY(0)'
+  && transformAt(floatFrames, 50) === 'translateY(-8px)' && transformAt(floatFrames, 100) === 'translateY(0)');
+check('idle: one shared blink every 4s', animation('.eyes-blink') === 'eye-blink 4s ease-in-out infinite');
+const blinkFrames = keyframes('eye-blink');
+const closed = blinkFrames.find((frame) => frame.at === 97.5);
+const closedScale = Number(/scaleY\(([\d.]+)\)/.exec(property(closed?.body ?? '', 'transform'))?.[1]);
+check('blink: 42px → 4px → 42px, both eyes together', near(left.h * closedScale, 4)
+  && [0, 95, 100].every((at) => transformAt(blinkFrames, at) === 'scaleY(1)'));
+check('blink: close/open takes exactly 200ms, centered in that window', blinkFrames.map((frame) => frame.at).join(' ') === '0 95 97.5 100'
+  && near((100 - 95) / 100 * 4000, 200) && near((97.5 - 95) / 100 * 4000, 100));
+check('eye animation never introduces rotation or skew', ['eye-blink', 'eyes-thinking'].every((name) => keyframes(name).length
+  && keyframes(name).every(({ body }) => !/rotate|skew/.test(body))));
+
+// ---------------------------------------------------------------- listening
+check('listening: both eyes scale to exactly 115%', value('.is-listening', '--eye-sx') === '1.15' && value('.is-listening', '--eye-sy') === '1.15');
+check('listening: eye background brightens to #222', value('.is-listening', '--eye-color') === '#222' && value('.is-listening', '--eye-shadow') === '#1e1e1e');
+check('listening: body uses rotateY(5deg), never a Z tilt', value('.is-listening .avatar-figure', '--figure-y') === '5deg');
+check('listening: no perspective can make the two eyes unequal', !/\bperspective\s*:|perspective\(/.test(cssCode));
+check('listening: soft orange pulse ring repeats every 1.5s', animation('.is-listening .listen-ring') === 'listen-pulse 1.5s ease-out infinite'
+  && /rgba\(255, 106, 26, \.45\)/.test(value('.listen-ring', 'border')));
+const ringFrames = keyframes('listen-pulse');
+check('listening: ring expands outward and fades fully', transformAt(ringFrames, 0).endsWith('scale(1)')
+  && transformAt(ringFrames, 100).endsWith('scale(1.5)') && property(ringFrames.at(-1)?.body ?? '', 'opacity') === '0');
+
+// ---------------------------------------------------------------- thinking
+check('thinking: shared gaze uses a 2.8s ease-in-out cycle', animation('.is-thinking .eyes-gaze') === 'eyes-thinking 2.8s ease-in-out infinite');
+const shift = parseFloat(property(gaze?.attrs.style ?? '', '--eye-shift')) * unit;
+check('thinking: gaze displacement is exactly 6 CSS pixels', near(shift, 6), `${shift}px at the default size`);
+const thinkingFrames = keyframes('eyes-thinking');
+const leftFrames = thinkingFrames.filter(({ body }) => property(body, 'transform') === 'translateX(calc(-1 * var(--eye-shift)))');
+const rightFrames = thinkingFrames.filter(({ body }) => property(body, 'transform') === 'translateX(var(--eye-shift))');
+check('thinking: both sides pause for exactly 800ms', leftFrames.length === 2 && rightFrames.length === 2
+  && near((leftFrames[1].at - leftFrames[0].at) * 28, 800)
+  && near((rightFrames[1].at - rightFrames[0].at) * 28, 800));
+check('thinking: smooth 400ms moves left, right and home', thinkingFrames.length === 6
+  && near(leftFrames[0]?.at * 28, 400)
+  && near((rightFrames[0]?.at - leftFrames[1]?.at) * 28, 400)
+  && near((100 - rightFrames[1]?.at) * 28, 400)
+  && transformAt(thinkingFrames, 0) === 'translateX(0)' && transformAt(thinkingFrames, 100) === 'translateX(0)');
+check('thinking: body shrinks to 97%', value('.is-thinking .avatar-figure', '--figure-scale') === '.97');
+check('thinking: slow subtle lateral sway, no squint or rotation', animation('.is-thinking .robot-avatar') === 'orb-sway 3s ease-in-out infinite'
+  && transformAt(keyframes('orb-sway'), 0) === 'translateX(-3px)' && transformAt(keyframes('orb-sway'), 50) === 'translateX(3px)'
+  && !value('.is-thinking', '--eye-sy'));
+
+// ---------------------------------------------------------------- speaking
+check('speaking: brightness reads live boundary data on the shared pair', value('.is-speaking .eyes-voice', 'filter') === 'brightness(calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .8))');
+check('speaking: light has no fake looping animation or slow state transition', !animation('.is-speaking .eyes-voice') && !value('.eyes-voice', 'transition'));
+check('speaking: scale is clamped strictly to 100–104%', value('.is-speaking .avatar-figure', '--figure-scale') === 'calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .04)');
+check('speaking: quick gentle Y bounces never add extra scale', animation('.is-speaking .robot-avatar') === 'orb-word-bounce .5s ease-in-out infinite'
+  && transformAt(keyframes('orb-word-bounce'), 0) === 'translateY(0)' && transformAt(keyframes('orb-word-bounce'), 50) === 'translateY(-3px)'
+  && keyframes('orb-word-bounce').every(({ body }) => !/scale|rotate/.test(body)));
+check('speaking: retains the shared blink, never rapid or independent blinks', !/eye-blink-rapid/.test(cssCode)
+  && !animation('.is-speaking .eyes-blink') && !value('.is-speaking', '--eye-sx'));
+
+// ---------------------------------------------------------------- happy / wake
+check('happy/wake: both eyes have identical filled SVG crescents', crescents.length === 2 && crescents.every((node) => node.tag === 'path')
+  && crescents[0].attrs.d === crescents[1].attrs.d);
+// These mirrored cubic curves have extrema x=±14, y=±21: the same local oval
+// bounds before the requested scaleX(1.2)/scaleY(.4) pose is applied.
+check('crescent geometry is symmetric within the original 28×42 bounds', crescents.every((node) =>
+  node.attrs.d === 'M-14 21C-14 -35 14 -35 14 21C8 -11 -8 -11 -14 21Z'));
+check('crescents are hidden in the base state', value('.eye-crescent', 'opacity') === '0');
+for (const state of ['is-happy', 'is-waking']) {
+  check(`${state}: wide crescents scaleX(1.2), scaleY(.4)`, value(`.${state}`, '--eye-sx') === '1.2' && value(`.${state}`, '--eye-sy') === '.4');
+  check(`${state}: iris crossfades to crescent without a second blink`, value(`.${state} .eye-iris`, 'opacity') === '0'
+    && value(`.${state} .eye-crescent`, 'opacity') === '1' && animation(`.${state} .eyes-blink`) === 'none');
+  check(`${state}: one 800ms double bounce, not infinite hops`, animation(`.${state} .robot-avatar`) === 'orb-double-bounce .8s ease-in-out both');
+}
+const jumpFrames = keyframes('orb-double-bounce');
+check('double bounce: exactly two peaks with grounded landings', jumpFrames.length === 6
+  && [0, 40, 80, 100].every((at) => transformAt(jumpFrames, at) === 'translateY(0)')
+  && transformAt(jumpFrames, 20) === 'translateY(-12px)' && transformAt(jumpFrames, 60) === 'translateY(-6px)');
+check('offline: both eyes dim and droop equally, preserving tall ovals', value('.is-offline', '--eye-sy') === '.9'
+  && value('.is-offline .robot-eye', 'opacity') === '.5' && left.h * .9 > left.w);
+check('offline: slow lateral sway never tilts the eyes', animation('.is-offline .robot-avatar') === 'orb-sad-sway 4s ease-in-out infinite'
+  && keyframes('orb-sad-sway').length && keyframes('orb-sad-sway').every(({ body }) => !/rotate|skew/.test(body)));
+
+// ---------------------------------------------------------------- coupled sizing, including compact heights
+check('ring uses the visible 222/280 orb plus clearance, not SVG box width', value('.listen-ring', 'width') === 'calc(var(--avatar-size) * 222 / 280 + 26px)'
+  && value('.listen-ring', 'height') === value('.listen-ring', 'width'));
+check('backlight scales with the same avatar size', value('.avatar-backlight', 'width') === 'calc(var(--avatar-size) * 1.71875)'
+  && value('.avatar-backlight', 'height') === value('.avatar-backlight', 'width'));
+const sizes = styleRules.filter(({ selectors }) => selectors.includes('.avatar-container'))
+  .map(({ body }) => parseFloat(property(body, '--avatar-size'))).filter(Number.isFinite);
+check('compact sizes reuse the coupled variable, no stale SVG width overrides', sizes.join(' ') === '160 108 92'
+  && styleRules.filter(({ selectors, body }) => selectors.includes('.robot-avatar') && property(body, 'width')).length === 1);
+for (const size of sizes) {
+  const orb = size * 222 / 280, ring = orb + 26, glow = size * 1.71875;
+  check(`${size}px: ring clears jump travel and the 104% speaking bounce`, (ring - orb) / 2 > 12 && (ring - orb * 1.04) / 2 > 3 * 1.04,
+    `orb ${orb.toFixed(2)}px, ring ${ring.toFixed(2)}px`);
+  check(`${size}px: glow is wider than the ring`, glow >= ring, `${glow.toFixed(2)}px glow`);
 }
 
-const idle = rulesFor('.robot-avatar');
-const idleEyes = rulesFor('.eye-lid');
-const listening = rulesFor('.is-listening');
-const thinking = rulesFor('.is-thinking');
-const speaking = rulesFor('.is-speaking');
-const happy = rulesFor('.is-happy');
-const offline = rulesFor('.is-offline');
+// ---------------------------------------------------------------- reduced motion & hygiene
+const reduced = cssCode.slice(cssCode.indexOf('@media (prefers-reduced-motion: reduce)'));
+check('reduced motion disables float, gaze and blink, not just their durations', /\.robot-avatar, \.eyes-gaze, \.eyes-blink\s*\{[^}]*animation: none !important; transform: none;/.test(reduced));
+check('reduced motion suppresses rotation, word swell, brightness and rings', /--figure-scale: 1 !important; --figure-y: 0deg !important/.test(reduced)
+  && /\.eyes-voice\s*\{\s*filter: none !important;/.test(reduced) && /\.listen-ring\s*\{[^}]*opacity: 0;/.test(reduced));
+check('no mouth selectors or obsolete capsule animations remain', !/\.mouth-|\.orb-smile|mouth-(?:glow|light)-pulse|orb-wobble|orb-happy-hop|eye-drift|eye-tilt/.test(cssCode));
 
-// ------------------------------ IDLE: steady glow, occasional blink, gentle float
-check('idle: body floats up and down', keyframes('orb-float') && /animation: orb-float/.test(idle));
-check('idle: eyes glow softly', /drop-shadow/.test(idleEyes));
-check('idle: blinks every 4-5 seconds', keyframes('eye-blink') && /--eye-blink, 4\.6s/.test(idleEyes));
-// The eyes must not ride the body rigidly, or the face reads as a decal.
-check('idle: eyes drift slowly, independently of the body',
-  keyframes('eye-drift') && /\.eye-drift\s*\{[^}]*animation: eye-drift/.test(cssCode));
-// A blink needs a close, a partial re-open, then a full one; a single snap closed and
-// open reads as an accordion rather than a lid.
-const blinkFrames = (cssCode.match(/@keyframes eye-blink \{([\s\S]*?)\n\}/) || [])[1] ?? '';
-const blinkSteps = [...blinkFrames.matchAll(/scaleY\((\d*\.?\d+)\)/g)].map((m) => +m[1]);
-check('blink eases closed and open rather than snapping',
-  blinkSteps.length >= 3 && blinkSteps.includes(1) && Math.min(...blinkSteps) < .1,
-  `scaleY steps: ${blinkSteps.join(', ')}`);
-
-// --------------------- LISTENING: bigger, brighter, lean in, 5 degree tilt, ring
-check('listening: eyes grow bigger', /--eye-sx: 1\.1[6-9]/.test(listening));
-const glowOf = (body) => {
-  const found = body.match(/drop-shadow\(0 0 ([\d.]+)px/);
-  return found ? +found[1] : 0;
-};
-check('listening: eyes get brighter', glowOf(listening) > glowOf(idleEyes),
-  `idle ${glowOf(idleEyes)}px -> listening ${glowOf(listening)}px`);
-check('listening: blinks a little more often than idle', /--eye-blink: 4\.4s/.test(listening));
-check('listening: body tilts 5 degrees', /--figure-tilt: -5deg/.test(listening));
-check('listening: leans in', /--figure-scale: 1\.0[0-9]/.test(listening));
-check('listening: subtle pulse ring', /\.is-listening \.listen-ring\s*\{[^}]*animation: listen-pulse/.test(cssCode));
-
-// ------------------ THINKING: gaze side to side, one squint, 3% smaller, wobble
-check('thinking: gaze moves side to side', keyframes('eyes-thinking') && /animation: eyes-thinking/.test(thinking));
-check('thinking: one eye squints', /\.is-thinking \.robot-eye-left \.eye-scale\s*\{[^}]*--eye-sy: \.8/.test(cssCode));
-// Any state that squashes the eye vertically must leave it taller than it is wide.
-// Nothing else stops a future tweak from flattening the pills into rounded squares.
-const squashes = [
-  ['squint', /\.is-thinking \.robot-eye-left \.eye-scale\s*\{[^}]*--eye-sy: ([\d.]+)/.exec(cssCode)?.[1]],
-  ['droop', /\.is-offline \.eye-scale\s*\{[^}]*--eye-sy: ([\d.]+)/.exec(cssCode)?.[1]],
-];
-for (const [name, value] of squashes) {
-  const ratio = (eye.h * Number(value)) / eye.w;
-  check(`${name} keeps the pill shape`, value !== undefined && ratio > 1.25,
-    `${name} scale ${value} -> h/w = ${ratio.toFixed(2)}`);
-}
-check('thinking: shrinks 3 percent', /--figure-scale: \.97/.test(thinking));
-check('thinking: body wobbles', keyframes('orb-wobble') && /animation: orb-wobble/.test(thinking));
-
-// ----------------- SPEAKING: wider, brighter, rapid blinks, 5% bigger, word beat
-check('speaking: eyes wider', /--eye-sx: 1\.1/.test(speaking));
-check('speaking: rapid blinking', keyframes('eye-blink-rapid') && /animation: eye-blink-rapid/.test(speaking));
-check('speaking: grows 5 percent', /--figure-scale: calc\(1\.05/.test(speaking));
-check('speaking: body bounces on each word', keyframes('orb-word-bounce')
-  && /animation: orb-word-bounce/.test(speaking));
-check('speaking: eyes brighten with the voice', /--audio-pulse/.test(speaking));
-
-// ------------------------------ HAPPY: crescent eyes, quick jump, small bounces
-check('happy: crescent eyes replace the iris', /\.is-happy \.eye-crescent\s*\{[^}]*opacity: 1/.test(cssCode)
-  && /\.is-happy \.eye-lid\s*\{[^}]*opacity: 0/.test(cssCode));
-check('happy: quick jump then small bounces', keyframes('orb-happy-hop') && /animation: orb-happy-hop/.test(happy));
-
-// ------------------------------ OFFLINE: droop, half brightness, slow sad sway
-check('offline: eyes droop', /--eye-sy: \.8/.test(offline));
-check('offline: eyes dim to half brightness', /opacity: \.5;/.test(rulesFor('.is-offline .robot-eye')));
-check('offline: slow sad sway', keyframes('orb-sad-sway') && /animation: orb-sad-sway/.test(offline));
-check('offline rules come last', cssCode.indexOf('.is-offline .robot-eye') > cssCode.indexOf('.is-happy .robot-eye'));
-
-// ------------------------------------------------------------ on-screen sizing
-// The orb is drawn inside a 280-unit viewBox but only occupies the middle 222 units, so
-// its on-screen diameter is a fraction of the CSS box. The ring and the glow are
-// measured against that fraction: size the avatar without them and the ring ends up
-// hidden behind the orb, which is invisible in the SVG and in the markup.
-const cssPx = (selector, property) => {
-  const found = new RegExp(`\\${selector}\\s*\\{[^}]*${property}:\\s*([\\d.]+)px`).exec(cssCode);
-  return found ? Number(found[1]) : null;
-};
-const boxSize = cssPx('.robot-avatar', 'width');
-const ringSize = cssPx('.listen-ring', 'width');
-const glowSize = cssPx('.avatar-backlight', 'width');
-const ORB_SHARE = 222 / 280;
-const orbOnScreen = boxSize === null ? null : boxSize * ORB_SHARE;
-
-check('avatar is sized in a sensible band', boxSize !== null && boxSize >= 128 && boxSize <= 176,
-  `${boxSize}px box`);
-check('listen ring clears the orb', ringSize !== null && orbOnScreen !== null && ringSize > orbOnScreen,
-  `orb ${orbOnScreen?.toFixed(1)}px vs ring ${ringSize}px`);
-check('glow is at least as wide as the ring', glowSize !== null && ringSize !== null && glowSize >= ringSize,
-  `glow ${glowSize}px vs ring ${ringSize}px`);
-
-// ------------------------------------------------------------------- hygiene
-check('no mouth selectors remain in css', !/\.mouth-|\.orb-smile/.test(cssCode));
-check('no mouth keyframes remain', !/mouth-glow-pulse|mouth-light-pulse/.test(cssCode));
-check('reduced motion is still honoured', /@media \(prefers-reduced-motion: reduce\)/.test(cssCode));
-
-// ------------------------------------------------------------- state sheet
-// A sheet of every state, built from the real CSS and the real rendered markup, so
-// the motion can be reviewed without a microphone, a model or a network.
+// ---------------------------------------------------------------- real-CSS state sheet
 const STATES = [
-  ['idle', 'IDLE', 'float · upright eyes · drift · blink every 4.6s'],
-  ['is-listening', 'LISTENING', 'bigger + brighter · 5° tilt · ring'],
-  ['is-thinking', 'THINKING', 'side to side · one squint · −3% · wobble'],
-  ['is-speaking', 'SPEAKING', 'wider · rapid blinks · +5% · word beat'],
-  ['is-happy', 'HAPPY', 'crescents · jump then bounces'],
-  ['is-offline', 'OFFLINE', 'droop · half brightness · sad sway'],
+  ['idle', 'IDLE', '28×42px ovals · 4s blink / 200ms · 3s float'],
+  ['is-listening', 'LISTENING', '115% · #222 · rotateY(5°) · 1.5s orange ring'],
+  ['is-thinking', 'THINKING', 'shared ±6px gaze · 800ms holds · 97% sway'],
+  ['is-speaking', 'SPEAKING', 'shared word light · 100–104% · gentle quick bounce'],
+  ['is-happy', 'HAPPY', 'matching wide crescents · one double jump'],
+  ['is-listening is-waking', 'WAKE', '800ms double jump · crescents → listening'],
+  ['is-offline', 'OFFLINE', 'equal droop · half brightness · lateral sway'],
 ];
-
+// Per-cell SVG IDs matter: otherwise url(#eyeWell) in every cell resolves to the
+// first cell's gradient, so listening's local colors never reach its own eyes.
+const cellMarkup = (label) => markup.replace(/id="([^"]+)"/g, (_, id) => `id="${id}-${label.toLowerCase()}"`)
+  .replace(/url\(#([^)]+)\)/g, (_, id) => `url(#${id}-${label.toLowerCase()})`);
 const sheet = `<!doctype html>
 <html lang="en">
   <head>
@@ -303,6 +325,7 @@ ${css}
       .sheet-head { max-width: 1080px; margin: 0 auto 26px; }
       .sheet-head h1 { margin: 0; color: #fff7ef; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
       .sheet-head p { margin: 7px 0 0; color: #a38a72; font-size: 11px; line-height: 1.6; }
+      .sheet-head button { margin-top: 10px; padding: 7px 12px; color: #f2d6b8; background: transparent; border: 1px solid #5e4733; border-radius: 6px; cursor: pointer; }
       .sheet { display: grid; gap: 14px; max-width: 1080px; margin: 0 auto; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
       .cell { display: flex; flex-direction: column; align-items: center; padding: 18px 12px 16px; border: 1px solid rgba(245, 201, 154, .12); border-radius: 10px; background: rgba(255, 247, 239, .015); }
       .cell .avatar-container { animation: none; }
@@ -313,32 +336,55 @@ ${css}
   <body>
     <div class="sheet-head">
       <h1>NOVA — avatar states</h1>
-      <p>Generated by <code>scripts/verify-avatar.mjs</code> from the real stylesheet and the
-      rendered avatar markup, so this sheet cannot drift from the app. No mouth: every state is
-      expressed through the eyes and the body. Values for the audio-driven states are frozen here,
-      since nothing is actually speaking.</p>
+      <p>Real stylesheet and React-rendered SVG. No microphone, model or audio is used here.
+      Speaking holds a sample pulse of .8; real NOVA receives word-boundary events instead.
+      Happy and wake jump once. Wake then settles into listening after 800ms.
+      Dimensions are at the default 160px size; compact heights scale proportionally.</p>
+      <button type="button" id="replay">Replay happy / wake</button>
     </div>
     <div class="sheet">
 ${STATES.map(([className, label, note]) => `      <div class="cell">
-        <div class="avatar-container ${className}">
-          <div class="avatar-backlight"></div>
-          <div class="listen-ring"></div>
-          <div class="avatar-figure">${markup}</div>
+        <div class="avatar-container ${className}"${label === 'SPEAKING' ? ' style="--audio-pulse: .8"' : ''}${label === 'WAKE' ? ' id="wake-preview"' : ''}>
+          <div class="avatar-backlight" aria-hidden="true"></div>
+          <div class="listen-ring" aria-hidden="true"></div>
+          <div class="avatar-figure">${cellMarkup(label)}</div>
         </div>
         <div class="cell-label">${label}</div>
         <div class="cell-note">${note}</div>
       </div>`).join('\n')}
     </div>
+    <script>
+      const happy = document.querySelector('.is-happy');
+      const wake = document.getElementById('wake-preview');
+      let wakeTimer;
+      function replay() {
+        clearTimeout(wakeTimer);
+        happy.classList.remove('is-happy');
+        wake.classList.remove('is-waking');
+        void happy.offsetWidth;
+        happy.classList.add('is-happy');
+        wake.classList.add('is-waking');
+        wakeTimer = setTimeout(() => wake.classList.remove('is-waking'), 800);
+      }
+      document.getElementById('replay').addEventListener('click', replay);
+      wakeTimer = setTimeout(() => wake.classList.remove('is-waking'), 800);
+    </script>
   </body>
 </html>
 `;
+const sheetIDs = [...sheet.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+check('state sheet has unique SVG gradient/filter IDs for every state', sheetIDs.length === new Set(sheetIDs).size);
+check('state sheet URL references resolve to their own cell definitions', STATES.every(([, label]) => {
+  const cell = cellMarkup(label);
+  const ownIDs = new Set([...cell.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+  return [...cell.matchAll(/url\(#([^)]+)\)/g)].every((m) => ownIDs.has(m[1]));
+}));
 
-await writeFile(resolve(root, 'avatar-states.html'), sheet, 'utf8');
-
-const failed = problems.length;
-for (const { label, ok, detail } of checks) {
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
-}
+for (const { label, ok, detail } of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
+const failed = checks.filter(({ ok }) => !ok).length;
 console.log(failed ? `\n${failed} check(s) failed.` : `\nAll ${checks.length} checks passed.`);
-console.log('Wrote avatar-states.html — open it to review every state side by side.');
 if (failed) process.exitCode = 1;
+else {
+  await writeFile(resolve(root, 'avatar-states.html'), sheet, 'utf8');
+  console.log('Wrote avatar-states.html — open it to review the states and replay happy / wake.');
+}

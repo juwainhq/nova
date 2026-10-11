@@ -591,7 +591,7 @@ function App() {
   const [notice, setNotice] = useState('');
   const [wakeStandby, setWakeStandby] = useState(false);
   const [wakeMessage, setWakeMessage] = useState('');
-  // A brief celebratory flourish after a reply lands, then back to idle.
+  // Brief wake and post-reply flourishes; busy stages always take visual priority.
   const [mood, setMood] = useState('idle');
   const voices = useSpeechVoices();
   const moodTimerRef = useRef(null);
@@ -841,15 +841,15 @@ function App() {
       };
       speechFinishRef.current = finishSpeech;
       utterance.onstart = () => { if (!finished) setStage('speaking'); };
-      // Engines without word-boundary events simply hold the speaking pulse steady.
+      // No word events: neutral eye light/scale, with the CSS speaking bounce intact.
       utterance.onboundary = (event) => {
         if (finished || (event.name && event.name !== 'word') || !avatarElement) return;
         avatarElement.classList.add('speech-boundary-active');
         const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
-        avatarElement.style.setProperty('--audio-pulse', (0.58 + wordLength * 0.035).toFixed(3));
+        avatarElement.style.setProperty('--audio-pulse', Math.min(1, 0.65 + wordLength * 0.035).toFixed(3));
         window.clearTimeout(speechPulseTimer);
         speechPulseTimer = window.setTimeout(() => {
-          avatarElement.style.setProperty('--audio-pulse', '.16');
+          avatarElement.style.setProperty('--audio-pulse', '0');
         }, 125);
       };
       utterance.onend = () => finishSpeech();
@@ -897,7 +897,8 @@ function App() {
       },
       onWake: () => {
         window.clearTimeout(moodTimerRef.current);
-        setMood('idle');
+        setMood('wake');
+        moodTimerRef.current = window.setTimeout(() => setMood('idle'), 800);
         setNotice('');
         setStage('listening');
         void wakeChimeRef.current?.play();
@@ -988,6 +989,11 @@ function App() {
     speaking: `${APP_NAME} SPEAKING`,
   }[stage];
 
+  const avatarActivity = { listening: 'is-listening', thinking: 'is-thinking', speaking: 'is-speaking' }[stage] || '';
+  const avatarMood = stage === 'ready'
+    ? (connection === 'offline' ? 'is-offline' : mood === 'happy' ? 'is-happy' : '')
+    : stage === 'listening' && mood === 'wake' ? 'is-waking' : '';
+
   const saveSettings = (nextSettings) => {
     const updatedSettings = {
       model: nextSettings.model.trim() || OLLAMA_MODEL,
@@ -1030,7 +1036,7 @@ function App() {
         <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
           <div
             ref={avatarContainerRef}
-            className={`avatar-container ${stage === 'listening' ? 'is-listening' : ''} ${stage === 'speaking' ? 'is-speaking' : ''} ${stage === 'thinking' ? 'is-thinking' : ''} ${mood === 'happy' && connection !== 'offline' ? 'is-happy' : ''} ${connection === 'offline' && stage !== 'listening' ? 'is-offline' : ''}`}
+            className={`avatar-container ${avatarActivity} ${avatarMood}`}
           >
             <div className="avatar-backlight" />
             <div className="listen-ring" aria-hidden="true" />
