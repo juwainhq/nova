@@ -172,8 +172,8 @@ export async function verifyWebBrowse(check) {
 
   // ------------------------------------------------------------------ markup
   const html = await renderPanel({ kind: 'images', query: '<b>red car</b>', url: browseUrl('images', 'red car'), closing: false });
-  check('browse panel: dark header shows the kind and the query, escaped', html.includes('class="browse-header"') && html.includes('>Images<')
-    && html.includes('&lt;b&gt;red car&lt;/b&gt;') && !html.includes('<b>red car'));
+  check('browse panel: the kind and the query are plain text, escaped', html.includes('class="browse-caption"') && html.includes('>Images<')
+    && html.includes('&lt;b&gt;red car&lt;/b&gt;') && !html.includes('<b>red car') && !/<h2 class="browse-query"|<header class="browse-header"/.test(html));
   check('browse panel: an X button closes it', /<button[^>]*class="browse-close"[^>]*aria-label="Close search panel"[^>]*>×<\/button>/.test(html));
   const frame = html.match(/<iframe\b[^>]*>/)?.[0] || '';
   check('browse panel: the iframe shows the Google results URL', frame.includes(`src="${browseUrl('images', 'red car').replace(/&/g, '&amp;')}"`) && frame.includes('class="browse-frame"'));
@@ -186,11 +186,14 @@ export async function verifyWebBrowse(check) {
   const css = await readFile('src/index.css', 'utf8');
   const handle = await readFile('src/BrowsePanel.jsx', 'utf8');
   const panelSources = [handle, await readFile('src/App.jsx', 'utf8'), await readFile('src/web-browse.js', 'utf8')].join('\n');
-  check('browse layout: left 45% / right 55% (max 600px), sliding in over 300ms ease', /\.app-shell\.has-browse-panel \{[^}]*width: max\(45%, calc\(100% - 600px\)\)/.test(css)
-    && /\.browse-panel \{[^}]*width: 55%; max-width: 600px;[^}]*animation: browse-in \.3s ease both/.test(css) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
+  check('browse layout: NOVA keeps 55% and the panel takes 45% (max 720px), sliding in over 300ms', /\.app-shell\.has-browse-panel \{[^}]*width: max\(55%, calc\(100% - 720px\)\)/.test(css)
+    && /\.browse-panel \{[^}]*width: 45%; max-width: 720px;[^}]*animation: browse-in \.3s cubic-bezier\(\.4, 0, \.2, 1\) both/.test(css)
+    && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s cubic-bezier\(\.4, 0, \.2, 1\) both/.test(css)
     && css.includes('@keyframes browse-in { from { transform: translateX(100%); }'));
-  check('browse layout: a floating card with a rounded, subtly bordered left edge', /\.browse-panel \{[^}]*border-left: 1px solid rgba\(255, 255, 255, \.08\);[^}]*border-radius: 12px 0 0 12px/.test(css));
-  check('browse layout: the frame leaves 60px for the header and 20px at the bottom', /\.browse-header \{ flex: 0 0 60px;/.test(css) && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
+  check('browse layout: a flat surface with one hairline left edge, never a floating card', /\.browse-panel \{[^}]*border-left: 1px solid #2a2420;[^}]*background: #1a1612/.test(css)
+    && !/border-radius|box-shadow|backdrop-filter/.test(/\.browse-panel \{([^}]*)\}/.exec(css)?.[1] ?? ''));
+  check('browse layout: one 54px control row and a caption line, then the frame to the bottom edge', /\.browse-chrome \{ flex: 0 0 54px/.test(css)
+    && /\.browse-caption \{ flex: 0 0 auto/.test(css) && !/\.browse-header \{|padding-bottom: 20px/.test(css));
   check('browse layout: the panel never scrolls; the iframe fills it with no border', /\.browse-panel \{[^}]*overflow: hidden/.test(css)
     && /\.browse-frame \{[^}]*flex: 1;[^}]*width: 100%;[^}]*border: 0/.test(css));
   check('browse panel: the sandbox is exactly the agreed allow-list', SANDBOX_TOKENS.join(' ') === EXPECTED_SANDBOX.join(' '));
@@ -217,11 +220,11 @@ export async function verifyWebBrowse(check) {
   check('browse chrome: back, forward and refresh sit on the left of the bar', /class="browse-nav">\s*<button[^>]*class="browse-nav-button"[^>]*aria-label="Go back"[^>]*>←<\/button>[\s\S]*aria-label="Go forward"[^>]*>→<\/button>[\s\S]*aria-label="Refresh this page"[^>]*>↺<\/button>/.test(html.replace(/><\/button>/g, '></button>')));
   check('browse chrome: the arrows start disabled where the trail cannot go', (html.match(/aria-label="Go (?:back|forward)"[^>]*disabled/g) || []).length === 2
     && !/aria-label="Refresh this page"[^>]*disabled/.test(html));
-  check('browse chrome: a dark pill bar, still under the 60px header and above the frame', /\.browse-chrome \{[^}]*flex: 0 0 46px/.test(css)
-    && /\.browse-address-input \{[^}]*border-radius: 999px; background: rgba\(10, 6, 4, \.72\)/.test(css)
-    && /\.browse-header \{ flex: 0 0 60px;/.test(css));
-  check('browse chrome: the frame still fills what is left, bottom gap included', /\.browse-frame \{ flex: 1;[^}]*min-height: 0/.test(css)
-    && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
+  check('browse chrome: the pill bar and × share one row above the frame', /\.browse-chrome \{[^}]*flex: 0 0 54px/.test(css)
+    && /\.browse-address-input \{[^}]*border-radius: 999px; background: #131110/.test(css)
+    && /<\/form>\s*<button class="browse-close"/.test(html));
+  check('browse chrome: the frame still fills what is left, and the row is unshaded', /\.browse-frame \{ flex: 1;[^}]*min-height: 0/.test(css)
+    && !/box-shadow/.test(/\.browse-chrome \{([^}]*)\}/.exec(css)?.[1] ?? ''));
   const sandboxTokens = SANDBOX_TOKENS;
   const KNOWN_SANDBOX = new Set(['allow-downloads', 'allow-forms', 'allow-modals', 'allow-orientation-lock', 'allow-pointer-lock',
     'allow-popups', 'allow-popups-to-escape-sandbox', 'allow-presentation', 'allow-same-origin', 'allow-scripts',

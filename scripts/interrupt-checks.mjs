@@ -128,7 +128,12 @@ export async function verifyInterrupt(check) {
   // ----------------------------------------------------------------------- App
   const atStage = (ui, stage) => ui.find('status-word')?.props.className.split(' ').includes(`status-word-${stage}`);
   const mic = (ui) => ui.find('mic-button');
-  const iconName = (ui) => mic(ui)?.props.children[0]?.type?.name;
+  // The button holds one icon; React hands a lone child over as an element, not an
+  // array, so read the first icon either way.
+  const iconName = (ui) => {
+    const kids = mic(ui)?.props.children;
+    return (Array.isArray(kids) ? kids[0] : kids)?.type?.name;
+  };
   const panel = (ui) => ui.find('rich-content-slot');
   const toast = (ui) => ui.find('toast');
   async function speaking(options = {}, answer = 'First sentence here. Second sentence follows. And a third.') {

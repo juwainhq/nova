@@ -733,11 +733,12 @@ deniedUi.unmount();
 
 // ------------------------------------------- standby cues, warm-up box, settings flash
 const sheetCss = await readFile(resolve(root, 'src/index.css'), 'utf8');
-check('warm-up: the line gets its own 24px box and clips, so nothing overlaps it', /\.kokoro-warmup \{[^}]*--warmup-height: 24px;[^}]*min-height: var\(--warmup-height\);[^}]*overflow: hidden/.test(sheetCss)
+check('warm-up: the line gets its own box and clips, so nothing overlaps it', /\.kokoro-warmup \{[^}]*--warmup-height: 20px;[^}]*min-height: var\(--warmup-height\);[^}]*overflow: hidden/.test(sheetCss)
   && !/\.kokoro-warmup \{[^}]*height: 0[;}]/.test(sheetCss));
-check('standby: the icon dims, lights for the wake phrase and names itself on hover', /\.wake-indicator \{[^}]*opacity: \.42;[^}]*transition: opacity 400ms ease-in-out/.test(sheetCss)
-  && /\.wake-indicator:hover, \.wake-indicator\.is-alert \{ opacity: 1; color: #ff9a5a; \}/.test(sheetCss)
-  && /\.wake-indicator:hover \.wake-hint \{ opacity: 1; \}/.test(sheetCss));
+check('standby: the dot dims, lights for the wake phrase and names itself on hover', /\.wake-indicator \{[^}]*bottom: 0;[^}]*left: 50%;[^}]*opacity: \.5;[^}]*transition: opacity 300ms ease-out/.test(sheetCss)
+  && /\.wake-indicator:hover, \.wake-indicator\.is-alert \{ opacity: 1; color: var\(--accent\); \}/.test(sheetCss)
+  && /\.wake-indicator:hover \.wake-hint \{ opacity: 1; \}/.test(sheetCss)
+  && /\.wake-hint \{[^}]*opacity: 0;/.test(sheetCss));
 
 const alertUi = await createAppHarness();
 alertUi.clock.tick();

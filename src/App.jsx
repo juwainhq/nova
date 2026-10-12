@@ -1609,22 +1609,22 @@ function App() {
 
   return (
     <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''}`}>
+      {/* There is no header bar: the name is a label, and the one control that used
+          to live up here sits at the bottom of the screen with the mic. */}
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
-        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
-          <SettingsIcon />
-        </button>
       </header>
 
       <main className="main-stage">
         <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
+          <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
           <div
             ref={avatarContainerRef}
             className={`avatar-container ${avatarActivity} ${avatarMood}`}
           >
-            <div className="avatar-backlight" />
+            <div className="avatar-glow" aria-hidden="true" />
             <div className="listen-ring" aria-hidden="true" />
-            {/* Pose on the wrapper, per-state rhythm on the SVG: nested transforms compose. */}
+            {/* Pose on the wrapper, per-state rhythm on the shape: nested transforms compose. */}
             <div className="avatar-figure">
               <RobotAvatar />
             </div>
@@ -1638,8 +1638,13 @@ function App() {
               <span>Open Settings if you’d like a hand connecting.</span>
             </div>
           )}
-          <h1 className="tagline">What’s on your mind?</h1>
-          <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
+          {/* One floating line of text carries the prompt and then NOVA's own words.
+              A changing key remounts it, so every new reply fades up instead of
+              swapping in place; with the transcript on, that block already shows the
+              reply and this line stays the quiet prompt. */}
+          <h1 className="tagline" key={settings.showTranscript ? 'prompt' : lastResponse || 'prompt'}>
+            {settings.showTranscript || !lastResponse ? 'What’s on your mind?' : lastResponse}
+          </h1>
           {settings.showTranscript && lastResponse && (
             <div className="response-transcript" role="region" aria-label="My last reply" aria-live="polite">
               <span>My last reply</span>
@@ -1656,13 +1661,11 @@ function App() {
       <footer className="control-dock">
         {wakeStandby && stage === 'ready' && !settingsOpen && (
           <div className={`wake-indicator${wakeAlert ? ' is-alert' : ''}`} role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
-            <MicIcon />
             <span className="wake-hint" aria-hidden="true">{`Listening for “${WAKE_WORD}”...`}</span>
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
         <div className="mic-control-wrap">
-          <div className={`mic-halo ${stage === 'listening' ? 'mic-halo-active' : ''}`} />
           <button
             ref={micButtonRef}
             className={`mic-button ${stage === 'listening' ? 'mic-button-active' : ''}${canInterrupt ? ' mic-button-stop' : ''}`}
@@ -1674,7 +1677,11 @@ function App() {
             aria-keyshortcuts="Space"
           >
             {canInterrupt ? <StopIcon /> : <MicIcon stopped={stage === 'listening'} />}
-            <span className="mic-button-sheen" />
+          </button>
+        </div>
+        <div className="dock-corner dock-corner-right">
+          <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
+            <SettingsIcon />
           </button>
         </div>
       </footer>
