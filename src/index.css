@@ -234,14 +234,15 @@ body::after {
   text-align: center;
 }
 .avatar-container {
-  --avatar-size: 160px;
+  --avatar-size: 188px;
   position: relative;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 258px;
-  /* Float/jump breathing room without pushing text off short viewports. */
-  height: 202px;
+  /* The box is the orb plus a fixed margin, so growing the avatar never pushes the text
+     under it: 98px of width carries the aura, 46px of height carries a 10px float. */
+  width: calc(var(--avatar-size) + 98px);
+  height: calc(var(--avatar-size) + 46px);
   isolation: isolate;
   animation: fade-in .4s ease-in-out both;
 }
@@ -270,11 +271,13 @@ body::after {
 .avatar-offline-display span:last-child { color: var(--on-card-soft); font-size: 11px; line-height: 1.4; }
 .avatar-backlight, .listen-ring { position: absolute; top: 50%; left: 50%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
 .avatar-backlight {
-  /* The orb's own path is already an irregular blob; now the light behind it is too.
-     A slow, uneven radius on the aura is the whole trick — no geometry moves, nothing
-     is clipped, so the eyes, bloom and state poses stay exactly as they were. */
+  /* The orb's own path is already an irregular blob; now the light behind it is too, and it
+  turns. A slow, uneven radius plus a 34s revolution is the whole trick - only the
+  independent `rotate` property moves, so the state poses (which live in `transform`
+  `translate(-50%,-50%) scale(...)`) keep winning exactly as they did, and nothing that
+  sets opacity is touched: OFFLINE's .38 and LISTENING's 1 still come through. */
   border-radius: 44% 56% 52% 48% / 50% 44% 56% 50%;
-  animation: blob-morph 18s ease-in-out infinite;
+  animation: blob-morph 13s ease-in-out infinite, aura-turn 34s linear infinite;
   z-index: -1;
   width: calc(var(--avatar-size) * 1.71875);
   height: calc(var(--avatar-size) * 1.71875);
@@ -305,12 +308,33 @@ body::after {
   animation: orb-float 3s ease-in-out infinite;
   transform-origin: center;
 }
-.orb-bloom { opacity: .72; }
-.blob-shape { filter: drop-shadow(0 0 11px rgba(255, 246, 231, .3)); }
+.orb-bloom {
+  opacity: .72;
+  transform-box: view-box;
+  transform-origin: 140px 140px;
+  /* The halo swells on a 5.4s cycle, a little behind the body's 3s bob - the two never
+  beat together, which is what keeps the light from reading as a metronome. */
+  animation: bloom-breathe 5.4s ease-in-out infinite;
+}
+.blob-shape {
+  filter: drop-shadow(0 0 11px rgba(255, 246, 231, .3));
+  transform-box: view-box;
+  transform-origin: 140px 140px;
+  /* Soft squash and stretch on the body itself, against a highlight that does not move.
+  The face rides the same transform, so no feature can ever end up off-centre. */
+  animation: orb-squirm 7.2s ease-in-out infinite;
+}
 
 /* One gaze, blink clock and speech-light layer for the pair. Fixed SVG origins
    avoid bounding-box pivots changing as an ellipse closes or becomes a crescent. */
-.eyes-gaze { transform: translateX(0); transition: transform 400ms ease-in-out; }
+.eyes-gaze { transform: translateX(0); transition: transform 400ms ease-in-out; animation: gaze-drift 9.5s ease-in-out infinite; }
+.orb-sheen {
+  transform-box: view-box;
+  transform-origin: 116px 83px;
+  /* Light sliding across a glossy surface: it travels, swells and dims on one slow path,
+     and its rest frame is exactly the attribute value it replaces (.72, unmoved). */
+  animation: sheen-drift 9.6s ease-in-out infinite;
+}
 .eyes-blink { transform-box: view-box; animation: eye-blink 4s ease-in-out infinite; }
 .eyes-voice { filter: brightness(1); }
 .robot-eye { transition: opacity 400ms ease-in-out; }
@@ -769,7 +793,7 @@ body::after {
   .app-shell.has-browse-panel { --topbar-height: 48px; --dock-height: 82px; width: 100%; height: 40dvh; }
   .app-shell.has-browse-panel.browse-closing { height: 100dvh; }
   .has-browse-panel .tagline { display: none; }
-  .has-browse-panel .avatar-container { height: 104px; }
+  .has-browse-panel .avatar-container { height: 112px; }
   .browse-panel { top: auto; width: 100%; max-width: none; height: 60dvh; border-left: 0; border-top: 1px solid var(--card-line); border-radius: 12px 12px 0 0; animation-name: browse-up; }
   .browse-chrome { gap: 8px; padding: 0 10px; }
   .browse-panel.is-closing { animation-name: browse-down; }
@@ -823,8 +847,47 @@ body::after {
   70% { transform: translate3d(16vw, 26vh, 0) scale(1.22); opacity: .36; }
   100% { transform: translate3d(0, 0, 0) scale(1); opacity: .22; }
 }
-@keyframes orb-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
-@keyframes orb-sway { 0%, 100% { transform: translateX(-3px); } 50% { transform: translateX(3px); } }
+@keyframes orb-float {
+  /* One 3s cycle, five stops: it rises, stretches as it peaks, lands with a squash and
+     turns 1.4deg on Y on the way up and back. No Z rotation, no skew, no perspective -
+     the two eyes stay the same size at every frame - and the loop closes on its first
+     frame, so there is no snap. */
+  0%, 100% { transform: translateY(0) scale(1, 1) rotateY(0deg); }
+  25% { transform: translateY(-5px) scale(.994, 1.012) rotateY(1.4deg); }
+  50% { transform: translateY(-10px) scale(1, 1.02) rotateY(0deg); }
+  75% { transform: translateY(-5px) scale(1.006, .99) rotateY(-1.4deg); }
+}
+@keyframes aura-turn { from { rotate: 0deg; } to { rotate: 360deg; } }
+@keyframes bloom-breathe {
+  0%, 100% { transform: scale(1); opacity: .72; }
+  40% { transform: scale(1.055); opacity: .86; }
+  70% { transform: scale(1.018); opacity: .76; }
+}
+@keyframes orb-squirm {
+  0%, 100% { transform: scale(1, 1); }
+  33% { transform: scale(1.012, .99); }
+  66% { transform: scale(.992, 1.014); }
+}
+@keyframes sheen-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: .72; }
+  35% { transform: translate(7px, 3px) scale(1.06); opacity: .88; }
+  70% { transform: translate(-5px, -2px) scale(.97); opacity: .62; }
+}
+@keyframes gaze-drift {
+  /* Two small glances, then a long rest at centre - the pause is what stops it reading as
+     a loop. It rides the same --eye-shift the thinking pose uses, at a third of it. */
+  0%, 62%, 100% { transform: translateX(0); }
+  18% { transform: translateX(calc(var(--eye-shift) * .3)); }
+  40% { transform: translateX(calc(var(--eye-shift) * -.22)); }
+}
+@keyframes orb-sway {
+  /* The sideways hold stays exactly -3px to 3px; the extra stops add a lift and a lean, so
+     thinking travels a shallow arc instead of sliding on a rail. */
+  0%, 100% { transform: translateX(-3px) translateY(0) scale(1, 1); }
+  25% { transform: translateX(-1px) translateY(-3px) scale(1.008, .994); }
+  50% { transform: translateX(3px) translateY(0) scale(1, 1); }
+  75% { transform: translateX(1px) translateY(-3px) scale(1.008, .994); }
+}
 @keyframes orb-word-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
 @keyframes orb-double-bounce {
   0%, 40%, 80%, 100% { transform: translateY(0); }
@@ -852,7 +915,7 @@ body::after {
 
 @media (max-height: 720px) {
   .app-shell { --topbar-height: 64px; --dock-height: 98px; }
-  .avatar-container { height: 158px; }
+  .avatar-container { --avatar-size: 164px; height: 168px; }
   .tagline { margin-top: 18px; }
   .status-word { margin-bottom: 15px; }
   .control-dock { padding-bottom: 2px; }
@@ -863,7 +926,7 @@ body::after {
   .brand-name { font-size: 17px; }
   .icon-button { width: 38px; height: 38px; }
   .assistant-stage { padding-bottom: 0; }
-  .avatar-container { height: 176px; }
+  .avatar-container { --avatar-size: 176px; height: 192px; }
   .tagline { margin-top: 22px; font-size: clamp(32px, 8vw, 42px); }
   .status-word { margin-bottom: 17px; }
   .control-dock { padding-bottom: 0; }
@@ -871,7 +934,7 @@ body::after {
 
 @media (max-width: 390px) {
   .app-shell { padding-left: 16px; padding-right: 16px; }
-  .avatar-container { height: 158px; }
+  .avatar-container { --avatar-size: 164px; height: 170px; }
   .tagline { font-size: 31px; }
   .status-word { margin-bottom: 15px; }
 }
@@ -885,7 +948,7 @@ body::after {
 
 @media (max-height: 560px) {
   .app-shell { --topbar-height: 52px; --dock-height: 76px; padding-bottom: 4px; }
-  .avatar-container { height: 116px; --avatar-size: 108px; }
+  .avatar-container { --avatar-size: 116px; height: 124px; }
   .tagline { margin-top: 10px; font-size: clamp(24px, 5vh, 34px); }
   .kokoro-warmup { --warmup-height: 16px; margin-top: 1px; font-size: 7px; line-height: 1.1; }
   .status-word { margin-bottom: 8px; }
@@ -898,7 +961,7 @@ body::after {
 
 @media (max-height: 420px) {
   .app-shell { --topbar-height: 44px; --dock-height: 66px; padding-bottom: 2px; }
-  .avatar-container { height: 92px; --avatar-size: 92px; }
+  .avatar-container { --avatar-size: 100px; height: 100px; }
   .tagline { margin-top: 7px; font-size: clamp(22px, 5vh, 29px); }
   .kokoro-warmup { --warmup-height: 12px; margin-top: 0; line-height: 1; }
   .status-word { margin-bottom: 6px; }
@@ -913,6 +976,8 @@ body::after {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .brand-name, .avatar-container { animation: none !important; opacity: 1; filter: none; transform: none; }
   .robot-avatar, .eyes-gaze, .eyes-blink { animation: none !important; transform: none; }
+  .orb-bloom, .blob-shape, .orb-sheen { animation: none !important; transform: none; }
+  .avatar-backlight, .orb-sheen { rotate: 0deg; }
   .avatar-backlight { animation: none !important; }
   .avatar-figure { --figure-scale: 1 !important; --figure-y: 0deg !important; }
   .eyes-voice { filter: none !important; }

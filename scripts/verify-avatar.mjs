@@ -140,6 +140,9 @@ check('local eye pivot is fixed at zero in view-box coordinates', value('.eye-sc
 // ---------------------------------------------------------------- true CSS-pixel geometry
 const viewBox = svg?.attrs.viewBox?.split(' ').map(Number) ?? [];
 const boxSize = parseFloat(value('.avatar-container', '--avatar-size'));
+// The face is authored at 160px and the stylesheet picks the box, so every pixel pin here
+// is a ratio of the box: growing the orb has to grow the features by exactly the same factor.
+const grow = boxSize / 160;
 const unit = boxSize / viewBox[2];
 const eyes = eyeGroups.map((node, i) => {
   const match = /^translate\(([-\d.]+) ([-\d.]+)\) scale\(([\d.]+)\)$/.exec(node.attrs.transform ?? '');
@@ -157,17 +160,21 @@ const [left = {}, right = {}] = eyes;
 const orbWidth = boxSize * 222 / 280;
 const innerGap = right.x - right.w / 2 - (left.x + left.w / 2);
 const margins = [left.x - left.w / 2 - 29 * unit, 251 * unit - (right.x + right.w / 2)];
-check('default avatar is 160px with an unchanged 280-square viewBox', boxSize === 160 && viewBox.join(' ') === '0 0 280 280');
+check('default avatar is 188px on the unchanged 280-square viewBox', boxSize === 188 && viewBox.join(' ') === '0 0 280 280');
+check('the box is derived from the orb, not written out twice', value('.avatar-container', 'width') === 'calc(var(--avatar-size) + 98px)'
+  && value('.avatar-container', 'height') === 'calc(var(--avatar-size) + 46px)');
 check('SVG CSS box inherits the same size in both dimensions', value('.robot-avatar', 'width') === 'var(--avatar-size, 160px)'
   && value('.robot-avatar', 'height') === 'var(--avatar-size, 160px)');
-check('both capsules keep the exact 28px × 42px on-screen size', eyes.length === 2 && eyes.every((eye) => near(eye.w, 28) && near(eye.h, 42)),
-  eyes.map((eye) => `${eye.w}×${eye.h}px`).join(' / '));
+check('both capsules keep the 28 × 42 proportion as the box grows', eyes.length === 2
+  && eyes.every((eye) => near(eye.w, 28 * grow) && near(eye.h, 42 * grow)),
+  eyes.map((eye) => `${eye.w}×${eye.h}px at ${boxSize}px, from 28×42 at 160px`).join(' / '));
 check('conversion from local pixels to SVG units is uniform', eyes.length === 2 && eyes.every((eye) => near(eye.scale, 280 / 160)));
 check('capsule centers stay at local zero, not bounding-box dependent', irises.length === 2 && irises.every(({ attrs: shape }) =>
   near(Number(shape.x) + Number(shape.width) / 2, 0) && near(Number(shape.y) + Number(shape.height) / 2, 0)));
-check('pair has an exact 18px inner gap', near(innerGap, 18), `${innerGap}px`);
+check('pair has an 18px inner gap at the design size', near(innerGap, 18 * grow), `${innerGap}px at ${boxSize}px`);
 check('pair is perfectly centered with matching vertical centers', near((left.x + right.x) / 2, boxSize / 2) && near(left.y, right.y));
-check('eyes are in the upper half at y=60px', eyes.length === 2 && eyes.every((eye) => near(eye.y, 60) && eye.y < boxSize / 2));
+check('eyes sit at y=60px at the design size and in the upper half of any box', eyes.length === 2
+  && eyes.every((eye) => near(eye.y, 60 * grow) && eye.y < boxSize / 2));
 check('equal cheek margins keep the pair away from the rim', near(margins[0], margins[1]) && Math.min(...margins) >= orbWidth * .15);
 check('blink pivot is the shared pair center, not either eye', blink?.attrs.style === 'transform-origin:140px 105px'
   && value('.eyes-blink', 'transform-box') === 'view-box');
@@ -200,21 +207,32 @@ check('every avatar state change eases over 400ms, never a snap', transitionDura
   && transitionDurations.every((duration) => duration === '400ms'));
 check('body pose and animated rhythm are on separate elements', /rotateY\(var\(--figure-y, 0deg\)\) scale\(var\(--figure-scale, 1\)\)/.test(value('.avatar-figure', 'transform'))
   && !value('.avatar-figure', 'animation') && !value('.robot-avatar', '--figure-scale'));
-check('body never rotates on Z or applies skew/perspective', styleRules.filter(({ selectors }) => selectors.some((selector) => /\.(?:avatar-figure|robot-avatar|avatar-container)/.test(selector)))
-  .every(({ body }) => !/rotate\(|rotateZ|skew|perspective/.test(body)));
+check('body never rotates on Z or applies skew/perspective, in the rules or in the motion', styleRules.filter(({ selectors }) => selectors.some((selector) => /\.(?:avatar-figure|robot-avatar|avatar-container)/.test(selector)))
+  .every(({ body }) => !/rotate\(|rotateZ|skew|perspective/.test(body))
+  && ['orb-float', 'orb-sway', 'orb-squirm', 'bloom-breathe', 'sheen-drift'].every((name) => keyframes(name).length
+    && keyframes(name).every(({ body }) => !/rotate\(|rotateZ|skew|perspective|translate3d/.test(body)))
+  && Math.max(...keyframes('orb-float').map(({ body }) => Math.abs(parseFloat(/rotateY\((-?[\d.]+)deg\)/.exec(property(body, 'transform'))?.[1] ?? 0)))) <= 1.4);
 const entranceFrames = blocks(cssBlocks.find(({ header }) => header === '@keyframes fade-in')?.body ?? '');
 check('entrance: 400ms opacity-only fade cannot overshoot the speaking scale', animation('.avatar-container') === 'fade-in .4s ease-in-out both'
   && entranceFrames.length === 2 && entranceFrames.every(({ body }) => !property(body, 'transform'))
   && entranceFrames.map(({ body }) => property(body, 'opacity')).join(' ') === '0 1');
 check('idle: float repeats every 3s with ease-in-out', animation('.robot-avatar') === 'orb-float 3s ease-in-out infinite');
 const floatFrames = keyframes('orb-float');
-check('idle: body travels exactly 0 → −8px → 0 on Y', transformAt(floatFrames, 0) === 'translateY(0)'
-  && transformAt(floatFrames, 50) === 'translateY(-8px)' && transformAt(floatFrames, 100) === 'translateY(0)');
+check('idle: one closed 3s cycle rises 10px and returns to the frame it started on', floatFrames.length === 5
+  && transformAt(floatFrames, 0) === 'translateY(0) scale(1, 1) rotateY(0deg)'
+  && transformAt(floatFrames, 25) === 'translateY(-5px) scale(.994, 1.012) rotateY(1.4deg)'
+  && transformAt(floatFrames, 50) === 'translateY(-10px) scale(1, 1.02) rotateY(0deg)'
+  && transformAt(floatFrames, 100) === transformAt(floatFrames, 0));
+check('idle: the breath stretches on the way up and squashes on the way down',
+  parseFloat(/scale\([\d.]+, ?([\d.]+)\)/.exec(transformAt(floatFrames, 50))?.[1]) > 1
+  && parseFloat(/scale\([\d.]+, ?([\d.]+)\)/.exec(transformAt(floatFrames, 25))?.[1]) < 1.02);
+const floatTravel = Math.max(...floatFrames.map(({ body }) => Math.abs(parseFloat(/translateY\((-?[\d.]+)px\)/.exec(property(body, 'transform'))?.[1] ?? 0))));
+check('idle: the travel stays inside the 13px the listen ring leaves it', floatTravel === 10 && 26 / 2 > floatTravel);
 check('idle: one shared blink every 4s', animation('.eyes-blink') === 'eye-blink 4s ease-in-out infinite');
 const blinkFrames = keyframes('eye-blink');
 const closed = blinkFrames.find((frame) => frame.at === 97.5);
 const closedScale = Number(/scaleY\(([\d.]+)\)/.exec(property(closed?.body ?? '', 'transform'))?.[1]);
-check('blink: 42px → 4px → 42px, both eyes together', near(left.h * closedScale, 4)
+check('blink: the capsule closes to a 4px slit at the design size, both eyes together', near(left.h * closedScale, 4 * grow)
   && [0, 95, 100].every((at) => transformAt(blinkFrames, at) === 'scaleY(1)'));
 check('blink: close/open takes exactly 200ms, centered in that window', blinkFrames.map((frame) => frame.at).join(' ') === '0 95 97.5 100'
   && near((100 - 95) / 100 * 4000, 200) && near((97.5 - 95) / 100 * 4000, 100));
@@ -235,7 +253,7 @@ check('listening: ring expands outward and fades fully', transformAt(ringFrames,
 // ---------------------------------------------------------------- thinking
 check('thinking: shared gaze uses a 2.8s ease-in-out cycle', animation('.is-thinking .eyes-gaze') === 'eyes-thinking 2.8s ease-in-out infinite');
 const shift = parseFloat(property(gaze?.attrs.style ?? '', '--eye-shift')) * unit;
-check('thinking: gaze displacement is exactly 6 CSS pixels', near(shift, 6), `${shift}px at the default size`);
+check('thinking: gaze displacement is 6 CSS pixels at the design size', near(shift, 6 * grow), `${shift}px at ${boxSize}px`);
 const gazeVars = [...new Set(keyframes('eyes-thinking').flatMap(({ body }) => [...body.matchAll(/var\((--[\w-]+)\)/g)].map((match) => match[1])))];
 check('thinking: the keyframes read exactly the variable the gaze element defines', gazeVars.length === 1
   && Boolean(gazeVars[0]) && (gaze?.attrs.style ?? '').includes(`${gazeVars[0]}:`) && Number.isFinite(shift) && shift > 0);
@@ -251,9 +269,11 @@ check('thinking: smooth 400ms moves left, right and home', thinkingFrames.length
   && near((100 - rightFrames[1]?.at) * 28, 400)
   && transformAt(thinkingFrames, 0) === 'translateX(0)' && transformAt(thinkingFrames, 100) === 'translateX(0)');
 check('thinking: body shrinks to 97%', value('.is-thinking .avatar-figure', '--figure-scale') === '.97');
-check('thinking: slow subtle lateral sway, no squint or rotation', animation('.is-thinking .robot-avatar') === 'orb-sway 3s ease-in-out infinite'
-  && transformAt(keyframes('orb-sway'), 0) === 'translateX(-3px)' && transformAt(keyframes('orb-sway'), 50) === 'translateX(3px)'
-  && !value('.is-thinking', '--eye-sy'));
+check('thinking: the same ±3px hold, now on a shallow arc, with no squint or rotation', animation('.is-thinking .robot-avatar') === 'orb-sway 3s ease-in-out infinite'
+  && transformAt(keyframes('orb-sway'), 0) === 'translateX(-3px) translateY(0) scale(1, 1)'
+  && transformAt(keyframes('orb-sway'), 50) === 'translateX(3px) translateY(0) scale(1, 1)'
+  && transformAt(keyframes('orb-sway'), 25) === 'translateX(-1px) translateY(-3px) scale(1.008, .994)'
+  && keyframes('orb-sway').length === 5 && !value('.is-thinking', '--eye-sy'));
 
 // ---------------------------------------------------------------- speaking
 check('speaking: brightness reads live boundary data on the shared pair', value('.is-speaking .eyes-voice', 'filter') === 'brightness(calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .8))');
@@ -295,7 +315,7 @@ check('backlight scales with the same avatar size', value('.avatar-backlight', '
   && value('.avatar-backlight', 'height') === value('.avatar-backlight', 'width'));
 const sizes = styleRules.filter(({ selectors }) => selectors.includes('.avatar-container'))
   .map(({ body }) => parseFloat(property(body, '--avatar-size'))).filter(Number.isFinite);
-check('compact sizes reuse the coupled variable, no stale SVG width overrides', sizes.join(' ') === '160 108 92'
+check('compact sizes reuse the coupled variable, no stale SVG width overrides', sizes.join(' ') === '188 164 176 164 116 100'
   && styleRules.filter(({ selectors, body }) => selectors.includes('.robot-avatar') && property(body, 'width')).length === 1);
 for (const size of sizes) {
   const orb = size * 222 / 280, ring = orb + 26, glow = size * 1.71875;
@@ -304,16 +324,48 @@ for (const size of sizes) {
   check(`${size}px: glow is wider than the ring`, glow >= ring, `${glow.toFixed(2)}px glow`);
 }
 
+// ---------------------------------------------------------------- ambient motion (pass 19)
+check('the halo, the body and the sheen each run on their own clock, never in step',
+  [animation('.orb-bloom'), animation('.blob-shape'), animation('.orb-sheen'), animation('.eyes-gaze'),
+    animation('.avatar-backlight')].every((entry) => /infinite$/.test(entry))
+  && new Set([animation('.orb-bloom'), animation('.blob-shape'), animation('.orb-sheen')].map((entry) => /(\d+(?:\.\d+)?)s/.exec(entry)?.[1])).size === 3);
+check('ambient layers pivot on a fixed view-box origin, not a drifting bounding box',
+  value('.orb-bloom', 'transform-box') === 'view-box' && value('.orb-bloom', 'transform-origin') === '140px 140px'
+  && value('.blob-shape', 'transform-box') === 'view-box' && value('.blob-shape', 'transform-origin') === '140px 140px'
+  && value('.orb-sheen', 'transform-box') === 'view-box' && value('.orb-sheen', 'transform-origin') === '116px 83px');
+check('the sheen is the highlight itself, given a handle and nothing else', byClass('orb-sheen').length === 1
+  && byClass('orb-sheen')[0].tag === 'ellipse' && byClass('orb-sheen')[0].attrs.fill === 'url(#orbHighlight)'
+  && byClass('orb-sheen')[0].attrs.opacity === '.72');
+check('the aura turns with the independent rotate property, so no state transform is shadowed',
+  animation('.avatar-backlight') === 'blob-morph 13s ease-in-out infinite, aura-turn 34s linear infinite'
+  && keyframes('aura-turn').map(({ body }) => body.replace(/\s+/g, ' ').trim()).join(' ') === 'rotate: 0deg; rotate: 360deg;'
+  && !/transform|opacity|scale\(/.test(keyframes('aura-turn').map(({ body }) => body).join(' ')));
+for (const name of ['bloom-breathe', 'orb-squirm', 'sheen-drift', 'gaze-drift']) {
+  const frames = keyframes(name);
+  check(`${name}: its rest frame is the shipped static paint, and the loop closes on it`, frames.length >= 3
+    && transformAt(frames, 0) === transformAt(frames, 100)
+    && new Set(frames.flatMap(({ body }) => [...body.matchAll(/opacity: ([\d.]+)/g)].map((match) => match[1]))).size <= 3
+    && parseFloat(property(frames[0].body, 'opacity') || '1') === parseFloat(property(frames.at(-1).body, 'opacity') || '1'));
+}
+check('the idle gaze yields to thinking, which keeps its own 2.8s pose', animation('.eyes-gaze') === 'gaze-drift 9.5s ease-in-out infinite'
+  && animation('.is-thinking .eyes-gaze') === 'eyes-thinking 2.8s ease-in-out infinite'
+  && /\.eyes-gaze \{ transform: translateX\(0\); transition: transform 400ms ease-in-out; animation: gaze-drift 9\.5s ease-in-out infinite; \}/.test(cssCode));
+check('nothing idle animates a property a state owns: transform on the figure, opacity on the aura',
+  !/\.avatar-figure \{[^}]*animation/.test(cssCode) && ![...cssCode.matchAll(/@keyframes (?:bloom-breathe|orb-squirm|sheen-drift|gaze-drift|orb-float) \{[\s\S]*?\n\}/g)]
+    .some((match) => /--figure-|border-left|listen-ring/.test(match[0])));
+
 // ---------------------------------------------------------------- reduced motion & hygiene
 const reduced = cssCode.slice(cssCode.indexOf('@media (prefers-reduced-motion: reduce)'));
 check('reduced motion disables float, gaze and blink, not just their durations', /\.robot-avatar, \.eyes-gaze, \.eyes-blink\s*\{[^}]*animation: none !important; transform: none;/.test(reduced));
+check('reduced motion parks every ambient layer on its rest pose too', /\.orb-bloom, \.blob-shape, \.orb-sheen \{[^}]*animation: none !important; transform: none;/.test(reduced)
+  && /\.avatar-backlight, \.orb-sheen \{ rotate: 0deg; \}/.test(reduced));
 check('reduced motion suppresses rotation, word swell, brightness and rings', /--figure-scale: 1 !important; --figure-y: 0deg !important/.test(reduced)
   && /\.eyes-voice\s*\{\s*filter: none !important;/.test(reduced) && /\.listen-ring\s*\{[^}]*opacity: 0;/.test(reduced));
 check('no mouth selectors or obsolete eye animations remain', !/\.mouth-|\.orb-smile|mouth-(?:glow|light)-pulse|orb-wobble|orb-happy-hop|eye-drift|eye-tilt/.test(cssCode));
 
 // ---------------------------------------------------------------- real-CSS state sheet
 const STATES = [
-  ['idle', 'IDLE', '28×42px capsules · 4s blink / 200ms · 3s float'],
+  ['idle', 'IDLE', '188px box · capsules scale with the box · 4s blink / 200ms · 3s float, breathe and turn'],
   ['is-listening', 'LISTENING', '115% · #222 · rotateY(5°) · 1.5s orange ring'],
   ['is-thinking', 'THINKING', 'shared ±6px gaze · 800ms holds · 97% sway'],
   ['is-speaking', 'SPEAKING', 'shared word light · 100–104% · gentle quick bounce'],
@@ -351,7 +403,7 @@ ${css}
       <p>Real stylesheet and React-rendered SVG. No microphone, model or audio is used here.
       Speaking holds a sample pulse of .8; real NOVA receives word-boundary events instead.
       Happy and wake jump once. Wake then settles into listening after 800ms.
-      Dimensions are at the default 160px size; compact heights scale proportionally.</p>
+      Dimensions are measured on the 188px box (the face is authored at 160px and scales with it); compact heights scale proportionally.</p>
       <button type="button" id="replay">Replay happy / wake</button>
     </div>
     <div class="sheet">
