@@ -26,6 +26,40 @@ Vite opens the editable app at `/index.dev.html` and proxies browser requests to
 
 Open the settings panel with the gear icon to choose an Ollama model, point at an Ollama endpoint, pick and test the speaking voice, toggle the last-response transcript, or test the Ollama connection. Settings are saved in this browser's local storage.
 
+## Install on Windows (PWA)
+
+NOVA can open as its own resizable Chrome/Edge app window, without the browser tab/address bar:
+
+1. Publish the result of `npm run build:pages`, or test the production build locally with `npm run build:pages && npm run preview` and open **`http://localhost:4173/`**.
+2. Open that URL **directly in a normal Chrome or Edge tab**, not inside an embedded preview, a private window, or the `file://` download. Installation requires HTTPS (localhost is also supported).
+3. Let the first visit finish, then choose the **Install NOVA** icon in the address bar, or the browser's install-app menu item.
+4. Resize the installed window to about **380px wide and 700–1000px tall**. The portrait layout keeps a compact header, readable avatar/status, and a bottom microphone/avatar dock. Settings scroll independently. You can place or snap it beside your other work.
+
+An installed PWA is a normal desktop window. **Always-on-top is not a web-app permission**; use Windows/window-management tools if you want it pinned above other apps.
+
+### What works offline
+
+After one successful online visit, the service worker caches the **app shell**: HTML, bundled JavaScript/CSS, manifest and icons. The interface, avatars, appearance preferences and saved-memory settings can reopen without the host being reachable. This does **not** make the external services offline:
+
+- Ollama still needs a reachable endpoint and the same origin/CORS configuration described below.
+- Browser speech recognition/online voices may need their provider's network service.
+- Kokoro's runtime/model downloads, external browse pages, and the standalone-download action are not precached by this worker.
+- Chat/API responses, streaming requests, and user memory are **never added to the PWA cache**. Memory stays in the existing local-storage store.
+
+Each build gets a content-versioned cache containing its actual hashed assets. A new snapshot must finish downloading before it can replace the previous one. Updates wait for existing NOVA tabs/windows to close, so a deployment cannot reload an active conversation; close all NOVA windows/tabs and reopen after an update has downloaded. Cleanup affects only NOVA's cache for the current deployment path, not other apps or model caches on the same origin.
+
+### PWA source and publishing
+
+- `public/manifest.json`: NOVA name/identity, `display: standalone`, relative `start_url`/scope and orange `#f97316` theme.
+- `public/icons/`: 192px/512px orange-circle **N** icons as SVG, with matching PNG fallbacks for Windows launchers. `npm run generate:icons` regenerates both formats without additional dependencies.
+- `src/sw.js`: app-shell-only service worker. `scripts/build-pwa.mjs` stamps its content version and production asset list during `npm run build`.
+- `src/pwa.js`: guarded registration, enabled only in production builds. Editable Vite/HMR sessions and the standalone `nova.html` do not register a worker.
+- `src/pwa.css`: the tall, narrow layout and installed-window overscroll behavior.
+
+`npm run build:pages` publishes **`index.html`, `assets/`, `manifest.json`, `sw.js`, `icons/` and `nova.html`** together at the repository root. Keep these generated files in sync; do not hand-edit the built worker's asset hashes. Relative URLs and per-path cache names support a project URL such as `/voice-assistant/` as well as a domain root.
+
+`npm run verify:pwa` checks the manifest/icons, generated asset list, offline navigation/assets at root and project paths, failed updates, cache isolation, network-only APIs, safe registration and portrait layout rules. Native Windows installation still depends on the browser/profile/administrator policy.
+
 ### Backend endpoints
 
 The Ollama endpoint has an optional override in the settings panel, so the app is not tied to the Vite proxy:
@@ -347,7 +381,7 @@ With Kokoro, audio loudness publishes `--audio-pulse` (0–1). Browser TTS uses 
 
 `npm run verify:speech` checks rich response parsing/rendering and post-speech lifecycle, the exact personality prompt and friendly statuses/error copy, all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
 
-`build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
+`build:pages` runs all five verification suites: standalone, avatar, speech, brand/accessibility, and PWA.
 
 ## Build and publish
 
@@ -356,7 +390,7 @@ npm run build
 npm run preview
 ```
 
-After changing the app, run `npm run build:pages` to refresh the root `index.html` and `assets/` bundle used by branch-based GitHub Pages. Commit those generated root files with the source changes. GitHub Pages is static hosting and cannot use the local Vite proxy, so the hosted UI renders but starts in the offline state until you set the Ollama endpoint described above.
+After changing the app, run `npm run build:pages` to refresh the root `index.html`, `assets/`, manifest, service worker and icons used by branch-based GitHub Pages. Commit those generated root files with the source changes. GitHub Pages is static hosting and cannot use the local Vite proxy, so the hosted UI renders but starts in the offline state until you set the Ollama endpoint described above.
 
 In development, `npm run dev` serves the hot-reloading source entry at `/` and `/index.html`, so the stale root Pages bundle is never served from the dev server. `index.dev.html` remains the direct source entry and the build input; the root `index.html` is only ever the published artifact.
 

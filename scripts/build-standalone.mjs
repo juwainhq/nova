@@ -69,7 +69,7 @@ async function main() {
     // calls, which only work here by accident because main.jsx happens to import
     // React — a coupling that would break silently if that import were removed.
     jsx: 'automatic',
-    define: { [FLAG_TOKEN]: 'true' },
+    define: { [FLAG_TOKEN]: 'true', __NOVA_ENABLE_PWA__: 'false' },
     logLevel: 'warning',
   });
 

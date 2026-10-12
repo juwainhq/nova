@@ -56,7 +56,8 @@ function serveStandaloneRaw() {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  define: { __NOVA_ENABLE_PWA__: JSON.stringify(command === 'build') },
   base: './',
   plugins: [react(), serveDevEntryAtRoot(), serveStandaloneRaw()],
   build: {
@@ -79,4 +80,4 @@ export default defineConfig({
     allowedHosts: true,
     proxy: apiProxy,
   },
-});
+}));

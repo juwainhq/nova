@@ -127,6 +127,9 @@ check('inlines both avatar palettes and shared expression styles', /--canvas:\s*
 check('keeps the Orb face charcoal and its effects amber', /\.nova-orb\{[^}]*--avatar-eye-line:\s*var\(--eye-color,\s*#1a1a1a\)/.test(styleMatch[1])
   && /\.nova-orb\{[^}]*--avatar-face-accent:\s*#ff6a1a/.test(styleMatch[1]));
 
+check('the single-file download does not register a worker or need a manifest', !script.includes('serviceWorker.register')
+  && !script.includes('offline support could not be enabled') && !/rel=["']manifest["']/.test(html));
+
 // Guards the `</script>` escaping: a mangled inline script would otherwise still
 // satisfy every structural check above.
 try {
