@@ -333,7 +333,7 @@ const sheet = `<!doctype html>
     <title>NOVA — avatar states</title>
     <style>
 ${css}
-      body { margin: 0; padding: 34px 26px 44px; background: #0f0d0b; }
+      body { margin: 0; padding: 34px 26px 44px; background: #050300; }
       .sheet-head { max-width: 1080px; margin: 0 auto 26px; }
       .sheet-head h1 { margin: 0; color: #fff7ef; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
       .sheet-head p { margin: 7px 0 0; color: #a38a72; font-size: 11px; line-height: 1.6; }

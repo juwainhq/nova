@@ -226,15 +226,24 @@ export async function verifyWebBrowse(check) {
   const appSource = await readFile('src/App.jsx', 'utf8');
   // The light theme is a contract of its own: white paper, charcoal ink, orange accent,
   // a ground that breathes on an 8s cycle, and nothing light-on-light inside a card.
-  check('theme: the ground is an animated ember gradient on an 8s cycle',
-    /\.app-shell::before, \.app-shell::after \{[^}]*animation-duration: 8s;/.test(css)
-    && /\.app-shell::before \{[^}]*linear-gradient\([^)]*#0f0d0b[^}]*var\(--ember\)[^}]*animation-name: bg-veil;/.test(css)
-    && /\.app-shell::after \{[^}]*animation-name: bg-veil-alt;/.test(css)
-    && /@keyframes bg-veil \{[^}]*transform: translate3d\(-11%, -7%, 0\)/.test(css)
-    && /will-change: transform, opacity;/.test(css));
-  check('theme: the three named colours are the palette', /--ember: #7c2d00;/.test(css)
-    && /--ember-hot: #92400e;/.test(css) && /#0f0d0b/.test(css) && /--card: #ffffff;/.test(css)
-    && /--card-alt: #faf7f5;/.test(css) && /--on-card: #1a1208;/.test(css));
+  check('theme: the ground is four blurred blobs on one shared 12s cycle',
+    /\.app-shell::before, \.app-shell::after, body::before, body::after \{[^}]*animation: blobMove 12s ease-in-out infinite alternate;/.test(css)
+    && /@keyframes blobMove \{[^@]*translate3d\(var\(--blob-x/.test(css)
+    && /will-change: transform, opacity;/.test(css) && /filter: blur\(120px\)/.test(css));
+  const blobBodies = [...css.matchAll(/^(?:\.app-shell|body)::(?:before|after) \{([^}]*)\n\}/gm)].map(m => m[1]);
+  check('theme: the blobs are 400-700px, out of sync, and use the amber palette',
+    blobBodies.length === 4
+    && blobBodies.every(b => { const w = +(b.match(/width: (\d+)px/) || [])[1]; return w >= 400 && w <= 700 && /animation-delay: -[\d.]+s/.test(b); })
+    && new Set(blobBodies.map(b => (b.match(/animation-delay: (-[\d.]+)s/) || [,''])[1])).size === 4
+    && ['#c2410c', '#f97316', '#7c2d00', '#fed7aa'].every(hexv => blobBodies.some(b => b.includes(hexv)))
+    && /body \{[^}]*background: #050300/.test(css) && !/0f0d0b/.test(css) && !/--ember/.test(css));
+  const grainLayer = (css.match(/#root::after \{([^}]*)\n\}/) || [])[1] || '';
+  check('theme: the grain is fixed SVG noise at 3% and cannot be interacted with',
+    grainLayer.includes('feTurbulence') && grainLayer.includes('position: fixed')
+    && grainLayer.includes('pointer-events: none') && grainLayer.includes('opacity: .03'));
+  check('theme: the sheets keep white paper and charcoal ink', /--card: #ffffff;/.test(css)
+    && /--card-alt: #faf7f5;/.test(css) && /--on-card: #1a1208;/.test(css)
+    && /--on-card-strong: #c2410c;/.test(css) && /\.settings-panel \{[^}]*background: var\(--card\)/.test(css));
   check('theme: the reply, the toast and the offline notice are white cards with an orange left edge',
     /\.response-transcript \{[^}]*border-left: 3px solid #f97316;[^}]*border-radius: 14px; background: var\(--card\)/.test(css)
     && /\.toast \{[^}]*border-left: 3px solid #f97316/.test(css)
