@@ -68,7 +68,8 @@ export async function verifyVoices(check) {
   check('Test Voice speaks the exact phrase using the unsaved dropdown choice', preview?.text === sample && preview.voice === basicVoice);
   check('Test Voice uses rate .92, pitch .88 and unchanged full volume', preview?.rate === .92 && preview.pitch === .88 && preview.volume === 1);
   check('Test Voice leaves saved preferences, memory and chat requests untouched', ui.storage.getItem('nova.tts.voice') === null
-    && ui.storage.getItem('nova.memory') === null && !ui.requests.some((request) => request.url.endsWith('/chat/completions')));
+    && ui.storage.getItem('nova_user_memory') === null && ui.storage.getItem('nova.memory') === null
+    && !ui.requests.some((request) => request.url.endsWith('/chat/completions')));
   check('queued preview sets the real speaker label and provides a Stop test action', label(ui) === basicVoice.name
     && panel.find('test-voice-button').props.disabled && Boolean(panel.find('voice-test-stop'))
     && atStage(ui, 'speaking'));

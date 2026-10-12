@@ -1,6 +1,11 @@
 // Only user-supplied facts are persisted, never replies or whole transcripts.
 // Plain strings keep the store portable and the helpers testable without a browser.
-export const MEMORY_KEY = 'nova.memory';
+// The store is one JSON object under its own key — { "facts": ["my name is Juwain", …] } —
+// because what a person chooses to tell NOVA is a growing list, not a fixed set of fields.
+// An older session wrote a bare array under 'nova.memory'; that key is still read once and
+// the data is moved, never thrown away.
+export const MEMORY_KEY = 'nova_user_memory';
+export const LEGACY_MEMORY_KEY = 'nova.memory';
 export const MAX_MEMORIES = 100;
 export const MAX_MEMORY_LENGTH = 500;
 
@@ -18,12 +23,23 @@ function identity(value) {
     .replace(/\bfavourite\b/g, 'favorite').replace(/\bcolour\b/g, 'color');
 }
 
+// Single-valued: saying it again replaces it, so a new city does not leave an old one behind.
 const PROFILE_FACTS = [
   ['name', /^my\s+name\s+is\s+.+$/i],
   ['color', /^my\s+(?:favorite|favourite)\s+(?:color|colour)\s+is\s+.+$/i],
   ['occupation', /^i\s+work\s+as\s+.+$/i],
+  ['birthday', /^my birthday is\s+.+$/i],
+  ['pronouns', /^my pronouns are\s+.+$/i],
+  ['location', /^i(?:\s+am|[’']m)\s+from\s+.+$/i],
+  ['residence', /^i(?:\s+live|[’']m\s+living|\s+am\s+living)\s+in\s+.+$/i],
+];
+// Multi-valued: each is its own memory, and one never replaces another. "I like gaming"
+// must not delete "I like chess", and a pronoun ("I like you") is not a fact to keep.
+const SPOKEN_FACTS = [
+  /^i\s+(?:really\s+)?(?:like|love|enjoy|prefer)\s+(?!(?:it|that|this|these|those|you|your|him|her|them|us|me|being|talking|chatting|help)\b)(.{4,})$/i,
 ];
 const slotFor = (fact) => PROFILE_FACTS.find(([, pattern]) => pattern.test(fact))?.[0];
+const isSpokenFact = (fact) => Boolean(slotFor(fact)) || SPOKEN_FACTS.some((pattern) => pattern.test(fact));
 
 export function rememberFact(facts, value) {
   const fact = normalizeMemoryFact(value);
@@ -43,19 +59,29 @@ export function rememberFact(facts, value) {
   return { facts: [...facts, fact], status: 'added', fact };
 }
 
+// One array of strings is what every helper works with, whichever shape the store held.
+function factsFrom(value) {
+  const list = Array.isArray(value) ? value : Array.isArray(value?.facts) ? value.facts : null;
+  if (!list || list.length > MAX_MEMORIES || list.some((item) => typeof item !== 'string'
+    || !normalizeMemoryFact(item) || normalizeMemoryFact(item).length > MAX_MEMORY_LENGTH)) return null;
+  return list;
+}
+
 export function readMemoryStore(storage = browserStorage()) {
   try {
     if (!storage) return { facts: [], error: "I can’t access this browser’s storage right now. Check your browser settings so I can keep memories for you." };
-    const raw = storage.getItem(MEMORY_KEY);
-    if (raw === null) return { facts: [], error: '' };
-    const values = JSON.parse(raw);
-    if (!Array.isArray(values) || values.length > MAX_MEMORIES || values.some((value) =>
-      typeof value !== 'string' || !normalizeMemoryFact(value) || normalizeMemoryFact(value).length > MAX_MEMORY_LENGTH)) {
-      throw new Error("I couldn’t read these saved memories.");
-    }
+    let raw = storage.getItem(MEMORY_KEY);
+    const legacy = raw === null ? storage.getItem(LEGACY_MEMORY_KEY) : null;
+    if (raw === null && legacy === null) return { facts: [], error: '' };
+    const values = JSON.parse(raw ?? legacy);
+    const stored = factsFrom(values);
+    if (!stored) throw new Error("I couldn’t read these saved memories.");
     // Adopt harmless whitespace/case duplicates and keep the latest profile value.
     // Reading never rewrites the stored data; malformed data is not silently erased.
-    const facts = values.reduce((saved, fact) => rememberFact(saved, fact).facts, []);
+    // The one exception is the old key: facts found there are copied forward once, so the
+    // new store is the only one that matters from now on (the old key is left alone).
+    const facts = stored.reduce((saved, fact) => rememberFact(saved, fact).facts, []);
+    if (raw === null && legacy !== null) writeMemoryStore(facts, storage);
     return { facts, error: '' };
   } catch {
     return { facts: [], error: "I couldn’t read your saved memories, so I’ve left them untouched. Try allowing browser storage, or use Clear all memory in Settings if you’d like to reset them." };
@@ -65,11 +91,9 @@ export function readMemoryStore(storage = browserStorage()) {
 export function writeMemoryStore(facts, storage = browserStorage()) {
   try {
     if (!storage) throw new Error("I can’t access browser storage right now.");
-    if (!Array.isArray(facts) || facts.length > MAX_MEMORIES || facts.some((fact) =>
-      typeof fact !== 'string' || !normalizeMemoryFact(fact) || normalizeMemoryFact(fact).length > MAX_MEMORY_LENGTH)) {
-      throw new Error("I couldn’t save these memories.");
-    }
-    storage.setItem(MEMORY_KEY, JSON.stringify(facts.map(normalizeMemoryFact)));
+    const stored = Array.isArray(facts) ? factsFrom(facts) : null;
+    if (!stored) throw new Error("I couldn’t save these memories.");
+    storage.setItem(MEMORY_KEY, JSON.stringify({ facts: stored.map(normalizeMemoryFact) }));
     return { ok: true, error: '' };
   } catch {
     return { ok: false, error: "I couldn’t save that change, so your memories are still as they were. Your browser’s storage may be full or blocked." };
@@ -92,7 +116,7 @@ export function parseMemoryIntent(value) {
   // Deliberately narrow implicit capture: only simple affirmative profile facts.
   // Questions and mixed multi-sentence requests stay normal chat. Use "remember"
   // for every other kind of fact, rather than asking a model to guess what to save.
-  if (!text.includes('?') && !/[.!?]/.test(fact) && slotFor(fact)) return { type: 'remember', fact };
+  if (!text.includes('?') && !/[.!?]/.test(fact) && isSpokenFact(fact)) return { type: 'remember', fact };
   return null;
 }
 
@@ -112,6 +136,20 @@ export function forgetFact(facts, value) {
 export function describeMemoryFact(fact) {
   return fact.replace(/^my\b/i, 'your').replace(/^i am\b|^i['’]m\b/i, "you're")
     .replace(/^i was\b/i, 'you were').replace(/^i\b/i, 'you');
+}
+
+/**
+ * The name to greet the user by, from the fact they gave ("my name is Juwain").
+ * Empty unless the name reads like a name: a spoken greeting is not a place to put
+ * whatever a saved sentence happened to contain.
+ */
+export function memoryName(facts) {
+  const fact = [...(Array.isArray(facts) ? facts : [])].reverse()
+    .find((value) => PROFILE_FACTS[0][1].test(normalizeMemoryFact(value)));
+  if (!fact) return '';
+  const name = normalizeMemoryFact(fact).replace(/^my\s+name\s+is\s+/i, '').trim().replace(/\s+/g, ' ');
+  if (!/^[\p{L}][\p{L}'’.-]{1,31}(?:\s+[\p{L}][\p{L}'’.-]{1,31}){0,3}$/u.test(name)) return '';
+  return name;
 }
 
 export function memoryPrompt(facts) {

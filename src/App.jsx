@@ -6,7 +6,8 @@ import {
   RICH_FADE_MS, RICH_VISIBLE_MS, hasRichResponse, richResponse,
 } from './rich-response.js';
 import {
-  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseRequest, browseUrl, isCloseCommand,
+  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseGoto, browseInputStop, browseNavRequest, browseRequest,
+  browseUrl, isCloseCommand, pushBrowseHistory,
 } from './web-browse.js';
 import { APP_NAME } from './brand.js';
 import {
@@ -14,16 +15,18 @@ import {
   friendlyOllamaError, ollamaError,
 } from './personality.js';
 import {
-  MEMORY_KEY, describeMemoryFact, forgetFact, memoryPrompt, parseMemoryIntent,
+  MEMORY_KEY, describeMemoryFact, forgetFact, memoryName, memoryPrompt, parseMemoryIntent,
   readMemoryStore, rememberFact, writeMemoryStore,
 } from './memory.js';
 import {
   TTS,
   TTS_TEST_TEXT,
   TTS_VOICE_KEY,
+  WAKE_GREET_MS,
   WAKE_WORD,
   WAKE_UNSUPPORTED_MESSAGE,
   createVoiceListener,
+  isSameSpeech,
   createWakeChime,
   defaultVoice,
   describeVoice,
@@ -90,6 +93,18 @@ function readSetting(key, fallback = '') {
   }
 }
 
+/* The theme lives under its own key, outside the nova. settings namespace: it is a display
+   preference, not a connection, and it defaults to dark when nothing was ever stored. */
+const THEME_STORAGE_KEY = 'nova_theme';
+const readTheme = (fallback = 'dark') => {
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === 'light' || stored === 'dark' ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 function trimTrailingSlashes(url) {
   return url.trim().replace(/\/+$/, '');
 }
@@ -117,6 +132,14 @@ function endpointWarning(value) {
     return "Try a full address starting with http:// or https://.";
   }
   return '';
+}
+
+// Fields that are blank with nothing behind them. The model falls back to the
+// shipped default and a blank endpoint falls back to the dev proxy, so neither
+// needs a value there; a single-file copy has no proxy, so only its endpoint is
+// genuinely required. SettingsPanel flashes exactly these ids when it opens.
+function settingsAttention(draft, standalone) {
+  return standalone && !String(draft.ollamaUrl || '').trim() ? ['ollama-url'] : [];
 }
 
 // A hint that tells the operator exactly how to let this page reach Ollama.
@@ -155,6 +178,23 @@ function ConnectionHelp() {
         </p>
       </div>
     </details>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.1" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 2.8v2.1M12 19.1v2.1M2.8 12h2.1M19.1 12h2.1M5.5 5.5l1.5 1.5M17 17l1.5 1.5M18.5 5.5L17 7M7 17l-1.5 1.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M19.6 13.4A8.2 8.2 0 1 1 10.6 4.4a6.5 6.5 0 0 0 9 9Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -399,6 +439,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const voiceCount = voices.length;
   const savedVoiceMissing = Boolean(draft.voiceKey) && voiceCount > 0 && !resolveVoice(voices, draft.voiceKey);
   const draftModel = draft.model.trim() || OLLAMA_MODEL;
+  // Opening Settings should make an unusable blank field obvious at a glance.
+  const attention = settingsAttention(draft, standalone);
   const connectionLabel = connection === 'checking'
     ? "Let's see if Ollama is ready..."
     : connection === 'offline'
@@ -444,10 +486,10 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             </div>
 
             <div className="settings-field">
-              <label className="field-label" htmlFor="ollama-url">Ollama endpoint <span>OPTIONAL</span></label>
+              <label className="field-label" htmlFor="ollama-url">Ollama endpoint <span>{attention.length ? 'REQUIRED' : 'OPTIONAL'}</span></label>
               <input
                 id="ollama-url"
-                className="settings-input"
+                className={`settings-input${attention.includes('ollama-url') ? ' needs-attention' : ''}`}
                 type="url"
                 inputMode="url"
                 autoComplete="off"
@@ -461,11 +503,13 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   setTestMessage('');
                 }}
               />
-              <p className={`field-hint ${endpointWarning(draft.ollamaUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
-                {endpointWarning(draft.ollamaUrl)
-                  || (standalone
-                    ? "Keep the default if Ollama is running on this computer, or enter the address you’d like me to use."
-                    : "Leave this blank when using the local Vite server. On a hosted page, use an Ollama address your browser can reach.")}
+              <p className={`field-hint ${endpointWarning(draft.ollamaUrl) || attention.length ? 'field-hint-error' : ''}`} aria-live="polite">
+                {attention.length
+                  ? "A saved copy has no local server to lean on, so I need an address here — http://localhost:11434 if Ollama runs on this computer."
+                  : endpointWarning(draft.ollamaUrl)
+                    || (standalone
+                      ? "Keep the default if Ollama is running on this computer, or enter the address you’d like me to use."
+                      : "Leave this blank when using the local Vite server. On a hosted page, use an Ollama address your browser can reach.")}
               </p>
               <ConnectionHelp />
             </div>
@@ -668,6 +712,23 @@ function App() {
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
   }));
+  const [theme, setTheme] = useState(readTheme);
+  // One class on the shell paints every surface; <html> is told as well, so the page canvas
+  // and its lights flip with it. Both writes are guarded: a tree mounted without a document
+  // element or storage still themes itself, it just cannot remember the choice.
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch {
+      /* no document to theme */
+    }
+    try {
+      // A first visit seeds the default; reloading the choice nobody changed is a read.
+      if (window.localStorage.getItem(THEME_STORAGE_KEY) !== theme) window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      /* a blocked store loses the preference, never the appearance */
+    }
+  }, [theme]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryState, setMemoryState] = useState(readMemoryStore);
   const [lastResponse, setLastResponse] = useState('');
@@ -683,6 +744,9 @@ function App() {
   const [notice, setNotice] = useState('');
   const [wakeStandby, setWakeStandby] = useState(false);
   const [wakeMessage, setWakeMessage] = useState('');
+  // The standby earner lights up while the mic is hearing the wake phrase coming.
+  const [wakeAlert, setWakeAlert] = useState(false);
+  const wakeAlertTimerRef = useRef(null);
   // Brief wake and post-reply flourishes; busy stages always take visual priority.
   const [mood, setMood] = useState('idle');
   const voices = useSpeechVoices();
@@ -723,6 +787,8 @@ function App() {
   const speakRef = useRef(null);
   const interruptRef = useRef(null);
   const speakingSourceRef = useRef(null); // What NOVA is saying now, to tell her voice from an interrupt.
+  const greetTimerRef = useRef(null);     // A name greeting waiting for a question that may not come.
+  const greetingRef = useRef('');         // The greeting being spoken, so hearing it back is not a question.
   const avatarContainerRef = useRef(null);
   const conversationRef = useRef([]);
   const memoriesRef = useRef(memoryState.facts);
@@ -735,6 +801,14 @@ function App() {
     setNotice(message);
     window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(''), 4600);
+  }, []);
+
+  // A short-lived highlight, so a word heard on the way to “hey nova” is visible
+  // even when the wake phrase itself never lands.
+  const flashWakeAlert = useCallback(() => {
+    setWakeAlert(true);
+    window.clearTimeout(wakeAlertTimerRef.current);
+    wakeAlertTimerRef.current = window.setTimeout(() => setWakeAlert(false), 1600);
   }, []);
 
   const dismissRichResponse = useCallback((immediate = false) => {
@@ -760,11 +834,54 @@ function App() {
   }, []);
 
   // The browsing panel slides in beside NOVA, and out on "close" or its × button.
-  const openBrowse = useCallback((kind, query) => {
+  // Every page it loads goes through one stop on the panel's own trail, so the
+  // address bar, the arrows and NOVA's voice commands all move the same state.
+  const pushBrowseStop = useCallback((stop) => {
     window.clearTimeout(browseTimerRef.current);
-    const next = { kind, query, url: browseUrl(kind, query), closing: false };
+    const current = browseRef.current;
+    const open = current && !current.closing;
+    const trail = pushBrowseHistory(open ? current.entries : [], open ? current.step : -1, stop);
+    const next = { ...stop, ...trail, frame: 0, closing: false };
     browseRef.current = next;
     setBrowse(next);
+    return true;
+  }, []);
+
+  const openBrowse = useCallback((kind, query) => {
+    pushBrowseStop({ kind, query, url: browseUrl(kind, query) });
+  }, [pushBrowseStop]);
+
+  // Typed or pasted into the address bar. Returns false for an address the frame
+  // must not load, so the panel can say so instead of sitting still.
+  const goBrowse = useCallback((text) => {
+    const stop = browseInputStop(text);
+    return stop ? pushBrowseStop(stop) : false;
+  }, [pushBrowseStop]);
+
+  // The frame is cross-origin, so its own history is unreadable and unsteerable:
+  // "back" means the previous stop NOVA opened. At the start of the trail it means
+  // leaving the panel, which is what "go back" did before the panel had a trail.
+  const stepBrowse = useCallback((delta) => {
+    const current = browseRef.current;
+    if (!current || current.closing) return false;
+    const step = current.step + delta;
+    const stop = current.entries[step];
+    if (!stop) return false;
+    const next = { ...current, ...stop, step, frame: 0 };
+    browseRef.current = next;
+    setBrowse(next);
+    return true;
+  }, []);
+
+  // contentWindow.location.reload() throws across origins, so a refresh remounts
+  // the frame on the same address instead.
+  const refreshBrowse = useCallback(() => {
+    const current = browseRef.current;
+    if (!current || current.closing) return false;
+    const next = { ...current, frame: (current.frame || 0) + 1 };
+    browseRef.current = next;
+    setBrowse(next);
+    return true;
   }, []);
   const closeBrowse = useCallback(() => {
     const current = browseRef.current;
@@ -814,6 +931,7 @@ function App() {
   useEffect(() => () => {
     window.clearTimeout(moodTimerRef.current);
     window.clearTimeout(noticeTimerRef.current);
+    window.clearTimeout(wakeAlertTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -909,9 +1027,13 @@ function App() {
 
     const currentMemory = refreshMemories(false);
     const intent = parseMemoryIntent(prompt);
-    // With the browsing panel open, "close" / "hide" / "go back" just closes it.
-    const closeRequest = !intent && Boolean(browseRef.current && !browseRef.current.closing) && isCloseCommand(prompt);
-    const browseQuery = intent || closeRequest ? null : browseRequest(prompt);
+    // With the panel open these are browser commands, not questions: "close"/"hide"
+    // leave it, "go back"/"next"/"refresh" move the frame, and "go to <site>" loads a
+    // page whether or not the panel is already there.
+    const panelOpen = Boolean(browseRef.current && !browseRef.current.closing);
+    const navRequest = !intent && (panelOpen ? browseNavRequest(prompt) : browseGoto(prompt));
+    const closeRequest = !intent && panelOpen && !navRequest && isCloseCommand(prompt);
+    const browseQuery = intent || closeRequest || navRequest ? null : browseRequest(prompt);
     if (browseQuery) openBrowse(browseQuery.kind, browseQuery.query);
 
     let speech = null;
@@ -921,6 +1043,16 @@ function App() {
         closeBrowse();
         setStage('ready');
         // The stage ends where it started ("ready"), so the mode effect won't re-run: resume here.
+        voiceListenerRef.current?.setMode(document.hidden ? null : 'standby');
+        return;
+      }
+      if (navRequest) {
+        // Panel commands are answered by the frame itself, so they stay silent and
+        // work with Ollama offline: no request, no reply, straight back to standby.
+        if (navRequest.action === 'goto') pushBrowseStop({ kind: 'web', query: navRequest.query, url: navRequest.url });
+        else if (navRequest.action === 'refresh') refreshBrowse();
+        else if (!stepBrowse(navRequest.action === 'back' ? -1 : 1) && navRequest.action === 'back') closeBrowse();
+        setStage('ready');
         voiceListenerRef.current?.setMode(document.hidden ? null : 'standby');
         return;
       }
@@ -1029,7 +1161,7 @@ function App() {
     } finally {
       if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
-  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse, openBrowse, closeBrowse]);
+  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse, openBrowse, closeBrowse, pushBrowseStop, stepBrowse, refreshBrowse]);
 
   // Resolve only when speech ends, not when it is queued. Otherwise standby
   // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
@@ -1280,6 +1412,11 @@ function App() {
 
   // Keep the recognizer's event handler pointed at the latest assistant request.
   promptRef.current = (text) => {
+    window.clearTimeout(greetTimerRef.current); // The question is here; skip the hello.
+    if (greetingRef.current && isSameSpeech(text, greetingRef.current)) {
+      greetingRef.current = ''; // Her own greeting, heard back by the mic. Not a question.
+      return;
+    }
     askAria(text).then(() => {});
   };
 
@@ -1330,21 +1467,42 @@ function App() {
     const listener = createVoiceListener({
       Recognition: SpeechRecognition,
       onStandbyChange: setWakeStandby,
-      onSpeechDetected: () => dismissRichResponse(),
+      onSpeechDetected: (mode) => {
+        dismissRichResponse();
+        if (mode === 'standby') flashWakeAlert();
+        // Words after the wake phrase are the request itself: no room for a hello.
+        if (mode === 'question') window.clearTimeout(greetTimerRef.current);
+      },
       onInterrupt: () => interruptRef.current?.(),
       spokenText: () => speakingSourceRef.current?.text || '',
       onUnsupported: () => setWakeMessage(WAKE_UNSUPPORTED_MESSAGE),
       onInputStart: () => {
         if (listener.wakeSupported) setWakeMessage('');
       },
-      onWake: () => {
+      onWake: (reason = 'wake') => {
         dismissRichResponse();
         window.clearTimeout(moodTimerRef.current);
+        window.clearTimeout(wakeAlertTimerRef.current);
+        setWakeAlert(false);
         setMood('wake');
         moodTimerRef.current = window.setTimeout(() => setMood('idle'), 800);
         setNotice('');
         setStage('listening');
         void wakeChimeRef.current?.play();
+        // Once the name is known, a wake word on its own is answered with a hello by name —
+        // after a beat, and never when the request came in the same breath as the wake phrase.
+        window.clearTimeout(greetTimerRef.current);
+        const name = reason === 'question' ? '' : memoryName(memoriesRef.current);
+        if (name && !requestControllerRef.current && !speechFinishRef.current) {
+          greetTimerRef.current = window.setTimeout(() => {
+            greetTimerRef.current = null;
+            if (requestControllerRef.current || speechFinishRef.current) return;
+            const greeting = `Hi ${name}!`;
+            greetingRef.current = greeting;
+            const settle = () => { if (greetingRef.current === greeting) greetingRef.current = ''; };
+            void speakRef.current?.(greeting)?.then(settle, settle);
+          }, WAKE_GREET_MS);
+        }
       },
       onQuestion: (text) => promptRef.current?.(text),
       onInputEnd: (reason) => {
@@ -1368,10 +1526,11 @@ function App() {
     });
     voiceListenerRef.current = listener;
     return () => {
+      window.clearTimeout(greetTimerRef.current);
       listener.dispose();
       voiceListenerRef.current = null;
     };
-  }, [SpeechRecognition, notify, dismissRichResponse]);
+  }, [SpeechRecognition, notify, dismissRichResponse, flashWakeAlert]);
 
   // Standby is automatic on load / after a reply. Never listen to settings edits
   // or a hidden tab; resume when the main view is idle again. While NOVA speaks,
@@ -1495,16 +1654,24 @@ function App() {
   const showRichPanel = Boolean(richContent && !settingsOpen);
 
   return (
-    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''}`}>
+    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''} theme-${theme}`}>
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
-        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
-          <SettingsIcon />
-        </button>
+        {/* Two controls live in this corner, both always visible: the light the room is in,
+            then the way into settings. */}
+        <div className="topbar-actions">
+          <button className="icon-button theme-toggle" type="button" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'light'} onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
+            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
+            <SettingsIcon />
+          </button>
+        </div>
       </header>
 
       <main className="main-stage">
         <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
+          <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
           <div
             ref={avatarContainerRef}
             className={`avatar-container ${avatarActivity} ${avatarMood}`}
@@ -1526,7 +1693,6 @@ function App() {
             </div>
           )}
           <h1 className="tagline">What’s on your mind?</h1>
-          <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
           {settings.showTranscript && lastResponse && (
             <div className="response-transcript" role="region" aria-label="My last reply" aria-live="polite">
               <span>My last reply</span>
@@ -1542,8 +1708,9 @@ function App() {
 
       <footer className="control-dock">
         {wakeStandby && stage === 'ready' && !settingsOpen && (
-          <div className="wake-indicator" role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
+          <div className={`wake-indicator${wakeAlert ? ' is-alert' : ''}`} role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
             <MicIcon />
+            <span className="wake-hint" aria-hidden="true">{`Listening for “${WAKE_WORD}”...`}</span>
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
@@ -1565,7 +1732,7 @@ function App() {
         </div>
       </footer>
 
-      {browse && <BrowsePanel browse={browse} onClose={closeBrowse} />}
+      {browse && <BrowsePanel browse={browse} onClose={closeBrowse} onNavigate={goBrowse} onBack={() => stepBrowse(-1)} onForward={() => stepBrowse(1)} onRefresh={refreshBrowse} />}
 
       {notice && <div className="toast" role="status"><span className="toast-mark">!</span><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
       {settingsOpen && (

@@ -187,7 +187,10 @@ export async function verifyRich(check) {
   const images = await ready({ modelsOffline: true });
   await ask(images, 'show me a picture of cats & dogs');
   check('rich image requests: spoken answer is the requested found-pictures line, panel waits for speech', images.utterances[0]?.text === "Here's what I found!" && !props(images));
-  check('rich image requests: local search does not call chat or write memories/preferences', !images.requests.some((request) => request.url.endsWith('/chat/completions')) && images.storage.writes.length === 0);
+  // The App persists the display theme on its first paint, under its own key; that write is
+  // not a memory and not a setting, so a picture search is still expected to leave none behind.
+  const imageWrites = images.storage.writes.filter((write) => write.key !== 'nova_theme');
+  check('rich image requests: local search does not call chat or write memories/preferences', !images.requests.some((request) => request.url.endsWith('/chat/completions')) && imageWrites.length === 0);
   await end(images);
   const browsing = images.nodes().find((node) => node.props.browse && node.props.onClose)?.props.browse;
   check('rich image requests: results open in the browsing panel (Google Images), not as a rich card', !props(images)

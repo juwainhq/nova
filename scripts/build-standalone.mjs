@@ -18,8 +18,8 @@ const TEMPLATE = `<!doctype html>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0d0805" />
-    <meta name="description" content="NOVA is your warm, voice-first personal assistant. Keep this single-file copy on your computer with no build step." />
+    <meta name="theme-color" content="#050300" />
+    <meta name="description" content="NOVA is your warm, voice-first personal AI assistant. Keep this single-file copy on your computer with no build step." />
     <title>NOVA — Voice Intelligence</title>
     <style>
 __styles__
