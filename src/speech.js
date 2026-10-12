@@ -142,6 +142,7 @@ export function createVoiceListener({
   onStandbyChange = () => {},
   onInputStart = () => {},
   onInputEnd = () => {},
+  // Gets the mode that heard the speech, so the app can react to standby noise.
   onSpeechDetected = () => {},
   onInterrupt = () => {},
   spokenText = () => '',
@@ -302,7 +303,7 @@ export function createVoiceListener({
     };
     recognition.onspeechstart = () => {
       // In interrupt mode the sound is usually NOVA herself.
-      if (!disposed && phase === 'running' && mode === activeMode && mode !== 'interrupt') onSpeechDetected();
+      if (!disposed && phase === 'running' && mode === activeMode && mode !== 'interrupt') onSpeechDetected(mode);
     };
     recognition.onresult = (event) => {
       if (disposed || phase !== 'running' || mode !== activeMode) return;
@@ -332,7 +333,7 @@ export function createVoiceListener({
         }
         return;
       }
-      if (heardSpeech) onSpeechDetected(); // Fallback for engines without speechstart.
+      if (heardSpeech) onSpeechDetected(mode); // Fallback for engines without speechstart.
       const join = (parts) => parts.map(({ transcript }) => transcript).join(' ').trim();
       const text = join(finals);
       if (mode === 'standby') {

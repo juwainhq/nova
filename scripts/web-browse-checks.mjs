@@ -86,6 +86,21 @@ export async function verifyWebBrowse(check) {
   check('browse layout: the frame leaves 60px for the header and 20px at the bottom', /\.browse-header \{ flex: 0 0 60px;/.test(css) && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
   check('browse layout: the panel never scrolls; the iframe fills it with no border', /\.browse-panel \{[^}]*overflow: hidden/.test(css)
     && /\.browse-frame \{[^}]*flex: 1;[^}]*width: 100%;[^}]*border: 0/.test(css));
+  check('browse panel: the sandbox is exactly the agreed allow-list, so Google stays inside its frame',
+    /sandbox="allow-scripts allow-same-origin allow-forms allow-popups"/.test(frame));
+  check('browse panel: the mobile sheet carries a grabber, decorative so the × stays the keyboard path', html.includes('class="browse-handle"')
+    && /<div class="browse-handle" aria-hidden="true"/.test(html));
+  check('browse layout: the grabber only exists on the bottom sheet', /\.browse-handle \{ display: none; \}/.test(css)
+    && /@media \(max-width: 700px\)[\s\S]*\.browse-handle \{ display: block;/.test(css)
+    && /\.browse-handle \{[^}]*touch-action: none/.test(css.replace(/\n\s*/g, ' ')));
+  check('browse layout: a held sheet keeps its own transform instead of the entry fill', /\.browse-panel\.is-dragged \{ animation-fill-mode: none; \}/.test(css));
+  const handle = await readFile('src/BrowsePanel.jsx', 'utf8');
+  check('browse drag: the grabber owns one pointer gesture, start to release', /onPointerDown=\{[^}]*\}[\s\S]*?onPointerMove=[\s\S]*?onPointerUp=[\s\S]*?onPointerCancel=/.test(handle.replace(/\n\s*/g, ' '))
+    && /setPointerCapture\?\.\(event\.pointerId\)/.test(handle));
+  check('browse drag: the sheet only follows the finger downward, and a release hands the close to the app',
+    /Math\.max\(0, event\.clientY - drag\.from\)/.test(handle) && /onClose\(\)/.test(handle)
+    && /close \? 'translateY\(100%\)' : 'translateY\(0\)'/.test(handle)
+    && /height \* CLOSE_FRACTION \|\| speed >= FLICK_PX_PER_MS/.test(handle));
   check('browse layout: the closed app keeps its full width', /\.app-shell \{[^}]*width: 100%/.test(css) && /\.browse-closing \{ width: 100%; \}/.test(css));
 
   // ---------------------------------------------------------------------- App

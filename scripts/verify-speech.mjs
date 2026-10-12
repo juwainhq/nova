@@ -730,6 +730,47 @@ deniedUi.clock.tick(60000);
 check('App explains denied microphone permission without repeated prompts', deniedUi.find('wake-message')?.props.children.includes('I need microphone permission') && deniedUi.recognition.instances[0].starts.length === 1 && !deniedUi.find('wake-indicator'));
 deniedUi.unmount();
 
+// ------------------------------------------- standby cues, warm-up box, settings flash
+const sheetCss = await readFile(resolve(root, 'src/index.css'), 'utf8');
+check('warm-up: the line gets its own 24px box and clips, so nothing overlaps it', /\.kokoro-warmup \{[^}]*--warmup-height: 24px;[^}]*min-height: var\(--warmup-height\);[^}]*overflow: hidden/.test(sheetCss)
+  && !/\.kokoro-warmup \{[^}]*height: 0[;}]/.test(sheetCss));
+check('standby: the icon dims, lights for the wake phrase and names itself on hover', /\.wake-indicator \{[^}]*opacity: \.42;[^}]*transition: opacity 400ms ease-in-out/.test(sheetCss)
+  && /\.wake-indicator:hover, \.wake-indicator\.is-alert \{ opacity: 1; color: #ff9a5a; \}/.test(sheetCss)
+  && /\.wake-indicator:hover \.wake-hint \{ opacity: 1; \}/.test(sheetCss));
+
+const alertUi = await createAppHarness();
+alertUi.clock.tick();
+await alertUi.settle();
+const alertMic = alertUi.recognition.instances[0];
+alertMic.result('hey');
+alertUi.flush();
+check('standby: a wake phrase starting lights the mic icon', alertUi.find('wake-indicator')?.props.className.includes('is-alert'));
+alertUi.clock.tick(1599);
+alertUi.flush();
+check('standby: the light holds for 1.6s before dimming', alertUi.find('wake-indicator')?.props.className.includes('is-alert'));
+alertUi.clock.tick(1);
+alertUi.flush();
+check('standby: the light fades on its own, without a wake', !alertUi.find('wake-indicator')?.props.className.includes('is-alert')
+  && Boolean(alertUi.find('wake-indicator')));
+check('standby: the hover hint spells the wake phrase', alertUi.find('wake-hint')?.props.children === 'Listening for \u201chey nova\u201d...');
+alertMic.result('hey nova');
+alertUi.flush();
+check('wake: the icon hands over to listening instead of staying lit', !alertUi.find('wake-indicator'));
+alertUi.unmount();
+check('standby: an unmounted flash leaves no timer behind', alertUi.clock.pending === 0);
+
+const attentionUi = await createAppHarness({ panelProps: { standalone: true } });
+const attentionInput = () => attentionUi.nodes().find((node) => node.props.id === 'ollama-url');
+check('settings: a saved copy highlights the blank endpoint it cannot do without', attentionInput()?.props.className.includes('needs-attention')
+  && /\.settings-input\.needs-attention \{ animation: field-attention/.test(sheetCss));
+attentionInput().props.onChange({ target: { value: 'http://localhost:11434' } });
+attentionUi.flush();
+check('settings: typing an address clears the highlight', !attentionInput().props.className.includes('needs-attention'));
+attentionUi.unmount();
+const proxyUi = await createAppHarness({ panelProps: { standalone: false } });
+check('settings: a page with the local proxy never flashes its optional endpoint', !proxyUi.nodes().some((node) => node.props.className?.includes?.('needs-attention')));
+proxyUi.unmount();
+
 // Voice preview/selection and memory use the same compiled App fixture.
 await verifyRich(check);
 await verifyKokoro(check);

@@ -192,6 +192,12 @@ for (const [selector, prop] of [['.avatar-figure', 'transform'], ['.eyes-gaze', 
   ['.eye-iris', 'opacity'], ['.eye-crescent', 'opacity'], ['.robot-eye', 'opacity'], ['.eye-surface', 'stop-color'], ['.eye-shade', 'stop-color']]) {
   check(`${selector}: state transitions use 400ms ease-in-out`, value(selector, 'transition') === `${prop} 400ms ease-in-out`);
 }
+const avatarSelectors = /(?:^|\.)(?:robot-avatar|avatar-figure|avatar-backlight|avatar-container|listen-ring|eyes-gaze|eyes-blink|eyes-voice|eye-scale|eye-iris|eye-crescent|eye-surface|eye-shade|robot-eye)$/;
+const transitionDurations = styleRules.filter(({ selectors }) => selectors.some((selector) => avatarSelectors.test(selector)))
+  .flatMap(({ body }) => [...body.matchAll(/transition:\s*([^;}]+)/g)].map((match) => match[1]))
+  .flatMap((declaration) => [...declaration.matchAll(/\d+(?:\.\d+)?m?s/g)].map((match) => match[0]));
+check('every avatar state change eases over 400ms, never a snap', transitionDurations.length >= 10
+  && transitionDurations.every((duration) => duration === '400ms'));
 check('body pose and animated rhythm are on separate elements', /rotateY\(var\(--figure-y, 0deg\)\) scale\(var\(--figure-scale, 1\)\)/.test(value('.avatar-figure', 'transform'))
   && !value('.avatar-figure', 'animation') && !value('.robot-avatar', '--figure-scale'));
 check('body never rotates on Z or applies skew/perspective', styleRules.filter(({ selectors }) => selectors.some((selector) => /\.(?:avatar-figure|robot-avatar|avatar-container)/.test(selector)))
@@ -230,6 +236,9 @@ check('listening: ring expands outward and fades fully', transformAt(ringFrames,
 check('thinking: shared gaze uses a 2.8s ease-in-out cycle', animation('.is-thinking .eyes-gaze') === 'eyes-thinking 2.8s ease-in-out infinite');
 const shift = parseFloat(property(gaze?.attrs.style ?? '', '--eye-shift')) * unit;
 check('thinking: gaze displacement is exactly 6 CSS pixels', near(shift, 6), `${shift}px at the default size`);
+const gazeVars = [...new Set(keyframes('eyes-thinking').flatMap(({ body }) => [...body.matchAll(/var\((--[\w-]+)\)/g)].map((match) => match[1])))];
+check('thinking: the keyframes read exactly the variable the gaze element defines', gazeVars.length === 1
+  && Boolean(gazeVars[0]) && (gaze?.attrs.style ?? '').includes(`${gazeVars[0]}:`) && Number.isFinite(shift) && shift > 0);
 const thinkingFrames = keyframes('eyes-thinking');
 const leftFrames = thinkingFrames.filter(({ body }) => property(body, 'transform') === 'translateX(calc(-1 * var(--eye-shift)))');
 const rightFrames = thinkingFrames.filter(({ body }) => property(body, 'transform') === 'translateX(var(--eye-shift))');

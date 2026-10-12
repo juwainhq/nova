@@ -119,6 +119,14 @@ function endpointWarning(value) {
   return '';
 }
 
+// Fields that are blank with nothing behind them. The model falls back to the
+// shipped default and a blank endpoint falls back to the dev proxy, so neither
+// needs a value there; a single-file copy has no proxy, so only its endpoint is
+// genuinely required. SettingsPanel flashes exactly these ids when it opens.
+function settingsAttention(draft, standalone) {
+  return standalone && !String(draft.ollamaUrl || '').trim() ? ['ollama-url'] : [];
+}
+
 // A hint that tells the operator exactly how to let this page reach Ollama.
 function ConnectionHelp() {
   const originsCommand = ollamaOriginsCommand();
@@ -399,6 +407,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const voiceCount = voices.length;
   const savedVoiceMissing = Boolean(draft.voiceKey) && voiceCount > 0 && !resolveVoice(voices, draft.voiceKey);
   const draftModel = draft.model.trim() || OLLAMA_MODEL;
+  // Opening Settings should make an unusable blank field obvious at a glance.
+  const attention = settingsAttention(draft, standalone);
   const connectionLabel = connection === 'checking'
     ? "Let's see if Ollama is ready..."
     : connection === 'offline'
@@ -444,10 +454,10 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             </div>
 
             <div className="settings-field">
-              <label className="field-label" htmlFor="ollama-url">Ollama endpoint <span>OPTIONAL</span></label>
+              <label className="field-label" htmlFor="ollama-url">Ollama endpoint <span>{attention.length ? 'REQUIRED' : 'OPTIONAL'}</span></label>
               <input
                 id="ollama-url"
-                className="settings-input"
+                className={`settings-input${attention.includes('ollama-url') ? ' needs-attention' : ''}`}
                 type="url"
                 inputMode="url"
                 autoComplete="off"
@@ -461,11 +471,13 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   setTestMessage('');
                 }}
               />
-              <p className={`field-hint ${endpointWarning(draft.ollamaUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
-                {endpointWarning(draft.ollamaUrl)
-                  || (standalone
-                    ? "Keep the default if Ollama is running on this computer, or enter the address you’d like me to use."
-                    : "Leave this blank when using the local Vite server. On a hosted page, use an Ollama address your browser can reach.")}
+              <p className={`field-hint ${endpointWarning(draft.ollamaUrl) || attention.length ? 'field-hint-error' : ''}`} aria-live="polite">
+                {attention.length
+                  ? "A saved copy has no local server to lean on, so I need an address here — http://localhost:11434 if Ollama runs on this computer."
+                  : endpointWarning(draft.ollamaUrl)
+                    || (standalone
+                      ? "Keep the default if Ollama is running on this computer, or enter the address you’d like me to use."
+                      : "Leave this blank when using the local Vite server. On a hosted page, use an Ollama address your browser can reach.")}
               </p>
               <ConnectionHelp />
             </div>
@@ -683,6 +695,9 @@ function App() {
   const [notice, setNotice] = useState('');
   const [wakeStandby, setWakeStandby] = useState(false);
   const [wakeMessage, setWakeMessage] = useState('');
+  // The standby earner lights up while the mic is hearing the wake phrase coming.
+  const [wakeAlert, setWakeAlert] = useState(false);
+  const wakeAlertTimerRef = useRef(null);
   // Brief wake and post-reply flourishes; busy stages always take visual priority.
   const [mood, setMood] = useState('idle');
   const voices = useSpeechVoices();
@@ -735,6 +750,14 @@ function App() {
     setNotice(message);
     window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(''), 4600);
+  }, []);
+
+  // A short-lived highlight, so a word heard on the way to “hey nova” is visible
+  // even when the wake phrase itself never lands.
+  const flashWakeAlert = useCallback(() => {
+    setWakeAlert(true);
+    window.clearTimeout(wakeAlertTimerRef.current);
+    wakeAlertTimerRef.current = window.setTimeout(() => setWakeAlert(false), 1600);
   }, []);
 
   const dismissRichResponse = useCallback((immediate = false) => {
@@ -814,6 +837,7 @@ function App() {
   useEffect(() => () => {
     window.clearTimeout(moodTimerRef.current);
     window.clearTimeout(noticeTimerRef.current);
+    window.clearTimeout(wakeAlertTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -1330,7 +1354,10 @@ function App() {
     const listener = createVoiceListener({
       Recognition: SpeechRecognition,
       onStandbyChange: setWakeStandby,
-      onSpeechDetected: () => dismissRichResponse(),
+      onSpeechDetected: (mode) => {
+        dismissRichResponse();
+        if (mode === 'standby') flashWakeAlert();
+      },
       onInterrupt: () => interruptRef.current?.(),
       spokenText: () => speakingSourceRef.current?.text || '',
       onUnsupported: () => setWakeMessage(WAKE_UNSUPPORTED_MESSAGE),
@@ -1340,6 +1367,8 @@ function App() {
       onWake: () => {
         dismissRichResponse();
         window.clearTimeout(moodTimerRef.current);
+        window.clearTimeout(wakeAlertTimerRef.current);
+        setWakeAlert(false);
         setMood('wake');
         moodTimerRef.current = window.setTimeout(() => setMood('idle'), 800);
         setNotice('');
@@ -1371,7 +1400,7 @@ function App() {
       listener.dispose();
       voiceListenerRef.current = null;
     };
-  }, [SpeechRecognition, notify, dismissRichResponse]);
+  }, [SpeechRecognition, notify, dismissRichResponse, flashWakeAlert]);
 
   // Standby is automatic on load / after a reply. Never listen to settings edits
   // or a hidden tab; resume when the main view is idle again. While NOVA speaks,
@@ -1542,8 +1571,9 @@ function App() {
 
       <footer className="control-dock">
         {wakeStandby && stage === 'ready' && !settingsOpen && (
-          <div className="wake-indicator" role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
+          <div className={`wake-indicator${wakeAlert ? ' is-alert' : ''}`} role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
             <MicIcon />
+            <span className="wake-hint" aria-hidden="true">{`Listening for “${WAKE_WORD}”...`}</span>
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
