@@ -1,9 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
+import RichResponsePanel from './RichResponsePanel.jsx';
+import BrowsePanel from './BrowsePanel.jsx';
+import {
+  RICH_FADE_MS, RICH_VISIBLE_MS, hasRichResponse, richResponse,
+} from './rich-response.js';
+import {
+  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseRequest, browseUrl, isCloseCommand,
+} from './web-browse.js';
 import { APP_NAME } from './brand.js';
 import {
+  OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT,
+  friendlyOllamaError, ollamaError,
+} from './personality.js';
+import {
+  MEMORY_KEY, describeMemoryFact, forgetFact, memoryPrompt, parseMemoryIntent,
+  readMemoryStore, rememberFact, writeMemoryStore,
+} from './memory.js';
+import {
   TTS,
+  TTS_TEST_TEXT,
   TTS_VOICE_KEY,
+  WAKE_WORD,
+  WAKE_UNSUPPORTED_MESSAGE,
+  createVoiceListener,
+  createWakeChime,
   defaultVoice,
   describeVoice,
   groupVoices,
@@ -12,8 +33,26 @@ import {
   voiceKey,
   voiceOptionLabel,
 } from './speech.js';
+import {
+  DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
+  createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
+} from './kokoro.js';
+import { createSpeechStream, textSpeechStream } from './speech-stream.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
+// Short replies for a fast first word. NOVA calls Ollama's OpenAI-compatible
+// endpoint, which has no `num_predict` field (it would be silently ignored).
+// Ollama maps `max_tokens` onto its native `num_predict` option. Without explicit
+// values that endpoint also defaults temperature and top_p to 1.0.
+const OLLAMA_NUM_PREDICT = 80;
+const OLLAMA_SAMPLING = Object.freeze({ max_tokens: OLLAMA_NUM_PREDICT, temperature: 0.7, top_p: 0.9 });
+
+// Safety net for engines that lose an utterance's end event, never start a queued
+// one, or wedge mid-reply (Chrome's long network-voice bug). Without it NOVA stays
+// "speaking" with the mic disabled. Reads only the public speaking/pending flags,
+// and only where they are real booleans. The ceiling is ~2x a slow speaking pace.
+const SPEECH_CHECK_MS = 1000;
+const speechCeilingMs = (text) => 15000 + Math.ceil((text.length / (14 * TTS.rate)) * 2000);
 
 // Replaced at build time by scripts/build-standalone.mjs. The standalone file is
 // opened from a file:// URL, where there is no origin server, so the Vite proxy
@@ -75,7 +114,7 @@ function endpointWarning(value) {
   const trimmed = (value || '').trim();
   if (!trimmed) return '';
   if (!/^https?:\/\/\S+$/i.test(trimmed)) {
-    return 'Enter a full URL starting with http:// or https://';
+    return "Try a full address starting with http:// or https://.";
   }
   return '';
 }
@@ -85,36 +124,34 @@ function ConnectionHelp() {
   const originsCommand = ollamaOriginsCommand();
   return (
     <details className="field-help">
-      <summary>Can’t connect? Enable CORS on your Ollama server</summary>
+      <summary>Need a hand connecting to Ollama?</summary>
       <div className="field-help-body">
         <p>
-          Ollama only accepts browser requests from a fixed list of origins, so it rejects
-          this page until you allow it. Plain <code>http</code> is not the obstacle: browsers
-          treat <code>http://localhost</code> as a secure origin, so this page may call it
-          directly. A <code>file://</code> copy sends <code>Origin: null</code> instead, which
-          no default entry matches — use the setting below for that.
+          If Ollama won’t connect, we may need to allow this page in its CORS settings.
+          Plain <code>http</code> isn’t the problem: browsers treat <code>http://localhost</code>
+          as a secure origin. A <code>file://</code> copy sends <code>Origin: null</code>,
+          which Ollama doesn’t allow by default. The command below can help.
         </p>
         <ol>
           <li>
-            <span>Restart Ollama allowing this page’s origin.</span>
+            <span>Try restarting Ollama with this command to allow this page:</span>
             <code className="field-help-command">{originsCommand}</code>
           </li>
           <li>
             <span>
               {STANDALONE_BUILD
-                ? 'A single-file copy cannot know its own origin, so it needs the wildcard above.'
-                : `Narrower than the wildcard: the exact value for this page is ${originsCommand.split('=')[1]?.split(' ollama')[0] || 'this page’s origin'}.`}
+                ? "For a single-file copy, use the wildcard above because the file has no fixed origin."
+                : `For this hosted page, we can allow just ${originsCommand.split('=')[1]?.split(' ollama')[0] || 'this page’s origin'} instead of every origin.`}
             </span>
           </li>
           <li>
-            <span>Or, if you cannot restart it, install a CORS-unblocking browser extension.</span>
+            <span>If you can’t restart Ollama, you’ll need a trusted relay that allows this page’s origin.</span>
           </li>
         </ol>
         <p className="field-help-note">
-          Recent Chrome additionally asks for permission before a public site may reach your
-          local network — allow it when prompted. Hosting Ollama behind HTTPS (a reverse proxy
-          or a tunnel such as ngrok or a Cloudflare tunnel) also works and needs no CORS
-          opening, but exposes your machine to anyone holding the URL.
+          Chrome may also ask for local network access; allow it if you’d like this page
+          to connect to your Ollama. An HTTPS relay or tunnel can help too, but make sure
+          it allows this page’s origin and has access controls before sharing its URL.
         </p>
       </div>
     </details>
@@ -145,8 +182,18 @@ function MicIcon({ stopped = false }) {
   );
 }
 
-async function readChatCompletionStream(response) {
-  if (!response.body) throw new Error('Ollama did not return a response stream.');
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Reads the SSE stream. `onDelta` gets each piece of text; `onChunk` runs after
+// each network chunk, so speech can start while the rest is still generating.
+async function readChatCompletionStream(response, { onDelta = () => {}, onChunk = () => {} } = {}) {
+  if (!response.body) throw new Error(OLLAMA_REPLY_ERRORS.noStream);
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -154,6 +201,7 @@ async function readChatCompletionStream(response) {
   let answer = '';
   let readerDone = false;
   let streamDone = false;
+  let finishReason = null;
 
   const consumeLine = (line) => {
     const trimmed = line.trim();
@@ -169,11 +217,12 @@ async function readChatCompletionStream(response) {
     try {
       chunk = JSON.parse(data);
     } catch {
-      throw new Error('Ollama returned an invalid streaming response.');
+      throw new Error(OLLAMA_REPLY_ERRORS.invalidStream);
     }
-    if (chunk.error) throw new Error(chunk.error.message || 'Ollama returned a streaming error.');
+    if (chunk.error) throw ollamaError(chunk.error.message || OLLAMA_REPLY_ERRORS.interrupted);
     const delta = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content;
-    if (typeof delta === 'string') answer += delta;
+    if (typeof delta === 'string') { answer += delta; onDelta(delta); }
+    finishReason = chunk.choices?.[0]?.finish_reason || finishReason;
   };
 
   while (!readerDone && !streamDone) {
@@ -187,13 +236,14 @@ async function readChatCompletionStream(response) {
       buffer = buffer.slice(newline + 1);
       newline = buffer.indexOf('\n');
     }
+    if (!streamDone) onChunk();
   }
 
   if (!streamDone && buffer.trim()) consumeLine(buffer);
   if (streamDone && !readerDone) await reader.cancel().catch(() => {});
   const completeAnswer = answer.trim();
-  if (!completeAnswer) throw new Error('Ollama returned an empty response.');
-  return completeAnswer;
+  if (!completeAnswer) throw new Error(OLLAMA_REPLY_ERRORS.emptyReply);
+  return { answer: completeAnswer, finishReason };
 }
 
 // Web Speech voices load asynchronously: Chrome returns an empty list on the first
@@ -222,7 +272,7 @@ async function fetchOllamaModels(endpoint, signal) {
   const response = await fetch(`${endpoint}/models`, { signal });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error?.message || `Ollama returned ${response.status}.`);
+    throw ollamaError(payload.error?.message, response.status);
   }
   const payload = await response.json();
   return Array.isArray(payload.data) ? payload.data : [];
@@ -235,15 +285,21 @@ function hasOllamaModel(models, model) {
 
 // Exported so scripts/verify-speech.mjs can render the panel and inspect the
 // voice selector it produces.
-export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef }) {
+export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef,
+  memories = [], memoryError = '', onDeleteMemory = () => {}, onClearMemory = () => false,
+  onTestVoice = null, onStopVoiceTest = null, voiceTestPlaying = false, voiceTestDisabled = true, speechAvailable = false,
+  kokoroStatus = { state: 'failed', progress: null } }) {
+  const kokoroActive = kokoroStatus.state !== 'failed';
   const [draft, setDraft] = useState(settings);
   const [testStatus, setTestStatus] = useState('idle');
   const [testMessage, setTestMessage] = useState('');
   const [downloadStatus, setDownloadStatus] = useState('idle');
   const [downloadMessage, setDownloadMessage] = useState('');
+  const [confirmClearMemory, setConfirmClearMemory] = useState(false);
   const modelInputRef = useRef(null);
   const panelRef = useRef(null);
   const testControllerRef = useRef(null);
+  const memoryHeadingRef = useRef(null);
 
   useEffect(() => {
     modelInputRef.current?.focus();
@@ -269,9 +325,10 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
     return () => {
       window.removeEventListener('keydown', handleKey);
       testControllerRef.current?.abort();
+      onStopVoiceTest?.();
       openerRef.current?.focus();
     };
-  }, [onClose, openerRef]);
+  }, [onClose, onStopVoiceTest, openerRef]);
 
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -283,7 +340,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
     const controller = new AbortController();
     testControllerRef.current = controller;
     setTestStatus('checking');
-    setTestMessage('Checking the configured Ollama endpoint…');
+    setTestMessage("Let's see if Ollama is ready...");
     try {
       const models = await fetchOllamaModels(ollamaEndpoint(draft), controller.signal);
       const requestedModel = draft.model.trim() || OLLAMA_MODEL;
@@ -292,13 +349,13 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
       onConnectionChange('connected', hasOllamaModel(models, savedModel));
       setTestStatus(installed ? 'success' : 'warning');
       setTestMessage(installed
-        ? 'Ollama is responding and the selected model is available.'
-        : `Ollama is responding, but “${requestedModel}” is not installed.`);
+        ? "All set! Ollama's ready and your model is available."
+        : `We’re connected! I can’t find “${requestedModel}” yet — try installing it in Ollama.`);
     } catch (error) {
       if (error.name === 'AbortError') return;
       onConnectionChange('offline', false);
       setTestStatus('error');
-      setTestMessage(error.message || 'Could not reach Ollama.');
+      setTestMessage(friendlyOllamaError(error, draft.model.trim() || OLLAMA_MODEL));
     }
   };
 
@@ -307,14 +364,14 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   // verified against the parsed document before it is offered as a download.
   const downloadStandalone = async () => {
     setDownloadStatus('working');
-    setDownloadMessage('Preparing the standalone file…');
+    setDownloadMessage("Getting your copy ready...");
     try {
       const response = await fetch(STANDALONE_PAGE, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`The standalone file returned ${response.status}.`);
+      if (!response.ok) throw new Error("I couldn’t find that download right now.");
       const markup = await response.text();
       const parsed = new DOMParser().parseFromString(markup, 'text/html');
       if (parsed.querySelectorAll('script').length !== 1) {
-        throw new Error('This is not the standalone build. Serve the repository, or download it from the GitHub Pages site.');
+        throw new Error("I couldn’t find the offline copy here. Try downloading nova.html from the GitHub Pages site.");
       }
       const url = URL.createObjectURL(new Blob([markup], { type: 'text/html' }));
       const link = document.createElement('a');
@@ -325,17 +382,17 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 10000);
       setDownloadStatus('success');
-      setDownloadMessage(`Saved ${STANDALONE_FILENAME}. Open it in Chrome, then allow the local network prompt.`);
-    } catch (error) {
+      setDownloadMessage(`Your ${STANDALONE_FILENAME} download is ready. Open it in Chrome and allow local network access if asked.`);
+    } catch {
       setDownloadStatus('error');
-      setDownloadMessage(error.message || 'The standalone file could not be downloaded.');
+      setDownloadMessage("I couldn’t download your offline copy just now. Try again, or get nova.html from the GitHub Pages site.");
     }
   };
 
-  const { english: englishVoices, others: otherVoices } = groupVoices(voices);
-  // Until the user picks one, the dropdown reflects the voice the app would choose.
+  const { natural: naturalVoices, basic: basicVoices } = groupVoices(voices);
+  // An empty key follows the priority list, including voices arriving after load.
   const autoVoice = defaultVoice(voices);
-  const selectedKey = resolveVoice(voices, draft.voiceKey) ? draft.voiceKey : voiceKey(autoVoice);
+  const selectedKey = voiceKey(resolveVoice(voices, draft.voiceKey));
   const selectedVoice = resolveVoice(voices, selectedKey) || autoVoice;
   // A saved voice can vanish if the user uninstalls it; say so rather than silently
   // switching under them.
@@ -343,12 +400,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const savedVoiceMissing = Boolean(draft.voiceKey) && voiceCount > 0 && !resolveVoice(voices, draft.voiceKey);
   const draftModel = draft.model.trim() || OLLAMA_MODEL;
   const connectionLabel = connection === 'checking'
-    ? 'Checking connection…'
+    ? "Let's see if Ollama is ready..."
     : connection === 'offline'
-      ? 'Ollama is offline'
+      ? "Ollama isn't connected yet"
       : modelAvailable === false && draftModel === settings.model
-        ? 'Ollama is online · model not found'
-        : 'Ollama is online';
+        ? "We're connected — let's find your model."
+        : "Ollama's ready!";
 
   return (
     <div className="settings-panel-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -383,7 +440,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   setTestMessage('');
                 }}
               />
-              <p className="field-hint">Used for local responses. Default: {OLLAMA_MODEL}</p>
+              <p className="field-hint">This is the Ollama model I’ll chat with. The default is {OLLAMA_MODEL}.</p>
             </div>
 
             <div className="settings-field">
@@ -407,8 +464,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               <p className={`field-hint ${endpointWarning(draft.ollamaUrl) ? 'field-hint-error' : ''}`} aria-live="polite">
                 {endpointWarning(draft.ollamaUrl)
                   || (standalone
-                    ? 'This standalone copy is opened from a file on your disk, so it calls Ollama directly. Keep the default unless Ollama listens elsewhere.'
-                    : 'Leave blank to use the local Vite proxy. On a hosted page, point this at a backend the browser can reach.')}
+                    ? "Keep the default if Ollama is running on this computer, or enter the address you’d like me to use."
+                    : "Leave this blank when using the local Vite server. On a hosted page, use an Ollama address your browser can reach.")}
               </p>
               <ConnectionHelp />
             </div>
@@ -416,41 +473,77 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             <div className="settings-divider" />
 
             <div className="settings-field">
-              <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice</label>
+              <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice (Kokoro AI)</label>
               <select
                 id="nova-voice"
-                className="settings-select"
-                value={selectedKey}
-                disabled={!voiceCount}
-                onChange={(event) => setDraft((current) => ({ ...current, voiceKey: event.target.value }))}
+                className="settings-select kokoro-voice-select"
+                value={kokoroVoice(draft.kokoroVoice).id}
+                disabled={!kokoroActive}
+                onChange={(event) => {
+                  onStopVoiceTest?.();
+                  setDraft((current) => ({ ...current, kokoroVoice: event.target.value }));
+                }}
               >
-                {!voiceCount && <option value="">No voices available in this browser</option>}
-                {englishVoices.length > 0 && (
-                  <optgroup label="English">
-                    {englishVoices.map((voice) => (
-                      <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
-                    ))}
-                  </optgroup>
-                )}
-                {otherVoices.length > 0 && (
-                  <optgroup label="Other languages">
-                    {otherVoices.map((voice) => (
-                      <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
-                    ))}
-                  </optgroup>
-                )}
+                {KOKORO_VOICES.map((voice) => <option key={voice.id} value={voice.id}>{kokoroVoiceLabel(voice)}</option>)}
               </select>
-              <p className="field-hint" aria-live="polite">
-                {voiceCount
-                  ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} from this ${standalone ? 'device' : 'browser'}, best first. “offline” voices need no connection.`
-                  : 'This browser exposes no speech voices yet. Reopen the panel if the list is still loading.'}
+              <p className={`field-hint kokoro-status ${kokoroActive ? '' : 'field-hint-error'}`}>
+                {kokoroStatus.state === 'ready'
+                  ? "Kokoro is ready. I make speech right here in your browser, so your replies aren’t sent to a speech service."
+                  : kokoroStatus.state === 'loading'
+                    ? `Loading the Kokoro voice model${kokoroStatus.progress == null ? '' : ` (${kokoroStatus.progress}%)`}. The first load downloads about 115 MB; after that your browser usually keeps a copy.`
+                    : "I couldn’t load Kokoro here, so I’m using your browser’s voice instead."}
               </p>
-              <p className={`field-hint ${savedVoiceMissing ? 'field-hint-error' : ''}`}>
-                {savedVoiceMissing && selectedVoice
-                  ? `Your saved voice is no longer installed. Falling back to ${describeVoice(selectedVoice)}.`
-                  : selectedVoice
-                    ? `Speaking with ${describeVoice(selectedVoice)} at rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
-                    : 'Speech runs in your browser — no API key and no network needed.'}
+              {!kokoroActive && <>
+                <label className="field-label" htmlFor="nova-browser-voice">Browser voice (fallback)</label>
+                <select
+                  id="nova-browser-voice"
+                  className="settings-select browser-voice-select"
+                  value={selectedKey}
+                  disabled={!voiceCount}
+                  onChange={(event) => {
+                    onStopVoiceTest?.();
+                    setDraft((current) => ({ ...current, voiceKey: event.target.value }));
+                  }}
+                >
+                  <option value="">{voiceCount ? `Automatic — ${autoVoice?.name || 'browser default'}`
+                    : speechAvailable ? "Voices are still loading — browser default" : "No voices here yet"}</option>
+                  {naturalVoices.length > 0 && (
+                    <optgroup label="Natural / Online">
+                      {naturalVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {basicVoices.length > 0 && (
+                    <optgroup label="Basic system voices">
+                      {basicVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <p className="field-hint" aria-live="polite">
+                  {voiceCount
+                    ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Natural / Online voices are at the top; “network” voices need a connection.`
+                    : speechAvailable ? "Your voices are still loading. We can use the browser default for now."
+                      : "I can’t find a voice to use in this browser."}
+                </p>
+                <p className={`field-hint ${savedVoiceMissing ? 'field-hint-error' : ''}`}>
+                  {savedVoiceMissing && selectedVoice
+                    ? `I can’t find your saved voice here, so I’m using ${describeVoice(selectedVoice)} for now.`
+                    : selectedVoice
+                      ? `Your voice: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
+                      : `Browser default · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
+                </p>
+              </>}
+              <div className="voice-preview">
+                <button className="test-ollama-button test-voice-button" type="button" disabled={voiceTestDisabled || voiceTestPlaying} onClick={() => onTestVoice?.(draft.voiceKey, kokoroVoice(draft.kokoroVoice).id)}>Test Voice</button>
+                {voiceTestPlaying && <button className="text-button voice-test-stop" type="button" onClick={onStopVoiceTest}>Stop test</button>}
+              </div>
+              <p className="field-hint">
+                {!kokoroActive && !speechAvailable ? "I can’t speak aloud in this browser. You can try Chrome or Edge instead."
+                  : voiceTestDisabled && !voiceTestPlaying ? "Let me finish this reply, then we can try a voice."
+                  : `Preview: “${TTS_TEST_TEXT}”`}
               </p>
             </div>
 
@@ -459,7 +552,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             <label className="settings-toggle-row" htmlFor="show-transcript">
               <span className="settings-toggle-copy">
                 <span className="config-title">Show last response</span>
-                <span className="config-detail">Display a transcript below {APP_NAME}</span>
+                <span className="config-detail">Read my last reply below {APP_NAME}</span>
               </span>
               <input
                 id="show-transcript"
@@ -473,6 +566,43 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 
             <div className="settings-divider" />
 
+            <section className="settings-memory" aria-labelledby="memory-title">
+              <div className="settings-test-heading">
+                <h3 ref={memoryHeadingRef} id="memory-title" className="field-label" tabIndex={-1}>Memory</h3>
+                <span className="config-detail">{memoryError && !memories.length ? "Not ready yet" : `${memories.length} saved ${memories.length === 1 ? 'memory' : 'memories'}`}</span>
+              </div>
+              <p className="field-hint">
+                I keep your memories in this browser and share them with your chosen Ollama endpoint when we chat.
+                Memory changes are saved right away, even if you cancel other settings.
+              </p>
+              {memoryError && <p className="field-hint field-hint-error" role="status" aria-live="polite">{memoryError}</p>}
+              {memories.length ? (
+                <ul className="memory-list">
+                  {memories.map((fact) => (
+                    <li key={fact}>
+                      <span>{fact}</span>
+                      <button className="text-button memory-delete" type="button" aria-label={`Delete memory: ${fact}`} onClick={() => { if (onDeleteMemory(fact)) memoryHeadingRef.current?.focus(); }}>Delete</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : !memoryError && (
+                <p className="field-hint">We haven’t saved any memories yet. Tell me something you’d like me to remember.</p>
+              )}
+              {confirmClearMemory && <p className="field-hint" role="status">Would you like to clear all your saved memories? We can’t undo this.</p>}
+              <div className="memory-actions">
+                {confirmClearMemory ? (
+                  <>
+                    <button className="test-ollama-button" type="button" onClick={() => { if (onClearMemory()) { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); } }}>Yes, clear all</button>
+                    <button className="text-button" type="button" onClick={() => { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); }}>Keep memories</button>
+                  </>
+                ) : (
+                  <button className="test-ollama-button" type="button" disabled={!memories.length && !memoryError} onClick={() => setConfirmClearMemory(true)}>Clear all memory</button>
+                )}
+              </div>
+            </section>
+
+            <div className="settings-divider" />
+
             <div className="settings-test">
               <div className="settings-test-heading">
                 <div>
@@ -480,12 +610,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   <span className="config-detail">{connectionLabel}</span>
                 </div>
                 <button className="test-ollama-button" type="button" onClick={testOllama} disabled={testStatus === 'checking'}>
-                  {testStatus === 'checking' ? 'Testing…' : 'Test Ollama'}
+                  {testStatus === 'checking' ? "Checking..." : 'Test Ollama'}
                 </button>
               </div>
               <p className={`test-result test-result-${testStatus}`} role="status" aria-live="polite">
                 <i />
-                {testMessage || 'Ping the local endpoint and check the selected model.'}
+                {testMessage || "Let’s check that Ollama and your chosen model are ready."}
               </p>
             </div>
 
@@ -495,8 +625,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               <span className="field-label">Offline copy <span>OPTIONAL</span></span>
               {standalone ? (
                 <p className="field-hint">
-                  You are already running the standalone file, so it works straight from your disk.
-                  Ollama still has to accept this file’s origin — expand the CORS help above.
+                  You’re already using the single-file copy, so there’s nothing else to download.
+                  If Ollama won’t connect, the connection help above can walk you through its CORS settings.
                 </p>
               ) : (
                 <>
@@ -506,11 +636,11 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                     onClick={downloadStandalone}
                     disabled={downloadStatus === 'working'}
                   >
-                    {downloadStatus === 'working' ? 'Preparing…' : `Download ${STANDALONE_FILENAME}`}
+                    {downloadStatus === 'working' ? "Getting it ready..." : `Download ${STANDALONE_FILENAME}`}
                   </button>
                   <p className={`field-hint ${downloadStatus === 'error' ? 'field-hint-error' : ''}`} role="status" aria-live="polite">
                     {downloadMessage
-                      || 'One self-contained HTML file with no build step. Open it in Chrome and it calls Ollama directly.'}
+                      || "Keep a copy on your computer with no build step. Open it in Chrome to connect to Ollama directly."}
                   </p>
                 </>
               )}
@@ -535,23 +665,67 @@ function App() {
     model: readSetting('nova.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
     ollamaUrl: readSetting('nova.ollama.url', defaultOllamaUrl()),
     voiceKey: readSetting(TTS_VOICE_KEY),
+    kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
   }));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [memoryState, setMemoryState] = useState(readMemoryStore);
   const [lastResponse, setLastResponse] = useState('');
+  const [richContent, setRichContent] = useState(null);
+  const richContentRef = useRef(null);
+  const richVersionRef = useRef(0);
+  const richTimersRef = useRef({ expiry: null, removal: null });
+  const [browse, setBrowse] = useState(null);
+  const browseRef = useRef(null);
+  const browseTimerRef = useRef(null);
+  const richSlotRef = useRef(null);
+  const micButtonRef = useRef(null);
   const [notice, setNotice] = useState('');
-  // A brief celebratory flourish after a reply lands, then back to idle.
+  const [wakeStandby, setWakeStandby] = useState(false);
+  const [wakeMessage, setWakeMessage] = useState('');
+  // Brief wake and post-reply flourishes; busy stages always take visual priority.
   const [mood, setMood] = useState('idle');
   const voices = useSpeechVoices();
+  const [speechVoiceName, setSpeechVoiceName] = useState('');
+  const [voiceTestPlaying, setVoiceTestPlaying] = useState(false);
+  const voiceTestRef = useRef(false);
+  const speechAvailable = typeof window !== 'undefined' && typeof window.speechSynthesis?.speak === 'function'
+    && typeof SpeechSynthesisUtterance === 'function';
+  // Kokoro needs a module worker (inference) and Web Audio (playback); otherwise
+  // the Web Speech fallback is used from the start.
+  const [kokoroStatus, setKokoroStatus] = useState(() => ({
+    state: typeof window !== 'undefined' && typeof window.Worker === 'function' && typeof window.Blob === 'function'
+      && typeof window.URL?.createObjectURL === 'function' && (window.AudioContext || window.webkitAudioContext) ? 'loading' : 'failed',
+    progress: null,
+  }));
+  const kokoroActive = kokoroStatus.state !== 'failed';
+  const kokoroRef = useRef(null);
+  const kokoroAudioRef = useRef(null);
+  const preferredVoice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
+  const kokoroVoiceName = `${kokoroVoice(settings.kokoroVoice).name} · Kokoro AI`;
+  // Warm-up shows as its own tiny indicator; download progress lives in Settings.
+  const activeVoiceName = speechVoiceName || (kokoroActive
+    ? kokoroVoiceName
+    : speechAvailable
+      ? (preferredVoice ? preferredVoice.name || 'Unnamed voice' : 'Browser default')
+      : "Voice isn’t available here");
   const moodTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const settingsTriggerRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const shouldListenRef = useRef(false);
+  const voiceListenerRef = useRef(null);
+  const wakeChimeRef = useRef(null);
+  const speechFinishRef = useRef(null);
+  const speakBrowserRef = useRef(null);
+  // Chrome can garbage-collect a queued utterance and silently drop its events.
+  const utteranceRef = useRef(null);
+  const requestControllerRef = useRef(null);
   const promptRef = useRef(null);
   const speakRef = useRef(null);
+  const interruptRef = useRef(null);
+  const speakingSourceRef = useRef(null); // What NOVA is saying now, to tell her voice from an interrupt.
   const avatarContainerRef = useRef(null);
   const conversationRef = useRef([]);
+  const memoriesRef = useRef(memoryState.facts);
 
   const SpeechRecognition = typeof window !== 'undefined'
     ? (window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -561,6 +735,74 @@ function App() {
     setNotice(message);
     window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setNotice(''), 4600);
+  }, []);
+
+  const dismissRichResponse = useCallback((immediate = false) => {
+    richVersionRef.current += 1; // Invalidates a pending answer's late publication.
+    window.clearTimeout(richTimersRef.current.expiry);
+    const current = richContentRef.current;
+    if (!immediate && current?.closing) return; // Repeated words never extend the fade.
+    window.clearTimeout(richTimersRef.current.removal);
+    if (richSlotRef.current?.contains?.(document.activeElement)) micButtonRef.current?.focus?.();
+    if (immediate || !current) {
+      richContentRef.current = null;
+      setRichContent(null);
+      return;
+    }
+    const closing = { ...current, closing: true };
+    richContentRef.current = closing;
+    setRichContent(closing);
+    richTimersRef.current.removal = window.setTimeout(() => {
+      if (richContentRef.current !== closing) return;
+      richContentRef.current = null;
+      setRichContent(null);
+    }, RICH_FADE_MS);
+  }, []);
+
+  // The browsing panel slides in beside NOVA, and out on "close" or its × button.
+  const openBrowse = useCallback((kind, query) => {
+    window.clearTimeout(browseTimerRef.current);
+    const next = { kind, query, url: browseUrl(kind, query), closing: false };
+    browseRef.current = next;
+    setBrowse(next);
+  }, []);
+  const closeBrowse = useCallback(() => {
+    const current = browseRef.current;
+    if (!current || current.closing) return;
+    const closing = { ...current, closing: true };
+    browseRef.current = closing;
+    setBrowse(closing);
+    browseTimerRef.current = window.setTimeout(() => {
+      if (browseRef.current !== closing) return;
+      browseRef.current = null;
+      setBrowse(null);
+    }, BROWSE_SLIDE_MS);
+  }, []);
+  useEffect(() => () => window.clearTimeout(browseTimerRef.current), []);
+
+  const showRichResponse = useCallback((content, version) => {
+    if (version !== richVersionRef.current || !hasRichResponse(content)) return;
+    window.clearTimeout(richTimersRef.current.expiry);
+    window.clearTimeout(richTimersRef.current.removal);
+    const panel = { content, closing: false };
+    richContentRef.current = panel;
+    setRichContent(panel);
+    richTimersRef.current.expiry = window.setTimeout(() => {
+      if (richContentRef.current === panel) dismissRichResponse();
+    }, RICH_VISIBLE_MS);
+  }, [dismissRichResponse]);
+
+  useEffect(() => () => {
+    richVersionRef.current += 1;
+    richContentRef.current = null;
+    window.clearTimeout(richTimersRef.current.expiry);
+    window.clearTimeout(richTimersRef.current.removal);
+  }, []);
+
+  const stopVoiceTest = useCallback(() => {
+    if (!voiceTestRef.current) return; // Closing settings must never stop a normal reply.
+    speechFinishRef.current?.();
+    window.speechSynthesis?.cancel();
   }, []);
 
   const celebrate = useCallback(() => {
@@ -594,239 +836,655 @@ function App() {
     return () => controller.abort();
   }, [settings.model, settings.ollamaUrl]);
 
+  // Memory is independent of the settings draft. Persist first, then publish it;
+  // never claim a fact was saved/deleted when localStorage rejected the write.
+  const applyMemoryState = useCallback((next, interrupt = true, forceReset = false) => {
+    const changed = JSON.stringify(next.facts) !== JSON.stringify(memoriesRef.current);
+    memoriesRef.current = next.facts;
+    setMemoryState(next);
+    if (!changed && !forceReset) return;
+    conversationRef.current = []; // Removed/replaced facts must not survive in chat history.
+    if (interrupt) {
+      dismissRichResponse(true); // Forgotten facts must not survive in a visual card.
+      requestControllerRef.current?.abort();
+      speechFinishRef.current?.(false);
+      window.speechSynthesis?.cancel();
+      window.clearTimeout(moodTimerRef.current);
+      setMood('idle');
+      setLastResponse('');
+      setStage('ready');
+    }
+  }, [dismissRichResponse]);
+
+  const refreshMemories = useCallback((interrupt = true) => {
+    const next = readMemoryStore();
+    applyMemoryState(next, interrupt);
+    return next;
+  }, [applyMemoryState]);
+
+  const commitMemories = useCallback((facts, interrupt = true) => {
+    const result = writeMemoryStore(facts);
+    applyMemoryState({ facts: result.ok ? facts : memoriesRef.current, error: result.error }, interrupt, result.ok && interrupt);
+    return result;
+  }, [applyMemoryState]);
+
+  useEffect(() => {
+    const sync = (event) => {
+      if (event.key !== MEMORY_KEY && event.key !== null) return;
+      try {
+        if (event.storageArea && event.storageArea !== window.localStorage) return;
+      } catch { /* The safe reader below reports blocked storage. */ }
+      refreshMemories();
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, [refreshMemories]);
+
+  const deleteSavedMemory = useCallback((fact) => {
+    const current = refreshMemories();
+    if (current.error) { notify(current.error); return false; }
+    if (!current.facts.includes(fact)) { notify("That memory is already gone, so there’s nothing more to remove."); return false; }
+    const result = commitMemories(current.facts.filter((saved) => saved !== fact));
+    notify(result.ok ? "All right, I’ve removed that memory." : result.error);
+    return result.ok;
+  }, [refreshMemories, commitMemories, notify]);
+
+  const clearSavedMemories = useCallback(() => {
+    // Explicit confirmation also lets a user reset an unreadable/corrupt store.
+    const result = commitMemories([]);
+    notify(result.ok ? "All right, your saved memories are cleared." : result.error);
+    return result.ok;
+  }, [commitMemories, notify]);
+
   const askAria = useCallback(async (text) => {
     const prompt = text.trim();
     if (!prompt) return;
+    dismissRichResponse();
+    const richVersion = richVersionRef.current;
+    voiceListenerRef.current?.setMode(null);
     setStage('thinking');
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
 
-    const conversation = conversationRef.current.slice(-6);
-    const messages = [
-      {
-        role: 'system',
-        content: `You are ${APP_NAME}, a warm and witty local AI assistant. You run 100% locally on the user's machine. Keep responses under 3 sentences. Be helpful, kind, and efficient.`,
-      },
-      ...conversation,
-      { role: 'user', content: prompt },
-    ];
+    const currentMemory = refreshMemories(false);
+    const intent = parseMemoryIntent(prompt);
+    // With the browsing panel open, "close" / "hide" / "go back" just closes it.
+    const closeRequest = !intent && Boolean(browseRef.current && !browseRef.current.closing) && isCloseCommand(prompt);
+    const browseQuery = intent || closeRequest ? null : browseRequest(prompt);
+    if (browseQuery) openBrowse(browseQuery.kind, browseQuery.query);
 
+    let speech = null;
+    let stream = null;
     try {
-      const result = await fetch(`${ollamaEndpoint(settings)}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true }),
-      });
-      if (!result.ok) {
-        const payload = await result.json().catch(() => ({}));
-        throw new Error(payload.error?.message || `Ollama returned ${result.status}.`);
+      if (closeRequest) {
+        closeBrowse();
+        setStage('ready');
+        // The stage ends where it started ("ready"), so the mode effect won't re-run: resume here.
+        voiceListenerRef.current?.setMode(document.hidden ? null : 'standby');
+        return;
       }
-
-      const answer = await readChatCompletionStream(result);
+      let answer;
+      if (intent) {
+        // Memory commands run locally, so listing/saving/forgetting still works
+        // with Ollama offline and never relies on a model's claimed memory.
+        if (currentMemory.error) answer = currentMemory.error;
+        else if (intent.type === 'list') {
+          answer = currentMemory.facts.length
+            ? `Here’s what I remember about you: ${currentMemory.facts.map(describeMemoryFact).join('; ')}.`
+            : "We haven’t saved any memories yet. What would you like me to remember?";
+        } else if (intent.type === 'remember') {
+          const result = rememberFact(currentMemory.facts, intent.fact);
+          if (result.status === 'error') answer = result.error;
+          else if (result.status === 'unchanged') answer = `I’ve got that in mind already: ${describeMemoryFact(intent.fact)}.`;
+          else {
+            const saved = commitMemories(result.facts, false);
+            answer = saved.ok
+              ? `Got it! ${result.status === 'updated' ? 'I’ll remember the update' : 'I’ll keep that in mind'}: ${describeMemoryFact(result.fact)}.`
+              : saved.error;
+          }
+        } else if (intent.type === 'forget') {
+          const result = forgetFact(currentMemory.facts, intent.query);
+          if (result.status === 'error') answer = result.error;
+          else if (result.status === 'missing') answer = `I couldn’t find a saved memory about “${result.query}”. We can take a look together in Settings.`;
+          else if (result.status === 'ambiguous') answer = `I found a few memories about “${result.query}”. Which one would you like me to forget?`;
+          else {
+            const saved = commitMemories(result.facts, false);
+            answer = saved.ok ? "All right, I’ve removed that from your saved memories." : saved.error;
+          }
+        }
+      }
+      if (browseQuery) {
+        answer = BROWSE_FOUND_TEXT;
+        conversationRef.current = [
+          ...conversationRef.current,
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: answer },
+        ].slice(-6);
+      } else if (!intent) {
+        const conversation = conversationRef.current.slice(-6);
+        const messages = [
+          {
+            role: 'system',
+            content: `${SYSTEM_PROMPT}\n\n${memoryPrompt(currentMemory.facts)}`,
+          },
+          ...conversation,
+          { role: 'user', content: prompt },
+        ];
+        const result = await fetch(`${ollamaEndpoint(settings)}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true, ...OLLAMA_SAMPLING }),
+        });
+        if (!result.ok) {
+          const payload = await result.json().catch(() => ({}));
+          throw ollamaError(payload.error?.message, result.status);
+        }
+        // Speak the first complete sentence while the rest is still generating.
+        const replyStream = createSpeechStream();
+        stream = replyStream;
+        const startSpeaking = () => {
+          if (!speech && replyStream.pending && !controller.signal.aborted) speech = speakRef.current?.(replyStream) ?? null;
+        };
+        const reply = await readChatCompletionStream(result, {
+          onDelta: (delta) => replyStream.push(delta),
+          onChunk: () => { replyStream.flush(); startSpeaking(); },
+        });
+        if (controller.signal.aborted) { replyStream.cancel(); return; }
+        // At the token limit the last sentence is unfinished: it isn't spoken or kept.
+        replyStream.end({ cutOff: reply.finishReason === 'length' });
+        answer = replyStream.text || reply.answer;
+        startSpeaking();
+        conversationRef.current = [
+          ...conversation,
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: answer },
+        ].slice(-6);
+      }
+      if (controller.signal.aborted) return;
       setLastResponse(answer);
-      conversationRef.current = [
-        ...conversation,
-        { role: 'user', content: prompt },
-        { role: 'assistant', content: answer },
-      ].slice(-6);
-      await speakRef.current?.(answer);
-      celebrate();
+      // A stream with nothing speakable still finishes through the speaker (as "completed").
+      const speechCompleted = await (stream ? (speech ?? speakRef.current?.(stream)) : speakRef.current?.(answer));
+      if (!controller.signal.aborted) {
+        celebrate();
+        if (speechCompleted) showRichResponse(richResponse(answer), richVersion);
+      }
     } catch (error) {
+      // A reply that fails or is canceled mid-stream stops speaking right away.
+      if (stream && !stream.ended) stream.cancel();
+      if (controller.signal.aborted) return;
+      dismissRichResponse(true);
       try {
-        const models = await fetchOllamaModels(ollamaEndpoint(settings));
+        const models = await fetchOllamaModels(ollamaEndpoint(settings), controller.signal);
         setConnection('connected');
         setModelAvailable(hasOllamaModel(models, settings.model || OLLAMA_MODEL));
       } catch {
+        if (controller.signal.aborted) return;
         setConnection('offline');
         setModelAvailable(false);
       }
       setStage('ready');
-      const detail = error.message === 'Failed to fetch'
-        ? `I could not reach Ollama at ${(settings.ollamaUrl || '').trim() || 'localhost:11434'}. Check that it is running and that its CORS settings accept this page — open Settings for the exact command.`
-        : `I couldn't get a response from Ollama. ${error.message}`;
-      notify(detail);
+      notify(friendlyOllamaError(error, settings.model || OLLAMA_MODEL));
+    } finally {
+      if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
-  }, [notify, settings, celebrate]);
+  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse, openBrowse, closeBrowse]);
 
-  // Voice output is the browser's own speech synthesis: no key, no network.
-  const speakAnswer = useCallback(async (text) => {
-    const finish = () => setStage('ready');
-
-    if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-      finish();
-      notify('This browser has no speech synthesis, so replies will stay silent.');
-      return;
+  // Resolve only when speech ends, not when it is queued. Otherwise standby
+  // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
+  // A streamed reply is spoken as it arrives: each utterance takes everything that
+  // is ready, and the next one starts when it ends. Stage stays "speaking" between them.
+  const speakBrowser = useCallback((input, selectedVoiceKey, preview) => {
+    const source = typeof input === 'string' ? textSpeechStream(input) : input;
+    if (typeof window.speechSynthesis?.speak !== 'function' || typeof SpeechSynthesisUtterance !== 'function') {
+      source.detach();
+      setStage('ready');
+      notify("I can’t speak aloud in this browser. Turn on Show last response in Settings to read my replies, or try Chrome or Edge.");
+      return Promise.resolve(true); // Silent browsers can still use the visual reply.
     }
 
+    voiceListenerRef.current?.setMode(null);
+    speechFinishRef.current?.(false);
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const avatarElement = avatarContainerRef.current;
-    let speechPulseTimer;
+    return new Promise((resolve) => {
+      const synth = window.speechSynthesis;
+      const avatarElement = avatarContainerRef.current;
+      const voice = resolveVoice(voices, selectedVoiceKey) || defaultVoice(voices);
+      let speechPulseTimer;
+      let watchdogTimer;
+      let current = null;
+      let first = true;
+      let finished = false;
 
-    // Fall back to the best voice on the machine until the user chooses one.
-    const voice = resolveVoice(voices, settings.voiceKey) || defaultVoice(voices);
-    if (voice) {
-      utterance.voice = voice;
-      if (voice.lang) utterance.lang = voice.lang;
+      const clearPulse = () => {
+        window.clearTimeout(speechPulseTimer);
+        avatarElement?.classList.remove('speech-boundary-active');
+        avatarElement?.style.removeProperty('--audio-pulse');
+      };
+      const finishSpeech = (resume = true, completed = false) => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(watchdogTimer);
+        clearPulse();
+        source.detach();
+        if (current && utteranceRef.current === current) utteranceRef.current = null;
+        if (speechFinishRef.current === finishSpeech) {
+          speechFinishRef.current = null;
+          voiceTestRef.current = false;
+          setVoiceTestPlaying(false);
+          setSpeechVoiceName('');
+        }
+        if (resume) setStage('ready');
+        resolve(completed);
+      };
+
+      const speakNext = () => {
+        if (finished) return;
+        const text = source.poll();
+        if (text === undefined) { // The model is still writing the next sentence.
+          source.wait().then(speakNext);
+          return;
+        }
+        if (text === null) { finishSpeech(true, true); return; }
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        if (voice) {
+          utterance.voice = voice;
+          if (voice.lang) utterance.lang = voice.lang;
+        }
+        utterance.rate = TTS.rate;
+        utterance.pitch = TTS.pitch;
+        utterance.volume = TTS.volume;
+        current = utterance;
+        const live = () => !finished && current === utterance;
+        const next = () => {
+          window.clearTimeout(watchdogTimer);
+          clearPulse();
+          speakNext();
+        };
+        let started = false;
+        utterance.onstart = () => { if (live()) { started = true; setStage('speaking'); } };
+        // No word events: neutral eye light/scale, with the CSS speaking bounce intact.
+        utterance.onboundary = (event) => {
+          if (!live() || (event.name && event.name !== 'word') || !avatarElement) return;
+          avatarElement.classList.add('speech-boundary-active');
+          const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
+          avatarElement.style.setProperty('--audio-pulse', Math.min(1, 0.65 + wordLength * 0.035).toFixed(3));
+          window.clearTimeout(speechPulseTimer);
+          speechPulseTimer = window.setTimeout(() => {
+            avatarElement.style.setProperty('--audio-pulse', '0');
+          }, 125);
+        };
+        utterance.onend = () => { if (live()) next(); };
+        utterance.onerror = () => {
+          if (!live()) return;
+          finishSpeech();
+          if (preview) notify("I couldn’t play that voice just now. Check your connection, or try another voice.");
+        };
+        // The stuck-speech watchdog runs per utterance, so a pause while the model
+        // writes the next sentence is never mistaken for a lost end event.
+        const ceiling = speechCeilingMs(text);
+        let heard = false;
+        let quiet = 0;
+        let elapsed = 0;
+        const giveUp = (completed) => {
+          finishSpeech(true, completed);
+          synth.cancel(); // Purge a wedged/stale queue; late events are ignored.
+        };
+        const watch = () => {
+          watchdogTimer = window.setTimeout(() => {
+            if (!live()) return;
+            elapsed += SPEECH_CHECK_MS;
+            if (synth.speaking === true) heard = true;
+            quiet = synth.speaking || synth.pending ? 0 : quiet + 1;
+            if (heard && quiet >= 2) { // Spoke, but its end event was lost.
+              if (source.ended && !source.pending) return giveUp(true);
+              synth.cancel();
+              return next();
+            }
+            if (started && !heard) return; // Flags aren't reliable here; trust the events.
+            if (elapsed < ceiling && (heard || quiet < 10)) return watch();
+            giveUp(heard); // Wedged mid-reply, or a queued utterance that never started.
+            if (!heard) notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
+          }, SPEECH_CHECK_MS);
+        };
+        utteranceRef.current = utterance;
+        if (first) {
+          first = false;
+          // Publish only once speech is configured, and freeze the actual utterance's
+          // name even if voiceschanged updates the automatic pick while it is queued.
+          setSpeechVoiceName(voice ? voice.name || 'Unnamed voice' : 'Browser default');
+          setStage('speaking'); // Also covers an engine's queue before onstart.
+        }
+        try {
+          synth.speak(utterance);
+          if (live() && typeof synth.speaking === 'boolean') watch();
+        } catch {
+          finishSpeech();
+          notify("I couldn’t start speaking just now. Try again, or choose another voice in Settings.");
+        }
+      };
+
+      speechFinishRef.current = finishSpeech;
+      source.onCancel = () => { finishSpeech(false); synth.cancel(); };
+      voiceTestRef.current = preview;
+      setVoiceTestPlaying(preview);
+      speakNext();
+    });
+  }, [notify, voices]);
+
+  // One reply through Kokoro: generation shows as "thinking"; "speaking" starts
+  // with real audio. The eye pulse follows the audio's loudness on the AudioContext
+  // clock and clears the moment playback ends or is canceled.
+  const speakKokoro = useCallback((source, engine, audio, kokoroVoiceId, selectedVoiceKey, preview) => {
+    voiceListenerRef.current?.setMode(null);
+    speechFinishRef.current?.(false);
+    window.speechSynthesis?.cancel();
+    return new Promise((resolve) => {
+      const voice = kokoroVoice(kokoroVoiceId);
+      const avatarElement = avatarContainerRef.current;
+      let finished = false;
+      let session = null;
+      const release = () => {
+        avatarElement?.classList.remove('speech-boundary-active');
+        avatarElement?.style.removeProperty('--audio-pulse');
+        if (speechFinishRef.current === finishSpeech) {
+          speechFinishRef.current = null;
+          voiceTestRef.current = false;
+          setVoiceTestPlaying(false);
+          setSpeechVoiceName('');
+        }
+      };
+      const finishSpeech = (resume = true, completed = false) => {
+        if (finished) return;
+        finished = true;
+        session?.stop();
+        release();
+        if (resume) setStage('ready');
+        resolve(completed);
+      };
+      speechFinishRef.current = finishSpeech;
+      setSpeechVoiceName(`${voice.name} · Kokoro AI`);
+      voiceTestRef.current = preview;
+      setVoiceTestPlaying(preview);
+      setStage('thinking');
+      session = speakWithKokoro({
+        engine, getContext: audio.get, source, voice: voice.id, timers: window,
+        onWaiting: () => notify("My Kokoro voice is still loading. I’ll speak as soon as it’s ready."),
+        onBlocked: () => notify("Tap anywhere or press a key so I can talk out loud."),
+        onStart: () => { if (!finished) setStage('speaking'); },
+        onPulse: (level) => {
+          if (finished || !avatarElement) return;
+          if (level === null) {
+            avatarElement.classList.remove('speech-boundary-active');
+            avatarElement.style.removeProperty('--audio-pulse');
+          } else {
+            avatarElement.classList.add('speech-boundary-active');
+            avatarElement.style.setProperty('--audio-pulse', level.toFixed(3));
+          }
+        },
+      });
+      source.onCancel = () => finishSpeech(false);
+      session.done.then((result) => {
+        if (finished) return;
+        if (result.status === 'failed') {
+          // Hand the unplayed text to the Web Speech fallback, so nothing is lost.
+          finished = true;
+          release();
+          if (result.reason !== 'load') notify("My Kokoro voice hit a snag, so I’ll use the browser voice for the rest of this reply.");
+          source.unshift(result.remaining); // The rest of a streamed reply follows it.
+          speakBrowserRef.current(source, selectedVoiceKey, preview).then(resolve);
+          return;
+        }
+        if (result.status === 'blocked') notify("I couldn’t play audio without a tap first. Turn on Show last response in Settings to read my replies.");
+        // Blocked audio still gets the visual reply, like a silent browser.
+        finishSpeech(true, result.status !== 'stopped');
+      });
+    });
+  }, [notify]);
+
+  speakBrowserRef.current = speakBrowser;
+
+  // Kokoro is the voice. Web Speech is the fallback when Kokoro couldn't load, and
+  // for any reply whose first sentence arrives while Kokoro is still warming up
+  // (the next reply uses Kokoro once it's ready). A voice test waits for Kokoro,
+  // because it is testing that voice. Also used for the rest of one reply if
+  // Kokoro fails mid-reply. `input` is text or a speech stream.
+  const speakAnswer = useCallback((input, selectedVoiceKey = settings.voiceKey, preview = false, kokoroVoiceId = settings.kokoroVoice) => {
+    const source = typeof input === 'string' ? textSpeechStream(input) : input;
+    speakingSourceRef.current = source;
+    const engine = kokoroRef.current;
+    const audio = kokoroAudioRef.current;
+    const browserVoice = typeof window.speechSynthesis?.speak === 'function' && typeof SpeechSynthesisUtterance === 'function';
+    if (engine && audio && (engine.state === 'ready' || (engine.state === 'loading' && (preview || !browserVoice)))) {
+      return speakKokoro(source, engine, audio, kokoroVoiceId, selectedVoiceKey, preview);
     }
-    utterance.rate = TTS.rate;
-    utterance.pitch = TTS.pitch;
-    utterance.volume = TTS.volume;
-
-    const finishSpeech = () => {
-      window.clearTimeout(speechPulseTimer);
-      avatarElement?.classList.remove('speech-boundary-active');
-      avatarElement?.style.removeProperty('--audio-pulse');
-      finish();
-    };
-
-    utterance.onstart = () => setStage('speaking');
-    // Word boundaries are the only live signal a local voice gives us, so the eyes
-    // and body pulse off them. Engines that never fire it simply stay steady.
-    utterance.onboundary = (event) => {
-      if (event.name && event.name !== 'word') return;
-      if (!avatarElement) return;
-      avatarElement.classList.add('speech-boundary-active');
-      const wordLength = Math.max(1, Math.min(event.charLength || 1, 10));
-      avatarElement.style.setProperty('--audio-pulse', (0.58 + wordLength * 0.035).toFixed(3));
-      window.clearTimeout(speechPulseTimer);
-      speechPulseTimer = window.setTimeout(() => {
-        avatarElement.style.setProperty('--audio-pulse', '.16');
-      }, 125);
-    };
-    utterance.onend = finishSpeech;
-    utterance.onerror = finishSpeech;
-
-    window.speechSynthesis.speak(utterance);
-  }, [notify, settings, voices]);
+    return speakBrowser(source, selectedVoiceKey, preview);
+  }, [settings, speakKokoro, speakBrowser]);
 
   // Both refs are refreshed on every render, so callbacks that outlive a render still
   // reach the current speaker and the current request handler.
   speakRef.current = speakAnswer;
+
+  const testVoice = useCallback((key, kokoroVoiceId) => {
+    if (!settingsOpen || stage === 'thinking' || stage === 'speaking' || requestControllerRef.current || speechFinishRef.current) return;
+    window.clearTimeout(moodTimerRef.current);
+    setMood('idle');
+    void speakRef.current?.(TTS_TEST_TEXT, key, true, kokoroVoiceId)?.catch(() => {
+      stopVoiceTest();
+      setStage('ready');
+      notify("I couldn’t start that voice preview. Try another voice in Settings.");
+    });
+  }, [notify, settingsOpen, stage, stopVoiceTest]);
 
   // Keep the recognizer's event handler pointed at the latest assistant request.
   promptRef.current = (text) => {
     askAria(text).then(() => {});
   };
 
+  // Start loading Kokoro on app load. A failed load (blocked CDN, no WebAssembly,
+  // download stall, worker crash) switches every reply to the Web Speech fallback.
   useEffect(() => {
-    if (!SpeechRecognition) return undefined;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-    recognition.onresult = (event) => {
-      let finalText = '';
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        if (event.results[index].isFinal) finalText += event.results[index][0]?.transcript || '';
-      }
-      if (finalText.trim()) {
-        shouldListenRef.current = false;
-        recognition.stop();
-        promptRef.current?.(finalText.trim());
-      }
-    };
-    recognition.onerror = (event) => {
-      shouldListenRef.current = false;
-      if (event.error !== 'aborted') {
-        setStage('ready');
-        const reason = event.error === 'not-allowed'
-          ? 'Microphone access is blocked. Allow it in your browser settings and try again.'
-          : event.error === 'no-speech'
-            ? 'I did not hear anything. Tap the microphone and try again.'
-            : `Speech recognition stopped: ${event.error}.`;
-        notify(reason);
-      }
-    };
-    recognition.onend = () => {
-      if (shouldListenRef.current) {
-        shouldListenRef.current = false;
-        setStage('ready');
-      }
-    };
-    recognitionRef.current = recognition;
+    if (kokoroStatus.state === 'failed') return undefined;
+    const audio = createKokoroAudio(window.AudioContext || window.webkitAudioContext);
+    const engine = createKokoroEngine({
+      createWorker: () => browserKokoroWorker(window),
+      timers: window,
+      voice: settings.kokoroVoice, // Warmed up with the saved voice.
+      onStatus: (status) => {
+        setKokoroStatus(status);
+        if (status.state === 'failed') notify("I couldn’t load my Kokoro voice, so I’ll use your browser’s voice for now.");
+      },
+    });
+    kokoroAudioRef.current = audio;
+    kokoroRef.current = engine;
+    const unlock = () => { if (engine.state !== 'failed') audio.unlock(); };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
     return () => {
-      shouldListenRef.current = false;
-      try {
-        recognition.stop();
-      } catch {
-        // It may already be idle when the component unmounts.
-      }
-      recognitionRef.current = null;
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      speechFinishRef.current?.(false);
+      engine.dispose();
+      audio.dispose();
+      kokoroRef.current = kokoroAudioRef.current = null;
     };
-  }, [SpeechRecognition, notify]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- load once per mount
+
+  useEffect(() => {
+    const chime = createWakeChime(window.AudioContext || window.webkitAudioContext);
+    wakeChimeRef.current = chime;
+    const unlock = () => { void chime.unlock(); };
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      chime.dispose();
+      wakeChimeRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const listener = createVoiceListener({
+      Recognition: SpeechRecognition,
+      onStandbyChange: setWakeStandby,
+      onSpeechDetected: () => dismissRichResponse(),
+      onInterrupt: () => interruptRef.current?.(),
+      spokenText: () => speakingSourceRef.current?.text || '',
+      onUnsupported: () => setWakeMessage(WAKE_UNSUPPORTED_MESSAGE),
+      onInputStart: () => {
+        if (listener.wakeSupported) setWakeMessage('');
+      },
+      onWake: () => {
+        dismissRichResponse();
+        window.clearTimeout(moodTimerRef.current);
+        setMood('wake');
+        moodTimerRef.current = window.setTimeout(() => setMood('idle'), 800);
+        setNotice('');
+        setStage('listening');
+        void wakeChimeRef.current?.play();
+      },
+      onQuestion: (text) => promptRef.current?.(text),
+      onInputEnd: (reason) => {
+        setStage('ready');
+        if (reason === 'no-speech') notify("I didn’t catch a question. Say “hey nova” or tap the mic when you’re ready to try again.");
+      },
+      onError: (error, mode) => {
+        if (error === 'not-allowed' || error === 'service-not-allowed') {
+          setWakeMessage("I need microphone permission to hear you. Allow it in your browser, then tap the mic button.");
+        } else if (mode === 'standby') {
+          setWakeMessage("I’m having trouble listening right now. Tap the mic button when you’re ready to try again.");
+        }
+        if (mode === 'question') {
+          notify(error === 'not-allowed' || error === 'service-not-allowed'
+            ? "I need microphone permission to hear you. Allow it in your browser settings, then we can try again."
+            : error === 'no-speech'
+              ? "I didn’t catch that. Tap the mic and give it another try when you’re ready."
+              : "I had trouble hearing you just now. Tap the mic to try again.");
+        }
+      },
+    });
+    voiceListenerRef.current = listener;
+    return () => {
+      listener.dispose();
+      voiceListenerRef.current = null;
+    };
+  }, [SpeechRecognition, notify, dismissRichResponse]);
+
+  // Standby is automatic on load / after a reply. Never listen to settings edits
+  // or a hidden tab; resume when the main view is idle again. While NOVA speaks,
+  // listen only for "stop", "wait" or "hey nova" (not during a voice test).
+  // speechVoiceName changes when a reply switches to the fallback voice, whose
+  // start pauses the listener, so the interrupt mode is restored then too.
+  useEffect(() => {
+    const updateMode = () => {
+      const mode = settingsOpen || document.hidden || stage === 'thinking'
+        ? null
+        : stage === 'speaking' ? (voiceTestPlaying ? null : 'interrupt')
+          : stage === 'listening' ? 'question' : 'standby';
+      voiceListenerRef.current?.setMode(mode);
+    };
+    updateMode();
+    document.addEventListener('visibilitychange', updateMode);
+    return () => document.removeEventListener('visibilitychange', updateMode);
+  }, [settingsOpen, stage, SpeechRecognition, voiceTestPlaying, speechVoiceName]);
 
   useEffect(() => () => {
-    window.clearTimeout(noticeTimerRef.current);
-    window.clearTimeout(moodTimerRef.current);
+    requestControllerRef.current?.abort();
+    speechFinishRef.current?.(false);
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }, []);
 
+  // Stop talking at once (mic button, Space, or "stop" / "wait" / "hey nova") and
+  // just listen. Aborting the request ends the reply; canceling its stream stops
+  // Kokoro's Web Audio sources and queued chunks, or Web Speech, right away.
+  const interruptSpeech = () => {
+    requestControllerRef.current?.abort();
+    speakingSourceRef.current?.cancel();
+    speakingSourceRef.current = null;
+    speechFinishRef.current?.(false);
+    window.speechSynthesis?.cancel();
+    dismissRichResponse();
+    window.clearTimeout(moodTimerRef.current);
+    setMood('idle');
+    setStage('listening');
+    voiceListenerRef.current?.setMode('question', { quiet: true });
+  };
+  interruptRef.current = interruptSpeech;
+  const canInterrupt = stage === 'speaking' && !voiceTestPlaying;
+
   const toggleListening = () => {
+    if (stage === 'speaking') {
+      if (canInterrupt) interruptSpeech();
+      return;
+    }
     if (stage === 'listening') {
-      shouldListenRef.current = false;
-      recognitionRef.current?.stop();
+      voiceListenerRef.current?.setMode(null);
       setStage('ready');
       return;
     }
     if (stage !== 'ready') return;
-    if (!recognitionRef.current) {
-      notify('Speech recognition is not supported in this browser. Try a recent version of Chrome or Edge.');
+    dismissRichResponse();
+    if (!voiceListenerRef.current?.available) {
+      notify("I can’t use the microphone in this browser. Try a recent version of Chrome or Edge so we can talk.");
       return;
     }
     window.speechSynthesis?.cancel();
+    window.clearTimeout(moodTimerRef.current);
+    setMood('idle');
     setNotice('');
-    shouldListenRef.current = true;
-    try {
-      recognitionRef.current.start();
-      setStage('listening');
-    } catch {
-      shouldListenRef.current = false;
-      notify('The microphone could not start. Please try again.');
-    }
+    setStage('listening');
+    voiceListenerRef.current.setMode('question');
   };
 
   useEffect(() => {
     const handleShortcut = (event) => {
       if ((event.code !== 'Space' && event.key !== ' ') || settingsOpen) return;
       const target = event.target;
-      if (target?.isContentEditable || target?.closest?.('button, input, textarea, select')) return;
-      if (stage !== 'ready' && stage !== 'listening') return;
+      if (target?.isContentEditable || target?.closest?.('button, input, textarea, select, a, .rich-content-panel')) return;
+      if (stage !== 'ready' && stage !== 'listening' && !canInterrupt) return;
       event.preventDefault();
       if (!event.repeat) toggleListening();
     };
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
-  }, [settingsOpen, stage]);
+  }, [settingsOpen, stage, dismissRichResponse, canInterrupt]);
 
-  const statusText = {
-    ready: `${APP_NAME} READY`,
-    listening: `${APP_NAME} LISTENING`,
-    thinking: `${APP_NAME} THINKING`,
-    speaking: `${APP_NAME} SPEAKING`,
-  }[stage];
+  const statusText = stage === 'ready' && connection === 'checking'
+    ? STATUS_TEXT.starting : STATUS_TEXT[stage];
+
+  const avatarActivity = { listening: 'is-listening', thinking: 'is-thinking', speaking: 'is-speaking' }[stage] || '';
+  const avatarMood = stage === 'ready'
+    ? (connection === 'offline' ? 'is-offline' : mood === 'happy' ? 'is-happy' : '')
+    : stage === 'listening' && mood === 'wake' ? 'is-waking' : '';
 
   const saveSettings = (nextSettings) => {
     const updatedSettings = {
       model: nextSettings.model.trim() || OLLAMA_MODEL,
       ollamaUrl: trimTrailingSlashes(nextSettings.ollamaUrl || ''),
       voiceKey: (nextSettings.voiceKey || '').trim(),
+      kokoroVoice: kokoroVoice(nextSettings.kokoroVoice).id,
       showTranscript: Boolean(nextSettings.showTranscript),
     };
     try {
       window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
       window.localStorage.setItem('nova.ollama.url', updatedSettings.ollamaUrl);
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
+      window.localStorage.setItem(KOKORO_VOICE_KEY, updatedSettings.kokoroVoice);
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
-      notify('Settings could not be saved in this browser.');
+      notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
       return;
     }
+    stopVoiceTest();
     setSettings(updatedSettings);
     setSettingsOpen(false);
-    notify('Settings saved.');
+    notify("All set! Your settings are saved.");
   };
 
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => { stopVoiceTest(); setSettingsOpen(false); }, [stopVoiceTest]);
   const updateConnectionStatus = useCallback((nextConnection, nextModelAvailable) => {
     setConnection(nextConnection);
     setModelAvailable(nextModelAvailable);
@@ -834,11 +1492,13 @@ function App() {
 
 
 
+  const showRichPanel = Boolean(richContent && !settingsOpen);
+
   return (
-    <div className={`app-shell stage-${stage}`}>
+    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''}`}>
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
-        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}>
+        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
           <SettingsIcon />
         </button>
       </header>
@@ -847,7 +1507,7 @@ function App() {
         <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
           <div
             ref={avatarContainerRef}
-            className={`avatar-container ${stage === 'listening' ? 'is-listening' : ''} ${stage === 'speaking' ? 'is-speaking' : ''} ${stage === 'thinking' ? 'is-thinking' : ''} ${mood === 'happy' && connection !== 'offline' ? 'is-happy' : ''} ${connection === 'offline' ? 'is-offline' : ''}`}
+            className={`avatar-container ${avatarActivity} ${avatarMood}`}
           >
             <div className="avatar-backlight" />
             <div className="listen-ring" aria-hidden="true" />
@@ -856,45 +1516,72 @@ function App() {
               <RobotAvatar />
             </div>
           </div>
+          <p className="active-voice-label" title={activeVoiceName} aria-label={`Active voice: ${activeVoiceName}`} aria-live="polite" aria-atomic="true">{activeVoiceName}</p>
+          {/* Kokoro loads once per page, so this only appears while the page first warms up. */}
+          {kokoroStatus.state === 'loading' && <p className="kokoro-warmup" role="status">warming up...</p>}
           {connection === 'offline' && (
             <div className="avatar-offline-display" role="status" aria-live="polite">
-              <span>{APP_NAME} OFFLINE —</span>
-              <span>{(settings.ollamaUrl || '').trim() ? 'Check your Ollama endpoint' : 'Start Ollama to connect'}</span>
+              <span>{OLLAMA_UNREACHABLE}</span>
+              <span>Open Settings if you’d like a hand connecting.</span>
             </div>
           )}
-          <h1 className="tagline">Your voice, your world.</h1>
+          <h1 className="tagline">What’s on your mind?</h1>
           <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
           {settings.showTranscript && lastResponse && (
-            <div className="response-transcript" role="region" aria-label="Last response transcript" aria-live="polite">
-              <span>LAST RESPONSE</span>
+            <div className="response-transcript" role="region" aria-label="My last reply" aria-live="polite">
+              <span>My last reply</span>
               <p>{lastResponse}</p>
             </div>
           )}
         </section>
       </main>
 
+      {showRichPanel && <div className="rich-content-slot" ref={richSlotRef}>
+        <RichResponsePanel content={richContent.content} closing={richContent.closing} onClose={() => dismissRichResponse()} />
+      </div>}
+
       <footer className="control-dock">
+        {wakeStandby && stage === 'ready' && !settingsOpen && (
+          <div className="wake-indicator" role="status" aria-label={`I’m listening for “${WAKE_WORD}”`} title={`Say “${WAKE_WORD}” whenever you’re ready`}>
+            <MicIcon />
+          </div>
+        )}
+        {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
         <div className="mic-control-wrap">
           <div className={`mic-halo ${stage === 'listening' ? 'mic-halo-active' : ''}`} />
           <button
-            className={`mic-button ${stage === 'listening' ? 'mic-button-active' : ''}`}
+            ref={micButtonRef}
+            className={`mic-button ${stage === 'listening' ? 'mic-button-active' : ''}${canInterrupt ? ' mic-button-stop' : ''}`}
             type="button"
             onClick={toggleListening}
-            disabled={stage === 'thinking' || stage === 'speaking'}
-            aria-label={stage === 'listening' ? 'Stop listening' : 'Start listening'}
+            disabled={stage === 'thinking' || (stage === 'speaking' && !canInterrupt)}
+            aria-label={canInterrupt ? 'Stop speaking' : stage === 'listening' ? 'Stop listening' : 'Start listening'}
+            title={canInterrupt ? 'Stop speaking (or say “stop”)' : undefined}
             aria-keyshortcuts="Space"
           >
-            <MicIcon stopped={stage === 'listening'} />
+            {canInterrupt ? <StopIcon /> : <MicIcon stopped={stage === 'listening'} />}
             <span className="mic-button-sheen" />
           </button>
         </div>
       </footer>
+
+      {browse && <BrowsePanel browse={browse} onClose={closeBrowse} />}
 
       {notice && <div className="toast" role="status"><span className="toast-mark">!</span><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
       {settingsOpen && (
         <SettingsPanel
           settings={settings}
           voices={voices}
+          speechAvailable={speechAvailable}
+          voiceTestPlaying={voiceTestPlaying}
+          voiceTestDisabled={!(kokoroActive || speechAvailable) || stage === 'thinking' || stage === 'speaking'}
+          kokoroStatus={kokoroStatus}
+          onTestVoice={testVoice}
+          onStopVoiceTest={stopVoiceTest}
+          memories={memoryState.facts}
+          memoryError={memoryState.error}
+          onDeleteMemory={deleteSavedMemory}
+          onClearMemory={clearSavedMemories}
           standalone={STANDALONE_BUILD}
           connection={connection}
           modelAvailable={modelAvailable}

@@ -91,6 +91,23 @@ check('speaks through the Web Speech API', /speechSynthesis/.test(html));
 check('shell is titled NOVA', /<title>NOVA\b/.test(html));
 check('bundle carries the brand name', /"NOVA"/.test(html));
 check('voice selector is bound to nova-voice', /nova-voice/.test(html));
+check('includes the browser memory store', script.includes('nova.memory'));
+check('includes remembered facts in the system prompt', script.includes('Here is what you know about the user:'));
+check('ships the memory settings controls', script.includes('Clear all memory') && script.includes('memory-list'));
+check('ships the friendly personality and conditional voice brevity rules', script.includes('a warm, friendly, and genuinely helpful personal AI assistant.')
+  && script.includes('You never use sarcasm unless the user is clearly joking first.')
+  && script.includes('2-3 sentences max unless the user asks for more detail.'));
+check('ships warm startup and connection messages', script.includes('Waking up...')
+  && script.includes("Hmm, I can't reach Ollama right now. Is it running?"));
+check('does not ship obsolete personality or robotic status copy', !/warm and witty|100% locally|NOVA READY|Query processed\.|Initializing\.\.\./.test(script));
+check('ships response link cards with safe new-tab navigation', script.includes('rich-link-card') && script.includes('noopener noreferrer') && script.includes('_blank'));
+check('ships Google Images searches with a local placeholder and View Images action', script.includes('https://www.google.com/search')
+  && script.includes('rich-image-placeholder') && script.includes('View Images'));
+check('loads Kokoro TTS at runtime from the pinned CDN browser build, not inlined', /kokoro-js@\$\{\w+\}\/dist\/kokoro\.web\.js/.test(script)
+  && /=\s*"1\.2\.1"/.test(script) && script.includes('import(data.url)') && !script.includes('KokoroTTS.prototype') && script.includes('Kokoro AI'));
+check('ships numbered/bulleted response item cards', script.includes('rich-items') && script.includes('rich-item-card'));
+check('keeps rich content in its own sliding/fading row, not an avatar overlay', styleMatch[1].includes('.app-shell.has-rich-content')
+  && styleMatch[1].includes('minmax(min-content,1fr)') && styleMatch[1].includes('rich-panel-in') && styleMatch[1].includes('rich-panel-out'));
 
 // Guards the `</script>` escaping: a mangled inline script would otherwise still
 // satisfy every structural check above.

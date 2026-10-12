@@ -27,9 +27,9 @@ const OLD_NAME = 'ARIA';
 
 const SOURCE_FILES = [
   'index.dev.html', 'vite.config.js', 'package.json',
-  'src/App.jsx', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/index.css', 'src/brand.js',
+  'src/App.jsx', 'src/RichResponsePanel.jsx', 'src/rich-response.js', 'src/personality.js', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/memory.js', 'src/index.css', 'src/brand.js', 'src/kokoro.js', 'src/speech-stream.js',
   'scripts/build-standalone.mjs', 'scripts/verify-standalone.mjs',
-  'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/sync-pages.mjs',
+  'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/voice-checks.mjs', 'scripts/personality-checks.mjs', 'scripts/rich-checks.mjs', 'scripts/kokoro-checks.mjs', 'scripts/streaming-checks.mjs', 'scripts/sync-pages.mjs',
 ];
 const sources = Object.fromEntries(await Promise.all(
   SOURCE_FILES.map(async (file) => [file, await read(file)]),
@@ -46,7 +46,7 @@ check('no stale uppercase name anywhere in source', upperHits.length === 0,
   upperHits.slice(0, 3).join(' | '));
 
 check('the new name is used in the shell title', /<title>NOVA\b/.test(sources['index.dev.html']));
-check('the new name is used in the shell description', /NOVA is your local/.test(sources['index.dev.html']));
+check('the new name is used in the shell description', /NOVA is your warm/.test(sources['index.dev.html']));
 check('package is renamed', /"name":\s*"nova-voice-assistant"/.test(sources['package.json']));
 check('built artifact is named nova.html', await exists('nova.html'));
 check('the old artifact is gone', !(await exists('aria.html')));
@@ -79,10 +79,11 @@ check('no accessibility attribute was renamed', bogus.length === 0, bogus.slice(
 // ------------------------------------------------------- the name is single-sourced
 check('brand module is the source of the name', /APP_NAME\s*=\s*'NOVA'/.test(sources['src/brand.js']));
 check('app imports the brand name', /import \{ APP_NAME \} from '\.\/brand\.js'/.test(appSource));
-check('status messages are built from the brand name',
-  /ready: `\$\{APP_NAME\} READY`/.test(appSource) && /speaking: `\$\{APP_NAME\} SPEAKING`/.test(appSource));
-check('system prompt is built from the brand name', /You are \$\{APP_NAME\}/.test(appSource));
-check('voice preference follows the brand name', /ASSISTANT_NAME = APP_NAME\.toLowerCase\(\)/.test(sources['src/speech.js']));
+check('status messages use the friendly personality copy', appSource.includes('STATUS_TEXT[stage]')
+  && sources['src/personality.js'].includes('Ready when you are.') && sources['src/personality.js'].includes('Talking with you.'));
+check('system prompt is built from the brand name', /You are \$\{APP_NAME\}/.test(sources['src/personality.js']));
+check('stock voice priorities are not confused with branding', sources['src/speech.js'].includes("'Microsoft Aria Online'")
+  && sources['src/speech.js'].includes("'Microsoft Guy Online'") && !/ASSISTANT_NAME_BONUS/.test(sources['src/speech.js']));
 
 // --------------------------------------------------- the real UI, actually rendered
 // Renders App itself, so the name is confirmed in the markup a user would see rather
@@ -133,7 +134,7 @@ async function renderApp() {
 const markup = await renderApp();
 
 check('renders the logo as the new name', /class="brand-name">NOVA</.test(markup), markup.match(/class="brand-name">[^<]*/)?.[0]);
-check('renders the idle status with the name', />NOVA READY</.test(markup));
+check('renders the welcoming startup status', />Waking up\.\.\.</.test(markup));
 check('does not render the old name', !new RegExp(OLD_NAME).test(markup));
 check('brand label is announced with the new name', /aria-label="NOVA voice assistant"/.test(markup));
 check('only the brand name appears in the header', (markup.match(/class="brand-name">([^<]*)</) || [])[1] === APP_NAME);
@@ -149,8 +150,9 @@ check('rendered accessibility attributes are the spec spelling',
 // The settings panel and the offline notice are not part of the idle render.
 const panelSource = appSource;
 check('settings panel title uses the new name', /\{APP_NAME\} \/ PREFERENCES/.test(panelSource));
-check('voice selector is labelled with the new name', /htmlFor="nova-voice">\{APP_NAME\} Voice</.test(panelSource));
-check('offline notice uses the new name', /\{APP_NAME\} OFFLINE/.test(panelSource));
+check('voice selector is labelled with the new name', /htmlFor="nova-voice">\{APP_NAME\} Voice \(Kokoro AI\)</.test(panelSource));
+check('offline notice uses friendly, actionable copy', panelSource.includes('{OLLAMA_UNREACHABLE}')
+  && sources['src/personality.js'].includes("Hmm, I can't reach Ollama right now. Is it running?"));
 
 const built = await read('nova.html');
 check('standalone document is titled NOVA', /<title>NOVA\b/.test(built));

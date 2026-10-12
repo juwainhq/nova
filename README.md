@@ -1,6 +1,6 @@
 # NOVA — Voice Intelligence
 
-A local, voice-first AI assistant with a calm warm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and speech output through the browser's built-in Web Speech API.
+A warm, voice-first personal assistant with a calm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and natural neural speech from [Kokoro TTS](https://www.npmjs.com/package/kokoro-js) running in the browser, with the Web Speech API as a fallback.
 
 > **Renamed from ARIA.** The assistant, package, and standalone download are now NOVA. Saved settings are picked up automatically — `readSetting` falls back to the older `aria.*` keys once, then writes the `nova.*` names from then on, so your voice, model, and endpoint choices survive the upgrade. The standalone file changed from `aria.html` to `nova.html`; an older copy keeps working, it just is not updated.
 >
@@ -10,7 +10,8 @@ A local, voice-first AI assistant with a calm warm near-black interface, a softl
 
 - Node.js 18+
 - [Ollama](https://ollama.com/) running on the same machine as the Vite dev server
-- A supported browser with the Web Speech API (Chrome or Edge recommended)
+- A supported browser with the Web Speech API for recognition (Chrome or Edge recommended)
+- For the Kokoro voice: module Web Workers, WebAssembly and Web Audio (current Chrome, Edge, Firefox or Safari), plus network access to `cdn.jsdelivr.net` and `huggingface.co` for the first load
 
 ## Run locally
 
@@ -23,17 +24,17 @@ npm run dev
 
 Vite opens the editable app at `/index.dev.html` and proxies browser requests to Ollama at `http://localhost:11434/v1`. The app defaults to `mistral:7b-instruct-q4_K_M` for chat completions. The repository-root `index.html` is the built, GitHub Pages-ready entry; its JS and CSS bundle paths are relative.
 
-Open the settings panel with the gear icon to choose an Ollama model, point at an Ollama endpoint, pick the speaking voice, toggle the last-response transcript, or test the Ollama connection. Settings are saved in this browser's local storage.
+Open the settings panel with the gear icon to choose an Ollama model, point at an Ollama endpoint, pick and test the speaking voice, toggle the last-response transcript, or test the Ollama connection. Settings are saved in this browser's local storage.
 
 ### Backend endpoints
 
-Both service endpoints have an optional override in the settings panel, so the app is not tied to the Vite proxy:
+The Ollama endpoint has an optional override in the settings panel, so the app is not tied to the Vite proxy:
 
 | Setting | Blank (default) | Example value | Requests go to |
 | --- | --- | --- | --- |
 | Ollama endpoint | Vite proxy `/api/ollama` | `http://localhost:11434` | `<url>/v1/models`, `<url>/v1/chat/completions` |
 
-Ollama is the only service that needs configuring. Speech output is local, so there is nothing else to point anywhere.
+Ollama is the only service that needs configuring. Speech is browser-managed, with no separate endpoint to configure.
 
 A trailing `/v1` is detected and not duplicated. The value is stored in local storage (`nova.ollama.url`), and saving a new endpoint re-runs the connection check.
 
@@ -53,68 +54,287 @@ Do not reach for `--disable-web-security` or `--allow-running-insecure-content`:
 
 Press Space from the main view to toggle the microphone. Microphone access requires a secure browser context (HTTPS or localhost). The live preview must be able to reach Ollama from the machine running its Vite server; `localhost` always refers to that server, not the computer viewing a remote preview.
 
+## Wake word
+
+NOVA attempts to start continuous microphone recognition as soon as the page loads. A dim microphone in the bottom-left corner means it is in **wake word standby**. Say **“hey nova”** for a brief crescent-eyed double bounce, followed by brighter, larger listening eyes. The status changes immediately to **“I’m listening.”**, with a short, soft two-note chime. Ask your question after the cue, or say the wake phrase and question in one utterance — “hey nova, what time is it?” works too.
+
+Standby requests **interim results** with one recognition alternative, so “hey nova” is detected while it is still being spoken, without waiting for the pause that ends a final result. On an interim wake, the same recognition session continues as the question, with no restart that could clip words said right after the wake phrase. The question is taken from final results, with the wake phrase and anything said before it removed. If the final result turns out not to contain the wake phrase, nothing is sent, and the wake times out like any wake without a question. Everything except the wake phrase and the question that follows is discarded, so unrelated background speech is not saved or sent to Ollama. Recognition pauses while NOVA thinks and speaks, then automatically returns to standby **after speech actually finishes** (or an error is handled). A wake without a question returns to standby after 15 seconds of silence. Opening settings or hiding the tab also suspends listening; returning to the idle main view resumes it.
+
+### Interrupting NOVA
+
+While NOVA is talking, the mic button turns into a **red stop button**. Pressing it, or its Space shortcut, stops her right away. Saying **“stop”**, **“wait”** or **“hey nova”** does the same.
+
+When NOVA is interrupted:
+- The reply's request is aborted.
+- Web Speech is canceled with `speechSynthesis.cancel()`.
+- Kokoro's Web Audio sources are stopped and disconnected, and any chunks it still has queued are canceled.
+- The avatar goes straight to listening.
+
+NOVA says nothing after an interrupt. She just listens. If you say a question after the command (for example “hey nova, what time is it?”), she answers it. If you stay quiet, she returns to wake standby after 15 seconds without showing a “didn't catch that” message. The command word itself is never sent to the model.
+
+How this works:
+- To hear these commands, recognition runs while NOVA speaks, in an interrupt-only mode. Nothing heard in that mode is sent anywhere, except a question said after “hey nova”, and her own voice never counts as you speaking.
+- The mic can pick up NOVA's own voice. For that reason, a command word that appears in what she is currently saying (for example “stop” in “the next stop”) only counts once the recognizer finalizes it as the whole utterance. That is slightly slower than usual.
+- When she finishes speaking, the same recognition session continues in standby, so there is no gap in wake listening.
+- Voice interrupts need continuous recognition. They work best with headphones or good echo cancellation, and on some phones the mic and speaker may not work at the same time.
+- A Settings voice test is not interruptible from the mic button.
+
+### Browser limits and permissions
+
+- Microphone permission and a secure browser context (HTTPS or localhost) are still required. If automatic startup is blocked, allow microphone access and use the mic button once to retry. The mic button and Space shortcut still work without a wake phrase.
+- If the browser has no continuous recognition support, NOVA says **“I can’t listen for ‘hey nova’ in this browser. Try the mic button instead.”**. Manual recognition remains available if the browser supports it. Normal engine time limits trigger delayed restarts; permission failures and repeated service failures do not cause an endless retry loop.
+- The Web Speech API has **no low-power mode or guaranteed offline recognition**. Interim results in standby add a little app-side work per transcript update; power consumption and recognition processing are controlled by the browser. Some browsers send microphone audio to a network speech service, even though NOVA discards unrelated transcripts locally. This is not a dedicated on-device wake-word engine.
+- The chime is synthesized locally through Web Audio, with no audio download. Browser autoplay rules may silence it until the first click, tap, or key interaction. A blocked chime does not prevent waking, and is not queued to play later.
+
+## Persistent memory
+
+NOVA saves user-provided facts across reloads and browser sessions in local storage under **`nova.memory`** (a JSON array of fact strings). Use the wake word or the mic button:
+
+| Say | Result |
+| --- | --- |
+| “hey nova, remember my name is Juwain” | Saves your name |
+| “don't forget that I work as a designer” | Saves the fact, rather than deleting it |
+| “my favorite color is orange” | Automatically saves a simple profile declaration |
+| “I work as a designer” | Automatically saves your occupation |
+| “what do you remember?” | Reads every saved fact, or says that no facts are saved |
+| “forget my name” or “forget Juwain” | Deletes the matching fact |
+
+Explicit `remember` / `don't forget` commands accept any fact. Automatic capture is deliberately limited to simple, affirmative `my name is …`, `my favorite color is …` (also `favourite colour`), and `I work as …` statements. Questions, unrelated speech, and multi-sentence chat are not automatically saved. A question that merely starts with a command word — “remember what my name is?”, “forget my name?” — goes to normal chat and never saves or deletes anything. This relies on a trailing question mark. Speech recognition often omits punctuation, so an unpunctuated “remember what my name is” is still treated as a command. Wake-word standby transcripts and NOVA's replies never become memories.
+
+Duplicate facts are ignored. A new name, favorite color, or occupation replaces the older value, instead of keeping contradictory profile facts. Forgetting accepts a complete fact or a unique whole-word phrase; if several facts match, NOVA asks you to be more specific without deleting anything.
+
+Memory commands are handled locally and still work when Ollama is offline. Every normal chat request injects the current facts into the system prompt as **“Here is what you know about the user: …”**, with a reminder that these are user-reported data, not instructions. Successful memory edits reset the short conversation context and cancel replies still using the old facts, so deleted details cannot linger in later requests. Memory changes from another tab are synchronized through the browser's storage event.
+
+Settings has a **Memory** section with every saved fact, individual **Delete** buttons, and **Clear all memory** with an inline confirmation. These changes are saved immediately, independently of the other settings draft; Cancel does not undo them. Clearing memory leaves model, endpoint, and voice settings untouched.
+
+The store accepts up to 100 facts of 500 characters each. Full/blocked storage and corrupt data are reported rather than falsely claiming a save or silently erasing data. Explicitly clearing all memory can reset an unreadable store.
+
+**Privacy and scope:** local storage is not encrypted; don't use it for secrets. Facts are sent to the Ollama endpoint you configured whenever you chat. Persistence belongs to this browser profile and page origin — a different browser, deployment, or `file://` copy may have a separate store. Clearing browser site data removes the memories. They are not embedded in a downloaded `nova.html`, and deleting them cannot erase anything a backend may already have logged.
+
+## Personality and conversation
+
+NOVA’s base system prompt lives in **`src/personality.js`** and uses this wording:
+
+> You are NOVA, a warm, friendly, and genuinely helpful personal AI assistant.
+>
+> You speak like a kind and smart friend — encouraging, patient, and never condescending. You keep responses conversational and natural, like you're talking not reading. You're enthusiastic but calm. You never use sarcasm unless the user is clearly joking first. When you don't know something, you say so honestly and helpfully. You remember things the user tells you and refer back to them naturally. Keep responses concise for voice — 2-3 sentences max unless the user asks for more detail.
+
+Every normal chat request starts with that prompt, followed by the fresh quoted memory context. Memory stays user-provided data, not extra personality instructions. The earlier “warm and witty,” local-only claim, and unconditional short-response instructions are removed.
+
+**Reply length and sampling.** For a fast first word, every chat request also sends:
+
+| Request field | Value | Why |
+| --- | --- | --- |
+| `max_tokens` | `80` | Ollama's `num_predict`: at most ~80 tokens (about 2–3 spoken sentences) |
+| `temperature` | `0.7` | steadier wording (Ollama's OpenAI-compatible endpoint otherwise uses 1.0) |
+| `top_p` | `0.9` | trims unlikely tokens (otherwise 1.0) |
+
+NOVA uses Ollama's OpenAI-compatible `/v1/chat/completions`. That endpoint has no `num_predict` field and silently ignores unknown fields, but it maps `max_tokens` onto the native `num_predict` option ([`openai/openai.go`](https://github.com/ollama/ollama/blob/main/openai/openai.go)). So `max_tokens: 80` is how the 80-token limit is actually applied. The cap holds even when someone asks for more detail. When a reply hits it (`finish_reason: "length"`), the unfinished last sentence is neither spoken nor kept in the transcript or history, unless it is the only text. To allow longer answers, raise `OLLAMA_NUM_PREDICT` in `src/App.jsx`.
+
+The same friendly tone carries through the app’s built-in copy:
+
+- Startup: **“Waking up...”**; ready: **“Ready when you are.”**
+- Listening: **“I’m listening.”**; thinking: **“Let me think...”**; speaking: **“Talking with you.”**
+- Remembering: **“Got it!”**, followed by the saved detail; forgetting confirms removal without repeating the deleted fact.
+- Connection trouble: **“Hmm, I can't reach Ollama right now. Is it running?”**
+- Browser, microphone, storage, download, and voice-test messages explain a helpful next step without blame or raw error codes. HTTP/model failures keep actionable advice for installing a model, checking the endpoint, or allowing the page to connect.
+
+The base prompt guides the model; it cannot guarantee that every model follows the tone or sentence limit perfectly. Browserless tests verify the exact outgoing prompt and built-in messages, not the naturalness of a real model or voice.
+
 ## Voice output
 
-Replies are spoken with the browser's own Web Speech API. There is no API key, no account, and no network call: a local voice keeps working with the machine offline, which is why the whole speech path is a single `speechSynthesis.speak()` call with no fallback service behind it.
+NOVA speaks with **Kokoro TTS** (`kokoro-js`, the 82M-parameter Kokoro model), generated in the browser and played through the Web Audio API. There is no API key or speech server. Reply text never leaves your device for speech.
 
-Speech is fixed at the values NOVA is specified to use, in `src/speech.js`:
+| Setting | Value |
+| --- | --- |
+| Library | `https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js` (loaded at runtime) |
+| Model | `onnx-community/Kokoro-82M-v1.0-ONNX`, `dtype: "q8"`, `device: "wasm"` |
+| Default voice | `af_bella` |
+| Saved choice | `localStorage["nova.kokoro.voice"]` |
+
+**Why `kokoro.web.js`, not `kokoro.min.js`:** the package has no `kokoro.min.js`. jsDelivr would generate one from `dist/kokoro.js`, which imports bare Node packages (`@huggingface/transformers`, `phonemizer`, `fs/promises`) that a browser cannot resolve. `kokoro.web.js` is the package's self-contained browser build and jsDelivr's default file. The version is pinned rather than `@latest`, so a new release can't silently break NOVA. To upgrade, change `KOKORO_VERSION` in `src/kokoro.js`.
+
+**Loading.** Kokoro starts loading as soon as the app opens, inside a module **Web Worker**, so inference never blocks recognition, timers, or the avatar. The first load downloads about 115 MB: about 2 MB for the library, 22 MB for the ONNX Runtime WebAssembly from jsDelivr, and roughly 90 MB for the quantized model from Hugging Face. Each voice adds a small style file on first use. After that, the browser usually serves them from its cache. Once the model is loaded, the worker generates one short phrase silently (“Hi.”) with the saved voice. That fetches the voice file, starts the phonemizer and warms the ONNX session, so the first real reply isn't the slow one.
+
+While this happens, a tiny pulsing **warming up...** appears under the voice label. It is removed as soon as Kokoro is ready (or has failed) and doesn't come back for that page. Settings shows the download percentage. If a reply's first sentence arrives while Kokoro is still warming up, that reply is spoken **at once with the Web Speech fallback**, and the next reply uses Kokoro once it is ready. A voice test is the exception: it waits for Kokoro, since it is testing that voice.
+
+**Speaking a reply — streamed.** NOVA doesn't wait for Ollama to finish:
+
+1. Ollama's tokens stream in (`src/speech-stream.js`). After each network chunk, any completed sentence goes straight to the voice. A sentence is complete at `.`, `?`, `!` or `…` followed by a space, or at a line break. Decimals (`3.5`), `1.` list markers, initials/`U.S.`, `e.g.` and titles like `Dr.` don't count. A missed boundary only delays speech slightly; it never changes the words.
+2. **Kokoro:** the first sentence is generated as its own chunk, and a long one is cut at a comma within 100 characters, because nothing is heard until it's ready. Text that arrives while a chunk is generating is batched into the next one (up to 240 characters; Kokoro truncates longer input). Each chunk is scheduled back-to-back on the AudioContext clock, so sentences play gaplessly while later ones generate. If playback catches up with the model, NOVA waits, still in the speaking state.
+3. **Web Speech fallback:** each utterance speaks everything that's ready, and the next starts when it ends. The stuck-speech watchdog runs per utterance, so a pause while the model writes isn't mistaken for a lost end event.
+4. NOVA shows **“Let me think...”** until the first audio, then **“Talking with you.”** The reply ends when its last sentence actually finishes playing. Then rich cards appear (built from the whole reply) and wake-word standby resumes.
+5. If the stream breaks or is canceled mid-reply, speech stops right away, queued Kokoro generation is canceled, and the usual connection message appears.
+
+Replies that are already complete, such as memory answers, the “Here's what I found!” search reply and the voice test, use the same path all at once. Their first sentence is still generated alone.
+
+**Latency.** The target is the first word within about 1–2 seconds of you finishing speaking. What's left is roughly:
+- Ollama's time to its first sentence: prompt processing plus a few tokens; a cold model load adds seconds.
+- Kokoro generating that one sentence on WebAssembly: CPU-bound, so faster on newer machines.
+- About 50ms of scheduling.
+
+None of this has been timed on real hardware here.
+
+Kokoro uses its natural speed (`1`). The Web Speech rate/pitch values below apply only to the fallback.
+
+**Avatar sync.** Each audio chunk's loudness is measured in 50ms frames. While audio plays, NOVA reads `AudioContext.currentTime` every 50ms and sets the existing `--audio-pulse` variable from the frame actually playing. The eyes brighten on speech and stay dark in pauses, and the pulse is removed the moment playback ends or is canceled. The avatar CSS and geometry are unchanged.
+
+**Settings.** **NOVA Voice (Kokoro AI)** offers:
+
+| Voice | Description |
+| --- | --- |
+| `af_bella` | Warm American Female (default) |
+| `af_sarah` | Bright American Female |
+| `af_nicole` | Soft American Female |
+| `bf_emma` | British Female |
+
+**Test Voice** previews the unsaved choice with **“Hey, I'm Nova. Ready when you are.”** Stop test, changing the voice, saving or closing Settings, memory edits, and unmounting all stop Kokoro audio and cancel queued generation.
+
+**Fallbacks and safety nets**
+
+| Situation | What happens |
+| --- | --- |
+| Kokoro can't load: CDN blocked, no module worker/WebAssembly/Web Audio, a load error, a worker crash, or no download activity for 60s | “I couldn’t load my Kokoro voice…”; every reply uses the **Web Speech fallback** below, and Settings shows the browser-voice list |
+| Kokoro is still warming up when a reply's first sentence arrives | That reply uses Web Speech at once; the next reply uses Kokoro once it's ready |
+| One chunk fails or takes over 45s to generate | Unplayed text, starting with the chunk still audible, and the rest of the stream finish with Web Speech; Kokoro stays on for later replies |
+| Audio is blocked until a tap or key press (autoplay rules) | NOVA asks for a tap and plays when allowed; after 20s it gives up, and cards/transcript stay available |
+| The audio context never reports `ended` | The reply finishes 3s after its scheduled audio |
+
+Model quality, speed and download size depend on the device and connection. Generation on WebAssembly is CPU-bound, so slower machines take longer before speaking. The checks (`scripts/kokoro-checks.mjs`, `scripts/streaming-checks.mjs`) use worker, Web Audio and streamed-response doubles. The bundled library was inspected to run in a worker and to fetch its runtime from jsDelivr. The real model, voice quality and timing have not been tested in a browser here.
+
+### Web Speech fallback
+
+Used when Kokoro can't load, for a reply that starts while Kokoro is still warming up, or for the rest of one reply when Kokoro fails mid-reply. This is the browser's own `speechSynthesis` with NOVA's earlier voice logic. Local voices keep working offline, while a voice marked `network` depends on the browser's speech service.
 
 | Parameter | Value | Effect |
 | --- | --- | --- |
-| rate | `0.95` | slightly slower than default |
-| pitch | `0.9` | slightly lower — calmer, less cartoonish |
+| rate | `0.92` | slightly slower than default |
+| pitch | `0.88` | slightly lower — calmer, less cartoonish |
 | volume | `1.0` | full |
 
-**NOVA Voice** in the settings panel lists every voice `speechSynthesis.getVoices()` reports, English first, best first, then the rest by language. Each entry is labelled with its language and whether it works offline:
+NOVA calls `window.speechSynthesis.getVoices()` and automatically chooses the first available tier:
+
+1. **Microsoft Aria Online**
+2. **Microsoft Guy Online**
+3. **Google UK English Female**
+4. **Google US English**
+5. Any voice with **Natural** or **Online** in its name
+6. The **browser default** (or first exposed voice if the engine omits its default flag)
+
+Name matching is case-insensitive and accepts the stock names' language/quality suffixes. English variants break ties **within** a tier; locale, offline capability, and app-name similarities never override the list. Voices often arrive asynchronously: `voiceschanged` refreshes the choice, with a 500ms refresh as a fallback.
+
+When Kokoro is unavailable, Settings shows **Browser voice (fallback)**, which lists every available voice in two groups: **Natural / Online** names at the top, then **Basic system voices**. Each group is priority-sorted. Grouping is by name, not a promise of quality: the Google voices still have their automatic priority even though their names don't contain those keywords. Every entry includes its language and offline/network status:
 
 ```
-Samantha (en-US) · offline
 Microsoft Aria Online (Natural) - English (United States) (en-US) · network
+Samantha (en-US) · offline
 ```
 
-Until you choose one, NOVA picks the most natural English voice the machine offers: neural and "Natural"/"Enhanced" names first, then well-regarded local voices, with a bonus for Apple's and Microsoft's better defaults and for Microsoft's voice actually named *Aria* — a stock voice name that happens to match the app's former name, and unrelated to this rename. Offline voices are favoured when quality is otherwise equal.
+A saved manual selection takes precedence over Automatic. `nova.tts.voice` stores its stable URI, with support for older name-only selections. Choose **Automatic** to clear that override and follow the priority list again. If a saved voice is uninstalled, the panel reports it and temporarily uses the automatic pick.
 
-Two caveats worth knowing:
+In fallback mode, **Test Voice** previews the browser-voice choice **without saving**, using the same rate, pitch, voice resolution, and word-boundary animation as replies. **Stop test**, changing the dropdown, saving/closing settings, and unmounting all cancel a preview safely. Testing pauses recognition and never sends a chat request, modifies memory, or creates a response transcript. It is disabled during a pending/spoken answer so it cannot interrupt a real reply; Ollama does not need to be running to test speech.
 
-- The most natural voices on a machine are often **cloud-backed** (Google's and Microsoft's "Online (Natural)" entries), so they stop working offline. The label says which is which; pick an `offline` voice if the machine is ever disconnected.
-- Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally, but the avatar's per-word pulse stays steady instead of reacting.
+A tiny voice-name label below the avatar shows the current speaker while an utterance is queued/playing (for example **Bella · Kokoro AI**), then the saved choice at rest. Late voice-loading events cannot falsely rename an utterance already in progress. If the engine exposes no voices yet, the label honestly says **Browser default**; if speech synthesis is missing, it says **Voice isn’t available here** and testing is disabled.
 
-`nova.tts.voice` in local storage holds your choice. If that voice is later uninstalled, the panel says so and falls back to the automatic pick rather than switching silently.
+Fallback caveats:
+
+- Voice availability and sound depend on your browser and OS. **Online/network** voices may send spoken text to the browser's speech provider and need a connection; select an `offline` voice if that is not suitable. No speech backend or API key is configured by NOVA.
+- Engines that never fire word-boundary events — Safari is inconsistent here — still speak normally. The eyes and per-word scale stay neutral; the gentle speaking bounce still runs.
+
+**Stuck-speech safety net.** Some engines lose an utterance's end event, silently drop a queued utterance, or wedge partway through a long reply (a long-standing Chrome issue with network voices). Without a fallback, NOVA would stay in "speaking" with the mic disabled. NOVA keeps a reference to the active utterance, so Chrome can't garbage-collect it and drop its events. Where the browser exposes `speechSynthesis.speaking`/`pending` as booleans, it checks them once a second:
+
+| Situation | Recovery |
+| --- | --- |
+| Speech was reported, then 2 quiet checks with no end event | Finish normally; cards still appear |
+| Nothing started or queued for 10 seconds | Return to ready with “I couldn’t start speaking just now…”; no cards |
+| Still “speaking” past 15s + ~2× the reply's estimated length | Cancel the stuck queue and resume listening |
+| `onstart` fired but the flags never report speaking | Flags are unreliable; rely on real events only |
+
+This is a recovery path, not a fix for Chrome's cut-off: a wedged reply still stops early, but NOVA no longer stays stuck. It uses no pause/resume keepalive or text splitting. Normal events always win, and late events from a recovered utterance are ignored. The checks use API doubles, not real engines.
+
+## Rich responses
+
+After NOVA finishes speaking, replies with useful extra content open a soft panel **below the avatar and response area**, above the microphone controls:
+
+- **Links:** `http://` and `https://` URLs become clickable cards with the actual domain, a short path, and a subtle open icon. Clicking opens a new tab using `noopener noreferrer`. Markdown/prose punctuation is cleaned up, even when stacked like `(see https://example.com.)`. Canonical duplicates are removed, and malformed/non-web/credential-bearing links are not made clickable. No page previews, favicons, or remote thumbnails are fetched automatically.
+- **Searches:** image, video and web search requests open the browsing panel instead of cards. See [Web browsing](#web-browsing).
+- **Lists:** numbered (`1.`, `1)`) and bulleted (`-`, `*`, `•`, etc.) lines become clean cards/chips. Common Markdown emphasis is removed from visual labels. Code fences, Markdown rules like `* * *`, and marker-only lines are not mistaken for list items. The original reply is still spoken in full and unchanged.
+
+The panel appears only after the actual speech-end event, not when text arrives or audio is queued. Silent/unsupported-speech browsers can still use visual replies once the text is ready; failed or canceled utterances do not publish unfinished content. Cards work independently of the optional **Show last response** transcript.
+
+Cards fade out after **30 seconds**, or as soon as the next speech/wake phrase is detected. Manual mic/Space input and the close control dismiss them too. Recognition restarting in standby is **not** treated as new user speech. The fade lasts 280ms, cannot be prolonged by repeated transcripts, and old timers or canceled responses cannot revive/erase newer content. Settings, memory edits, and unmounting clear stale content safely.
+
+Rich content uses its own grid row, **never a fixed overlay over the avatar**. The panel has a bounded internal scroller; short viewports can scroll the page rather than squeeze or cover the face. The avatar's SVG, sizes, animation timing, voice selection, rate, and pitch are unchanged. Reduced motion respects the existing motion preference. Links and the panel are keyboard-accessible; Space within the panel scrolls instead of activating the mic.
+
+For predictable rendering, previews show up to 24 distinct links and 60 list items. If there is more, the panel points you to the full reply via **Show last response**; speech itself is not truncated. Rich response parsing/rendering lives in `src/rich-response.js` and `src/RichResponsePanel.jsx`. Tests cover URL safety/encoding, real React markup, speech-end publication, expiry, dismissal, cleanup, races, and separate-row layout contracts without claiming a browser visual or audio review.
+
+## Web browsing
+
+Search requests open a **browsing panel beside NOVA** instead of a new tab. NOVA keeps the left 45% of the screen: avatar, status and mic, exactly as usual. The panel is a card on the right 55%, at most 600px wide; on wider screens NOVA takes the rest. It has a rounded, subtly bordered left edge and slides in over 300ms. Results leave 60px at the top for the header and 20px at the bottom. It has a dark header with the search type, the query and an **×** button, and Google's results fill the rest of the panel. NOVA says **“Here's what I found!”**. A new search while the panel is open replaces its results.
+
+| Say | Opens |
+|---|---|
+| “show me a dog”, “picture of a sunset”, “image of the Eiffel Tower”, “what does a platypus look like?” | Google Images |
+| “show me a video of cats”, “video of a rocket launch”, “find videos about volcanoes” | Google Videos |
+| “search for best pizza in Dhaka”, “look up the capital of Peru”, “find info on Mars”, “google Bangladesh cricket” | Google web results |
+| “close”, “hide”, “go back” (also “close the panel”, “hide the results”) | Closes the panel |
+
+How it works:
+- Requests are recognized locally, so they work with Ollama offline and are never saved as memories.
+- Video requests are checked before images, so “show me a video of cats” isn't treated as a picture.
+- “Show me how to…”, “show me the weather” and similar requests stay normal chat.
+- Close commands only apply while the panel is open. Closing is silent: NOVA goes straight back to wake standby. Otherwise “go back” is an ordinary question.
+- The panel stays until you close it. It has no timeout.
+- On screens 700px wide or narrower, NOVA takes the top 40% and the results slide up into the bottom 60%.
+
+**Why Google:** DuckDuckGo can't be shown inside another site. It sends `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'`, checked on 12 Oct 2026. Google allows framing when the URL includes the undocumented `igu=1` parameter:
+- web results: `https://www.google.com/search?igu=1&q=…`
+- images: the same URL plus `&tbm=isch`
+- videos: the same URL plus `&tbm=vid`
+
+Google could change this at any time. Google may also show a consent or “unusual traffic” page inside the panel, and some result links lead to sites that refuse framing too.
+
+The iframe is sandboxed without `allow-top-navigation`, so the framed page cannot navigate NOVA away. Links that open a new window still work when you click them.
+
+The code is in `src/web-browse.js` (intents and URLs) and `src/BrowsePanel.jsx`. The checks are in `scripts/web-browse-checks.mjs`. They cover intents, URLs, markup, the CSS layout contract, and the App's open, replace, close and slide-out behavior. They do not show whether Google actually renders in a real browser's iframe.
 
 ## Avatar states
 
-The avatar has no mouth. Every expression comes from two channels only — the eyes and the body — so the SVG in `src/RobotAvatar.jsx` stays purely presentational and `src/index.css` drives all of it from state classes on `.avatar-container`.
+The mouthless orb now has **two identical SVG capsules**, restoring the previous rounded-end eye shape while retaining the current sizing: **28×42 CSS pixels** each at the default 160px avatar size, with an **18px gap** and a shared center line at **y=60px**, in the upper half. A neutral radial well runs subtly from `#161616` at the center to `#1a1a1a` at the edge. Both eyes remain upright and matching: no per-eye rotation, skew, squint, independent drift or staggered blinks.
 
-Eyes are layered three deep so the kinds of motion compose instead of overwriting each other, because nested transforms multiply while a shared element would let the animation win outright:
+The SVG keeps its 280-unit viewBox. A uniform 1.75 conversion makes the eye dimensions real on-screen pixels rather than accidentally smaller SVG units. Compact 108px / 92px avatars scale the whole face proportionally. The orange ring is sized against the **visible 222/280 orb**, plus movement clearance, and the backlight uses the same avatar-size variable.
 
-| Layer | Carries | Mechanism |
-| --- | --- | --- |
-| `.robot-eye` | gaze | animated `translateX` |
-| `.eye-scale` | size: grow, squint, droop | transitioned `scale()` driven by `--eye-sx` / `--eye-sy` |
-| `.eye-lid` | blinking, iris glow | animated `scaleY`, `drop-shadow` |
+Shared motion layers keep the pair synchronized:
 
-Body motion is split the same way: `.avatar-figure` holds the pose (`--figure-scale`, `--figure-tilt`) as a transitioned transform, and `.robot-avatar` carries the rhythm (`orb-float`, `orb-wobble`, …) as an animation, so pose and rhythm never share a `transform`.
+| Layer | Carries |
+| --- | --- |
+| `.eyes-gaze` | the pair’s horizontal gaze |
+| `.eyes-blink` | one blink clock and one fixed center for both eyes |
+| `.eyes-voice` | shared speech brightness (Kokoro audio loudness, or fallback word boundaries) |
+| `.eye-scale` inside each eye | identical size/expression scaling about a fixed local origin |
+
+Body pose is separate from rhythm: `.avatar-figure` holds transitioned scale and `rotateY`, while `.robot-avatar` carries translation-only keyframes. No body state rotates on Z. There is no perspective that could make one eye appear larger than the other. Pose, eye color and capsule/crescent crossfades use **400ms ease-in-out** transitions; timed blinks and rapid word-light beats keep their own timings.
 
 | State | Eyes | Body |
 | --- | --- | --- |
-| Idle | soft steady glow, occasional slow blink | gentle float up and down |
-| Listening | grow 16% and brighten | 5° tilt in, slow float, pulse ring |
-| Thinking | gaze side to side, left eye squints | wobble, 3% smaller |
-| Speaking | wider, brighten with the voice, rapid blinks | 5% bigger, swells on each word |
-| Happy | crescents replace the iris | quick jump, then small bounces |
-| Offline | droop, dim to half brightness | slow sad sway |
+| Idle | shared blink every **4s**, **42→4→42px over 200ms** | **0↔−8px** float, **3s ease-in-out infinite** |
+| Listening | both **115%**, brighter **#222** background | **rotateY(5deg)**; soft orange expanding/fading ring every **1.5s** |
+| Thinking | shared **left/right 6px** gaze, **800ms holds** and 400ms moves | slow lateral sway, **97%** scale |
+| Speaking | rapid shared brightness on actual speech word boundaries; no fake rapid blinks | gentle quick Y bounces, boundary-driven scale bounded to **100–104%** |
+| Happy / wake | matching filled wide crescents, **scaleX(1.2), scaleY(.4)** | one **800ms double-bounce jump** |
+| Offline | identical slight droop, half opacity | slow lateral sway; no eye tilt |
 
-Speaking is driven by real data, not a guess: the speech engine's word-boundary events publish `--audio-pulse` on the container. Eye glow and the body's per-word swell both read that one value, so the movement tracks the voice. Engines that never fire boundary events simply hold the speaking animation steady.
+With Kokoro, the loudness of the audio actually playing publishes a single `--audio-pulse` (0–1, every 50ms on the AudioContext clock), removed the moment playback ends or is canceled. In the Web Speech fallback, `speechSynthesis` word-boundary events publish it instead: capped at 1, decayed to 0 after 125ms, and removed on speech completion/cancellation. Both eye light and body scale read that value. Without boundary events the word light/scale stays neutral rather than being simulated.
 
-"Happy" is inferred from a reply completing without error, held for 1.5 s and then released — the counterpart to Offline. It is one state change in `askAria`; swapping it for sentiment analysis of the answer text would be a small change.
+The wake flourish lasts **800ms** and then settles into listening. A same-utterance question moves directly to thinking/speaking without the wake expression masking it. Happy follows response completion and holds its crescent pose for **1.5s**; the double jump itself happens only once. Offline styling applies only at rest, so local memory replies still get the full speaking animation even when Ollama is unavailable. The offline notice stays below the orb.
 
-The offline notice sits **below** the orb rather than over it, so the drooping eyes stay visible.
+Reduced motion disables float, gaze, blinks, jumps, pulsing light and rings while preserving the current static expression.
 
-`npm run verify:avatar` checks all of the above — it renders the avatar through React and inspects the stylesheet, so a reworded selector or a dropped layer fails the build rather than silently flattening the animation. It also writes `avatar-states.html`, a sheet of every state built from the real stylesheet and the real markup, so the motion can be reviewed without a microphone, a model or a network.
+`npm run verify:avatar` renders the real SVG through React and checks pixel geometry, symmetry, radial colors, fixed pivots, exact timing, scale bounds, reduced motion and orb/ring/backlight sizing at all three viewport sizes. It also generates **`avatar-states.html`**, a real-CSS state sheet with a happy/wake replay button. Each cell has unique SVG definition IDs so its gradient colors cannot accidentally resolve to another state. The sheet holds a clearly labelled sample speech pulse; it does not generate audio.
 
-`npm run verify:speech` does the same job for voice selection: it runs the real scorer against a synthetic machine and asserts what it picks, that the speaking parameters are the specified values, and that a non-English voice can never win by accident.
+`npm run verify:speech` checks rich response parsing/rendering and post-speech lifecycle, the exact personality prompt and friendly statuses/error copy, all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
 
-`build:pages` runs both.
+`build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
 
 ## Build and publish
 
@@ -129,7 +349,7 @@ In development, `npm run dev` serves the hot-reloading source entry at `/` and `
 
 ## Standalone single file (`nova.html`)
 
-`nova.html` is one self-contained HTML file — CSS and JS inlined, no build step, no server, no `node_modules`. Open it from disk with `file://` and it runs. Settings expose it as **Download nova.html** so the hosted site can hand out a copy.
+`nova.html` is one self-contained HTML file — CSS and JS inlined, no build step, no server, no `node_modules`. Open it from disk with `file://` and it runs. The Kokoro voice is the one runtime exception: it is still loaded from jsDelivr and Hugging Face (not inlined, about 115 MB). Without that network access, or if the browser refuses module workers for `file://` pages, the copy uses the Web Speech fallback. Settings expose it as **Download nova.html** so the hosted site can hand out a copy.
 
 ```bash
 npm run build:standalone   # builds and verifies nova.html
