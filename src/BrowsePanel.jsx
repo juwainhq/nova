@@ -110,8 +110,11 @@ export default function BrowsePanel({ browse, onClose, onNavigate, onBack, onFor
         onPointerUp={() => endDrag()}
         onPointerCancel={() => endDrag(true)}
       />
-      {/* One row of controls and one quiet caption: no title bar, no panel chrome.
-          The kind and query are still rendered as text, so they stay escaped. */}
+      <header className="browse-header">
+        <span className="browse-kind">{kind}</span>
+        <h2 className="browse-query" title={browse.query}>{browse.query}</h2>
+        <button className="browse-close" type="button" aria-label="Close search panel" disabled={browse.closing} onClick={onClose}>×</button>
+      </header>
       <div className="browse-chrome">
         <div className="browse-nav">
           <button className="browse-nav-button" type="button" aria-label="Go back" title="Back" disabled={!canBack || browse.closing} onClick={onBack}>←</button>
@@ -134,12 +137,7 @@ export default function BrowsePanel({ browse, onClose, onNavigate, onBack, onFor
             onChange={(event) => { setAddress(event.target.value); setRefused(false); }}
           />
         </form>
-        <button className="browse-close" type="button" aria-label="Close search panel" disabled={browse.closing} onClick={onClose}>×</button>
       </div>
-      <p className="browse-caption">
-        <span className="browse-kind">{kind}</span>
-        <span className="browse-query" title={browse.query}>{browse.query}</span>
-      </p>
       <iframe
         key={`${browse.url}#${browse.frame || 0}`}
         className="browse-frame"

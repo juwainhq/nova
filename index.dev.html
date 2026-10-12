@@ -6,9 +6,13 @@
     <meta name="theme-color" content="#0f0d0b" />
     <meta name="description" content="NOVA is your warm, voice-first personal AI assistant." />
     <title>NOVA — Voice Intelligence</title>
+    <!-- The typeface is Inter, but a font request must never be able to hold the page
+         open: media="print" keeps it off the critical path, and the load swaps it in.
+         The single-file download deliberately carries no font link, so it stays a
+         complete offline document and falls back to the system sans. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" media="print" onload="this.media='all'" />
   </head>
   <body>
     <div id="root"></div>
