@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build && node scripts/rename-build-entry.mjs",
+    "build": "vite build && node scripts/rename-build-entry.mjs && node scripts/build-pwa.mjs",
     "build:standalone": "node scripts/build-standalone.mjs",
-    "build:pages": "npm run build && npm run build:standalone && npm run verify:standalone && npm run verify:avatar && npm run verify:speech && npm run verify:brand && node scripts/sync-pages.mjs",
+    "build:pages": "npm run build && npm run build:standalone && npm run verify:standalone && npm run verify:avatar && npm run verify:speech && npm run verify:brand && npm run verify:pwa && node scripts/sync-pages.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "verify:standalone": "node scripts/verify-standalone.mjs",
     "verify:avatar": "node scripts/verify-avatar.mjs",
     "verify:speech": "node scripts/verify-speech.mjs",
-    "verify:brand": "node scripts/verify-brand.mjs"
+    "verify:brand": "node scripts/verify-brand.mjs",
+    "generate:icons": "node scripts/generate-pwa-icons.mjs",
+    "verify:pwa": "node scripts/verify-pwa.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

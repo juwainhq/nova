@@ -14,14 +14,14 @@ const checks = [];
 function check(label, ok, detail = '') { checks.push({ label, ok: Boolean(ok), detail }); }
 const near = (a, b, tolerance = .0001) => Number.isFinite(a) && Math.abs(a - b) < tolerance;
 
-async function renderAvatar() {
+async function renderAvatar(component = 'RobotAvatar', props = {}) {
   const result = await build({
     stdin: {
       contents: `
         import { createElement } from 'react';
         import { renderToStaticMarkup } from 'react-dom/server';
-        import RobotAvatar from './src/RobotAvatar.jsx';
-        process.stdout.write(renderToStaticMarkup(createElement(RobotAvatar)));
+        import Avatar from './src/${component}.jsx';
+        process.stdout.write(renderToStaticMarkup(createElement(Avatar, ${JSON.stringify(props)})));
       `,
       resolveDir: root,
       loader: 'jsx',
@@ -44,414 +44,280 @@ async function renderAvatar() {
   }
 }
 
-const markup = await renderAvatar();
+const expressions = ['neutral', 'happy', 'wink', 'surprised', 'thinking', 'sleepy', 'speaking', 'listening', 'idle', 'waking'];
+const models = { orb: 'RobotAvatar', bot: 'BotAvatar' };
+const renders = Object.fromEntries(await Promise.all(Object.entries(models).map(async ([skin, component]) => [skin,
+  Object.fromEntries(await Promise.all(expressions.map(async expression => [expression, await renderAvatar(component, { expression })]))),
+])));
 const css = await readFile(resolve(root, 'src/index.css'), 'utf8');
-const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, '');
+const faceCss = await readFile(resolve(root, 'src/avatar.css'), 'utf8');
+const code = (css + '\n' + faceCss).replace(/\/\*[\s\S]*?\*\//g, '');
 
-// Tiny SVG tree reader: inspect real parent/child relationships and attributes,
-// not source constants or JSX ordering. No DOM package or browser is required.
-const attrs = (tag) => Object.fromEntries([...tag.matchAll(/([\w:-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]]));
-const tree = { tag: 'root', children: [] };
-const stack = [tree];
-for (const [tag] of markup.matchAll(/<[^>]+>/g)) {
-  if (tag.startsWith('</')) { stack.pop(); continue; }
-  const node = { tag: /^<([\w]+)/.exec(tag)?.[1], attrs: attrs(tag), children: [] };
-  stack.at(-1).children.push(node);
-  if (!tag.endsWith('/>')) stack.push(node);
+// Parse actual rendered SVG, not the source constants. The same geometry must
+// survive every pose while the Orb's paint stays independent of the Bot's.
+const attrs = tag => Object.fromEntries([...tag.matchAll(/([\w:-]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
+function tree(markup) {
+  const root = { tag: 'root', attrs: {}, children: [] }, stack = [root];
+  for (const [tag] of markup.matchAll(/<[^>]+>/g)) {
+    if (tag.startsWith('</')) { stack.pop(); continue; }
+    const node = { tag: /^<([\w]+)/.exec(tag)?.[1], attrs: attrs(tag), children: [] };
+    stack.at(-1).children.push(node);
+    if (!tag.endsWith('/>')) stack.push(node);
+  }
+  return root;
 }
-const nodes = (node = tree) => [node, ...node.children.flatMap((child) => nodes(child))];
-const hasClass = (node, name) => node?.attrs?.class?.split(' ').includes(name);
-const byClass = (name) => nodes().filter((node) => hasClass(node, name));
-const svg = tree.children[0];
-const eyeGroups = byClass('robot-eye');
-const irises = byClass('eye-iris');
-const crescents = byClass('eye-crescent');
-const gaze = byClass('eyes-gaze')[0];
-const blink = byClass('eyes-blink')[0];
-const voice = byClass('eyes-voice')[0];
+const all = node => [node, ...node.children.flatMap(all)];
+const has = (node, name) => node.attrs.class?.split(' ').includes(name);
+const nodes = Object.fromEntries(Object.keys(models).map(skin => [skin, Object.fromEntries(expressions.map(expression => [expression, all(tree(renders[skin][expression]))]))]));
+const find = (skin, name, expression = 'neutral') => nodes[skin][expression].find(node => has(node, name));
+const findAll = (skin, name, expression = 'neutral') => nodes[skin][expression].filter(node => has(node, name));
+const ids = markup => [...markup.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]);
+const references = markup => [...markup.matchAll(/url\(#([^)]+)\)/g)].map(m => m[1]);
 
-// Read balanced CSS blocks so default rules can compose while media overrides
-// remain separate. This also catches rules split across a shared selector list.
-function blocks(code) {
+function blocks(source) {
   const result = [];
-  for (let cursor = 0; cursor < code.length;) {
-    const open = code.indexOf('{', cursor);
+  for (let cursor = 0; cursor < source.length;) {
+    const open = source.indexOf('{', cursor);
     if (open < 0) break;
     let end = open + 1, depth = 1;
-    while (end < code.length && depth) {
-      if (code[end] === '{') depth += 1;
-      if (code[end] === '}') depth -= 1;
-      end += 1;
-    }
-    result.push({ header: code.slice(cursor, open).trim(), body: code.slice(open + 1, end - 1) });
-    cursor = end;
+    while (end < source.length && depth) { if (source[end] === '{') depth++; if (source[end] === '}') depth--; end++; }
+    result.push({ header: source.slice(cursor, open).trim(), body: source.slice(open + 1, end - 1) }); cursor = end;
   }
   return result;
 }
-const cssBlocks = blocks(cssCode);
-const styleRules = [];
-function collectRules(items, conditional = false) {
+const rules = [];
+const cssBlocks = blocks(code);
+function collect(items, conditional = false) {
   for (const { header, body } of items) {
-    if (/^@media/.test(header)) collectRules(blocks(body), true);
-    else if (!header.startsWith('@')) styleRules.push({ selectors: header.split(',').map((part) => part.trim()), body, conditional });
+    if (header.startsWith('@media')) collect(blocks(body), true);
+    else if (!header.startsWith('@')) rules.push({ selectors: header.split(',').map(s => s.trim()), body, conditional });
   }
 }
-collectRules(cssBlocks);
-const rule = (selector) => styleRules.filter(({ selectors, conditional }) => !conditional && selectors.includes(selector))
-  .map(({ body }) => body).join(';');
+collect(cssBlocks);
+const rule = selector => rules.filter(r => !r.conditional && r.selectors.includes(selector)).map(r => r.body).join(';');
 const property = (body, name) => [...body.matchAll(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, 'g'))].at(-1)?.[1]?.trim() ?? '';
 const value = (selector, name) => property(rule(selector), name);
-const animation = (selector) => value(selector, 'animation');
-function keyframes(name) {
-  const body = cssBlocks.find(({ header }) => header === `@keyframes ${name}`)?.body ?? '';
-  return blocks(body).flatMap(({ header, body }) => header.split(',').map((time) => ({ at: parseFloat(time), body })))
-    .sort((a, b) => a.at - b.at);
+const animation = selector => value(selector, 'animation');
+const frames = name => blocks(cssBlocks.find(b => b.header === `@keyframes ${name}`)?.body ?? '').flatMap(b => b.header.split(',').map(at => ({ at: parseFloat(at), body: b.body })));
+const transformAt = (name, at) => property(frames(name).find(f => f.at === at)?.body ?? '', 'transform');
+const geometry = node => Object.fromEntries(['tag', 'd', 'x', 'y', 'width', 'height', 'rx', 'stroke-width', 'stroke-linecap'].map(key => [key, key === 'tag' ? node.tag : node.attrs[key]]).filter(([, v]) => v !== undefined));
+
+// ------------------------------------------------------ shared shapes, NOT colors
+for (const expression of expressions) {
+  for (const skin of Object.keys(models)) {
+    const markup = renders[skin][expression], ownIds = ids(markup), list = nodes[skin][expression];
+    const label = list.find(n => n.attrs.role === 'img');
+    check(`${skin}/${expression}: one accessible, correctly labelled local drawing`, list.filter(n => n.attrs.role === 'img').length === 1
+      && label.attrs['aria-label'].startsWith(`NOVA ${skin === 'orb' ? 'Orb' : 'Bot'},`)
+      && label.attrs['aria-label'].endsWith(`— ${expression}`) && label.attrs['data-expression'] === expression
+      && !/<img|<image|<script|https?:/.test(markup));
+    check(`${skin}/${expression}: every gradient/filter is unique and resolves locally`, ownIds.length === new Set(ownIds).size && references(markup).every(id => ownIds.includes(id)));
+    check(`${skin}/${expression}: actual activity and expression have separate handles`, label.attrs['data-activity'] === expression
+      && has(label, `expression-${expression}`) && has(label, `activity-${expression}`));
+  }
+  for (const shape of ['open', 'smile', 'wink', 'sleep', 'thought']) {
+    const orb = findAll('orb', `avatar-eye-${shape}`, expression), bot = findAll('bot', `avatar-eye-${shape}`, expression);
+    check(`${expression}: ${shape} eye geometry is exactly shared`, orb.length === 2 && bot.length === 2
+      && JSON.stringify(orb.map(geometry)) === JSON.stringify(bot.map(geometry)));
+  }
+  check(`${expression}: both use the same seven-bar waveform`, JSON.stringify(findAll('orb', 'avatar-wave-bar', expression).map(n => geometry(n.children[0])))
+    === JSON.stringify(findAll('bot', 'avatar-wave-bar', expression).map(n => geometry(n.children[0]))) && findAll('orb', 'avatar-wave-bar', expression).length === 7);
+  check(`${expression}: the Orb's SVG contains no ice-blue paint or eye-glow filter`, !/#(?:D0F0FF|B7E6FF|A8DBFA|BAE7FF|80B8FF|76A7FF)|eye-glow/i.test(renders.orb[expression]));
 }
-const transformAt = (frames, at) => property(frames.find((frame) => frame.at === at)?.body ?? '', 'transform');
-const poseRules = styleRules.filter(({ selectors }) => selectors.some((selector) => /\.(?:eye-|eyes-|robot-eye)/.test(selector)));
+const orbEyePaint = nodes.orb.neutral.find(n => n.attrs.id?.endsWith('-eye'));
+const botEyePaint = nodes.bot.neutral.find(n => n.attrs.id?.endsWith('-eye'));
+check('Orb keeps its original centered charcoal radial well', orbEyePaint.tag === 'radialGradient' && orbEyePaint.attrs.cx === '.5' && orbEyePaint.attrs.cy === '.5'
+  && orbEyePaint.children.map(n => n.attrs['stop-color']).join(',') === '#161616,#1a1a1a');
+check('Bot keeps its existing icy linear eye paint', botEyePaint.tag === 'linearGradient'
+  && botEyePaint.children.map(n => n.attrs['stop-color']).join(',') === '#D0F0FF,#B7E6FF,#A8DBFA');
+check('Orb curves and waveform stay charcoal, never inherit blue', value('.nova-orb', '--avatar-eye-line') === 'var(--eye-color, #1a1a1a)'
+  && value('.nova-orb', '--avatar-wave-color') === 'var(--eye-color, #1a1a1a)');
+check('Orb rays, Zs and rings keep their warm amber paint', value('.nova-orb', '--avatar-face-accent') === '#ff6a1a' && value('.nova-orb', '--avatar-surprise-color') === '#ff6a1a');
+check('Bot curves, waveform and indicators retain their own blues', value('.nova-bot', '--avatar-eye-line') === '#bae7ff' && value('.nova-bot', '--avatar-wave-color') === '#b7e6ff'
+  && value('.nova-bot', '--avatar-face-accent') === '#80b8ff' && value('.nova-bot', '--avatar-surprise-color') === '#76a7ff');
+check('Orb eye shades retain existing listening-color variables', value('.avatar-eye-shade', 'stop-color') === 'var(--eye-shadow, #161616)'
+  && value('.avatar-eye-surface', 'stop-color') === 'var(--eye-color, #1a1a1a)' && value('.is-listening', '--eye-color') === '#222');
 
-// ---------------------------------------------------------------- SVG & symmetry
-check('renders an accessible SVG with lowercase aria-label', svg?.tag === 'svg' && svg.attrs.role === 'img'
-  && svg.attrs['aria-label']?.startsWith('NOVA,')
-  && Object.keys(svg.attrs).filter((name) => /^aria-/i.test(name)).every((name) => name === name.toLowerCase()));
-check('keeps the mouthless orb body and bloom', byClass('blob-shape').length === 1 && byClass('orb-bloom').length === 1 && !/mouth/i.test(markup));
-const arcs = nodes(svg).filter((node) => node.tag === 'path' && node.attrs.stroke && !hasClass(node, 'blob-shape'));
-check('the orb carries one rim light and no chin or jaw line', arcs.length === 1
-  && arcs[0].attrs.stroke === '#FFFFFF' && arcs[0].attrs.d.startsWith('M217 76') && !/C6AD92/i.test(markup));
-check('has exactly two named eyes', eyeGroups.length === 2 && hasClass(eyeGroups[0], 'robot-eye-left') && hasClass(eyeGroups[1], 'robot-eye-right'));
-check('both base eyes restore the SVG capsule silhouette with semicircular ends', irises.length === 2 && irises.every((node) =>
-  node.tag === 'rect' && near(Number(node.attrs.rx), Number(node.attrs.width) / 2)
-  && near(Number(node.attrs.ry), Number(node.attrs.rx)) && Number(node.attrs.height) > Number(node.attrs.width)));
-check('both eyes have identical shape, paint and pose children', eyeGroups.length === 2
-  && JSON.stringify(eyeGroups[0].children) === JSON.stringify(eyeGroups[1].children));
-check('one shared gaze > blink > voice hierarchy contains both eyes', byClass('eyes-gaze').length === 1
-  && byClass('eyes-blink').length === 1 && byClass('eyes-voice').length === 1
-  && gaze?.children[0] === blink && blink?.children[0] === voice
-  && voice?.children.length === 2 && voice.children.every((node) => hasClass(node, 'robot-eye')));
-check('each eye has one identical local scale containing capsule and crescent', eyeGroups.length === 2 && eyeGroups.every((node) =>
-  node.children.length === 1 && hasClass(node.children[0], 'eye-scale') && node.children[0].children.length === 2));
-check('no pupil, gleam, lid, drift or tilt layers remain', !/eye-spark|eye-lid|eye-drift|eye-tilt/.test(markup + cssCode));
-check('no eye uses a rotation, skew, stroke or CSS border', eyeGroups.length === 2
-  && nodes(voice).every((node) => !/rotate|skew/.test(node.attrs?.transform ?? '') && !node.attrs?.stroke)
-  && poseRules.every(({ body }) => !/rotate|skew|(?:^|;)\s*(?:border|perspective)/.test(body)));
-check('no side-specific, staggered or nth-child eye styles', poseRules.every(({ selectors, body }) =>
-  selectors.every((selector) => !/robot-eye-(?:left|right)|nth-|first-child|last-child/.test(selector))
-  && !/animation-delay|--eye-blink/.test(body)));
-check('local eye pivot is fixed at zero in view-box coordinates', value('.eye-scale', 'transform-box') === 'view-box'
-  && value('.eye-scale', 'transform-origin') === '0 0');
+// ------------------------------------------------------ original Orb body/layout
+const orbSvg = find('orb', 'robot-avatar');
+const orbPath = find('orb', 'blob-shape');
+const orbSize = parseFloat(value('.avatar-container', '--avatar-size'));
+const orbUnit = orbSize / 280;
+const eyeScale = 42 * 280 / 160 / 78;
+const orbEyes = findAll('orb', 'avatar-eye-position');
+check('Orb keeps its original 280-square SVG and responsive 188px default', orbSvg.attrs.viewBox === '0 0 280 280' && orbSize === 188
+  && value('.robot-avatar', 'width') === 'var(--avatar-size, 160px)' && value('.robot-avatar', 'height') === 'var(--avatar-size, 160px)');
+check('Orb outline is unchanged, not replaced by the Bot helmet', orbPath.attrs.d === 'M141 29C202 29 251 77 251 139C251 199 207 247 146 251C83 254 31 208 29 146C27 84 74 32 134 29C136 29 139 29 141 29Z'
+  && !find('orb', 'bot-head') && !find('orb', 'bot-face'));
+const surface = nodes.orb.neutral.find(n => n.attrs.id?.endsWith('-orbSurface'));
+check('Orb surface colors and lighting geometry are unchanged', surface.attrs.gradientTransform === 'matrix(145 164 -153 135 93 76)'
+  && surface.children.map(n => n.attrs['stop-color']).join(',') === '#FFFDF9,#FFF8EF,#F2E5D5,#D8C4AE');
+check('Orb retains its bloom, highlight and single white rim arc', find('orb', 'orb-bloom').attrs.r === '106'
+  && find('orb', 'orb-sheen').attrs.opacity === '.72' && orbSvg.children.filter(n => n.attrs.stroke === '#FFFFFF' && n.tag === 'path').length === 1);
+check('Orb height and eye centers stay familiar while capsules become slimmer', orbEyes.map(n => n.attrs.transform).join('|') === `translate(99.75 105) scale(${eyeScale})|translate(180.25 105) scale(${eyeScale})`
+  && near(78 * eyeScale * orbUnit, 42 * orbSize / 160));
+check('Orb uses the Bot 31:78 pill ratio with semicircular caps', findAll('orb', 'avatar-eye-open').every(n => n.attrs.width === '31' && n.attrs.height === '78' && n.attrs.rx === '15.5'));
+check('Orb stays front-facing: no eye rotation, skew or perspective', orbEyes.every(n => !/rotate|skew|perspective/.test(n.attrs.transform)));
+check('Orb eye pair stays horizontally centered and in the upper half', near((99.75 + 180.25) / 2, 140) && 105 < 140);
+check('Orb eye margins still clear the blob edges', (99.75 - 15.5 * eyeScale - 29) * orbUnit > 20
+  && near(99.75 - 15.5 * eyeScale - 29, 251 - (180.25 + 15.5 * eyeScale)));
+check('Orb waveform stays centered and contains no eyes in its own layer', find('orb', 'avatar-waveform').attrs.transform === 'translate(140 130) scale(.85)'
+  && !all(find('orb', 'avatar-waveform')).some(n => has(n, 'avatar-eye')));
+check('Orb halo and listening ring use the original blob contour', find('orb', 'avatar-idle-glow').attrs.d === orbPath.attrs.d
+  && find('orb', 'avatar-listen-ring').attrs.d === orbPath.attrs.d);
+check('Orb hover target does not bob with the inner drawing', value('.nova-orb', 'position') === 'relative'
+  && value('.nova-orb', 'width') === 'var(--avatar-size, 188px)' && !animation('.nova-orb'));
+check('Main avatar layout and backlight keep their coupled dimensions', value('.avatar-container', 'width') === 'calc(var(--avatar-size) + 98px)'
+  && value('.avatar-container', 'height') === 'calc(var(--avatar-size) + 46px)' && value('.avatar-backlight', 'width') === 'calc(var(--avatar-size) * 1.71875)');
 
-// ---------------------------------------------------------------- true CSS-pixel geometry
-const viewBox = svg?.attrs.viewBox?.split(' ').map(Number) ?? [];
-const boxSize = parseFloat(value('.avatar-container', '--avatar-size'));
-// The face is authored at 160px and the stylesheet picks the box, so every pixel pin here
-// is a ratio of the box: growing the orb has to grow the features by exactly the same factor.
-const grow = boxSize / 160;
-const unit = boxSize / viewBox[2];
-const eyes = eyeGroups.map((node, i) => {
-  const match = /^translate\(([-\d.]+) ([-\d.]+)\) scale\(([\d.]+)\)$/.exec(node.attrs.transform ?? '');
-  const shape = irises[i]?.attrs ?? {};
-  const scale = match ? +match[3] : NaN;
-  return {
-    scale,
-    x: ((match ? +match[1] : NaN) + (Number(shape.x) + Number(shape.width) / 2) * scale) * unit,
-    y: ((match ? +match[2] : NaN) + (Number(shape.y) + Number(shape.height) / 2) * scale) * unit,
-    w: Number(shape.width) * scale * unit,
-    h: Number(shape.height) * scale * unit,
-  };
-});
-const [left = {}, right = {}] = eyes;
-const orbWidth = boxSize * 222 / 280;
-const innerGap = right.x - right.w / 2 - (left.x + left.w / 2);
-const margins = [left.x - left.w / 2 - 29 * unit, 251 * unit - (right.x + right.w / 2)];
-check('default avatar is 188px on the unchanged 280-square viewBox', boxSize === 188 && viewBox.join(' ') === '0 0 280 280');
-check('the box is derived from the orb, not written out twice', value('.avatar-container', 'width') === 'calc(var(--avatar-size) + 98px)'
-  && value('.avatar-container', 'height') === 'calc(var(--avatar-size) + 46px)');
-check('SVG CSS box inherits the same size in both dimensions', value('.robot-avatar', 'width') === 'var(--avatar-size, 160px)'
-  && value('.robot-avatar', 'height') === 'var(--avatar-size, 160px)');
-check('both capsules keep the 28 × 42 proportion as the box grows', eyes.length === 2
-  && eyes.every((eye) => near(eye.w, 28 * grow) && near(eye.h, 42 * grow)),
-  eyes.map((eye) => `${eye.w}×${eye.h}px at ${boxSize}px, from 28×42 at 160px`).join(' / '));
-check('conversion from local pixels to SVG units is uniform', eyes.length === 2 && eyes.every((eye) => near(eye.scale, 280 / 160)));
-check('capsule centers stay at local zero, not bounding-box dependent', irises.length === 2 && irises.every(({ attrs: shape }) =>
-  near(Number(shape.x) + Number(shape.width) / 2, 0) && near(Number(shape.y) + Number(shape.height) / 2, 0)));
-check('pair has an 18px inner gap at the design size', near(innerGap, 18 * grow), `${innerGap}px at ${boxSize}px`);
-check('pair is perfectly centered with matching vertical centers', near((left.x + right.x) / 2, boxSize / 2) && near(left.y, right.y));
-check('eyes sit at y=60px at the design size and in the upper half of any box', eyes.length === 2
-  && eyes.every((eye) => near(eye.y, 60 * grow) && eye.y < boxSize / 2));
-check('equal cheek margins keep the pair away from the rim', near(margins[0], margins[1]) && Math.min(...margins) >= orbWidth * .15);
-check('blink pivot is the shared pair center, not either eye', blink?.attrs.style === 'transform-origin:140px 105px'
-  && value('.eyes-blink', 'transform-box') === 'view-box');
+// ------------------------------------------------------ preserved Bot silhouette
+const botHead = find('bot', 'bot-head'), botFace = find('bot', 'bot-face');
+check('Bot retains its wide reference helmet and curved glass', botHead.attrs.d.startsWith('M142 515C148 422') && botFace.attrs.d.startsWith('M267 406C305 382')
+  && botHead.attrs.fill.endsWith('-ceramic)') && botFace.attrs.fill.endsWith('-glass)'));
+check('Bot keeps its body, narrow neck, sparkle and subtle seam', ['bot-body', 'bot-neck', 'bot-sparkle', 'bot-body-seam'].every(name => find('bot', name)));
+check('Bot eyes retain their exact reference positions and tilt', findAll('bot', 'avatar-eye-position').map(n => n.attrs.transform).join('|') === 'translate(327 523) rotate(-9)|translate(453 503) rotate(-9)');
+check('Bot waveform retains its reference plane and placement', find('bot', 'avatar-waveform').attrs.transform === 'translate(390 513) rotate(-9)');
+check('Bot near/far ear layering and recessed ring are unchanged', renders.bot.neutral.indexOf('bot-ear-right') < renders.bot.neutral.indexOf('class="bot-head"')
+  && renders.bot.neutral.indexOf('bot-ear-left') > renders.bot.neutral.indexOf('class="bot-head"') && find('bot', 'bot-ear-ring').attrs.ry === '53');
+check('Bot floor is a separate SVG plane, never carried up by its float', nodes.bot.neutral.filter(n => n.tag === 'svg').map(n => n.attrs.class).join(',') === 'bot-shadow-drawing,bot-drawing'
+  && value('.bot-shadow-drawing', 'position') === 'absolute' && !animation('.bot-shadow-drawing'));
 
-// ---------------------------------------------------------------- neutral radial well
-const well = nodes().find((node) => node.attrs?.id === 'eyeWell');
-const stops = well?.children ?? [];
-const shades = stops.map((node) => node.attrs['stop-color']);
-check('eye well is a centered radial gradient, not the old linear fill', well?.tag === 'radialGradient'
-  && well.attrs.cx === '.5' && well.attrs.cy === '.5' && well.attrs.r === '.5' && !well.attrs.gradientTransform);
-check('base eye surface is #1a1a1a with a subtle #161616 center', shades.join(' ') === '#161616 #1a1a1a'
-  && stops[0]?.attrs.offset === '0' && stops[1]?.attrs.offset === '1');
-check('both capsules and crescents share that same fill', [...irises, ...crescents].length === 4
-  && [...irises, ...crescents].every((node) => node.attrs.fill === 'url(#eyeWell)'));
-check('gradient defaults agree with rendered neutral colors', value('.eye-surface', 'stop-color') === 'var(--eye-color, #1a1a1a)'
-  && value('.eye-shade', 'stop-color') === 'var(--eye-shadow, #161616)');
-check('no old independent eye glow filter remains', poseRules.every(({ selectors, body }) =>
-  selectors.includes('.eyes-voice') || !/drop-shadow|url\(/.test(body)));
-
-// ---------------------------------------------------------------- state transitions & idle
-for (const [selector, prop] of [['.avatar-figure', 'transform'], ['.eyes-gaze', 'transform'], ['.eye-scale', 'transform'],
-  ['.eye-iris', 'opacity'], ['.eye-crescent', 'opacity'], ['.robot-eye', 'opacity'], ['.eye-surface', 'stop-color'], ['.eye-shade', 'stop-color']]) {
-  check(`${selector}: state transitions use 400ms ease-in-out`, value(selector, 'transition') === `${prop} 400ms ease-in-out`);
+// ------------------------------------------------------ shared poses and layers
+for (const skin of Object.keys(models)) {
+  const eyes = findAll(skin, 'avatar-eye-position');
+  check(`${skin}: independent pose/blink layers keep fixed local eye origins`, eyes.length === 2 && eyes.every(n => has(n.children[0], 'avatar-eye-reveal')
+    && has(n.children[0].children[0], 'avatar-eye-blink') && has(n.children[0].children[0].children[0], 'avatar-eye'))
+    && value('.avatar-eye', 'transform-origin') === '0 0' && value('.avatar-eye-blink', 'transform-origin') === '0 0');
+  check(`${skin}: both eyes use one gaze and one speech-light layer`, findAll(skin, 'avatar-eyes').length === 1 && findAll(skin, 'avatar-eye-voice').length === 1);
+  check(`${skin}: authored seven-bar heights match the reference`, findAll(skin, 'avatar-wave-bar').map(n => n.children[0].attrs.height).join(',') === '28,52,78,102,74,48,26');
 }
-const avatarSelectors = /(?:^|\.)(?:robot-avatar|avatar-figure|avatar-backlight|avatar-container|listen-ring|eyes-gaze|eyes-blink|eyes-voice|eye-scale|eye-iris|eye-crescent|eye-surface|eye-shade|robot-eye)$/;
-const transitionDurations = styleRules.filter(({ selectors }) => selectors.some((selector) => avatarSelectors.test(selector)))
-  .flatMap(({ body }) => [...body.matchAll(/transition:\s*([^;}]+)/g)].map((match) => match[1]))
-  .flatMap((declaration) => [...declaration.matchAll(/\d+(?:\.\d+)?m?s/g)].map((match) => match[0]));
-check('every avatar state change eases over 400ms, never a snap', transitionDurations.length >= 10
-  && transitionDurations.every((duration) => duration === '400ms'));
-check('body pose and animated rhythm are on separate elements', /rotateY\(var\(--figure-y, 0deg\)\) scale\(var\(--figure-scale, 1\)\)/.test(value('.avatar-figure', 'transform'))
-  && !value('.avatar-figure', 'animation') && !value('.robot-avatar', '--figure-scale'));
-check('body never rotates on Z or applies skew/perspective, in the rules or in the motion', styleRules.filter(({ selectors }) => selectors.some((selector) => /\.(?:avatar-figure|robot-avatar|avatar-container)/.test(selector)))
-  .every(({ body }) => !/rotate\(|rotateZ|skew|perspective/.test(body))
-  && ['orb-float', 'orb-sway', 'orb-squirm', 'bloom-breathe', 'sheen-drift'].every((name) => keyframes(name).length
-    && keyframes(name).every(({ body }) => !/rotate\(|rotateZ|skew|perspective|translate3d/.test(body)))
-  && Math.max(...keyframes('orb-float').map(({ body }) => Math.abs(parseFloat(/rotateY\((-?[\d.]+)deg\)/.exec(property(body, 'transform'))?.[1] ?? 0)))) <= 1.4);
-const entranceFrames = blocks(cssBlocks.find(({ header }) => header === '@keyframes fade-in')?.body ?? '');
-check('entrance: 400ms opacity-only fade cannot overshoot the speaking scale', animation('.avatar-container') === 'fade-in .4s ease-in-out both'
-  && entranceFrames.length === 2 && entranceFrames.every(({ body }) => !property(body, 'transform'))
-  && entranceFrames.map(({ body }) => property(body, 'opacity')).join(' ') === '0 1');
-check('idle: float repeats every 3s with ease-in-out', animation('.robot-avatar') === 'orb-float 3s ease-in-out infinite');
-const floatFrames = keyframes('orb-float');
-check('idle: one closed 3s cycle rises 10px and returns to the frame it started on', floatFrames.length === 5
-  && transformAt(floatFrames, 0) === 'translateY(0) scale(1, 1) rotateY(0deg)'
-  && transformAt(floatFrames, 25) === 'translateY(-5px) scale(.994, 1.012) rotateY(1.4deg)'
-  && transformAt(floatFrames, 50) === 'translateY(-10px) scale(1, 1.02) rotateY(0deg)'
-  && transformAt(floatFrames, 100) === transformAt(floatFrames, 0));
-check('idle: the breath stretches on the way up and squashes on the way down',
-  parseFloat(/scale\([\d.]+, ?([\d.]+)\)/.exec(transformAt(floatFrames, 50))?.[1]) > 1
-  && parseFloat(/scale\([\d.]+, ?([\d.]+)\)/.exec(transformAt(floatFrames, 25))?.[1]) < 1.02);
-const floatTravel = Math.max(...floatFrames.map(({ body }) => Math.abs(parseFloat(/translateY\((-?[\d.]+)px\)/.exec(property(body, 'transform'))?.[1] ?? 0))));
-check('idle: the travel stays inside the 13px the listen ring leaves it', floatTravel === 10 && 26 / 2 > floatTravel);
-check('idle: one shared blink every 4s', animation('.eyes-blink') === 'eye-blink 4s ease-in-out infinite');
-const blinkFrames = keyframes('eye-blink');
-const closed = blinkFrames.find((frame) => frame.at === 97.5);
-const closedScale = Number(/scaleY\(([\d.]+)\)/.exec(property(closed?.body ?? '', 'transform'))?.[1]);
-check('blink: the capsule closes to a 4px slit at the design size, both eyes together', near(left.h * closedScale, 4 * grow)
-  && [0, 95, 100].every((at) => transformAt(blinkFrames, at) === 'scaleY(1)'));
-check('blink: close/open takes exactly 200ms, centered in that window', blinkFrames.map((frame) => frame.at).join(' ') === '0 95 97.5 100'
-  && near((100 - 95) / 100 * 4000, 200) && near((97.5 - 95) / 100 * 4000, 100));
-check('eye animation never introduces rotation or skew', ['eye-blink', 'eyes-thinking'].every((name) => keyframes(name).length
-  && keyframes(name).every(({ body }) => !/rotate|skew/.test(body))));
+check('Happy/waking use the same round-ended arches on either palette', value('.expression-happy .avatar-eye-open', 'opacity') === '0'
+  && value('.expression-happy .avatar-eye-smile', 'opacity') === '1' && value('.expression-waking .avatar-eye-smile', 'opacity') === '1');
+check('Wink changes only the right eye to the diagonal lid', value('.expression-wink .avatar-eye-right .avatar-eye-open', 'opacity') === '0'
+  && value('.expression-wink .avatar-eye-right .avatar-eye-wink', 'opacity') === '1' && !rule('.expression-wink .avatar-eye-left .avatar-eye-open'));
+check('Thinking folds the left eye, leaving the other open', value('.expression-thinking .avatar-eye-left .avatar-eye-open', 'opacity') === '0'
+  && value('.expression-thinking .avatar-eye-left .avatar-eye-thought', 'opacity') === '1' && !rule('.expression-thinking .avatar-eye-right .avatar-eye-open'));
+check('Sleepy shows closed curves and vector Zs on both characters', value('.expression-sleepy .avatar-eye-open', 'opacity') === '0'
+  && value('.expression-sleepy .avatar-eye-sleep', 'opacity') === '1' && value('.expression-sleepy .avatar-sleep-marks', 'opacity') === '1');
+check('Surprised enlarges eyes to 130% and exposes three rays', value('.expression-surprised .avatar-eye', 'transform') === 'scale(1.3)'
+  && value('.expression-surprised .avatar-surprise-marks', 'opacity') === '1' && find('orb', 'avatar-surprise-marks').children[0].attrs.d === 'm-29 5-10-18M0 0v-24M29 5l10-18');
+check('Speaking replaces the eye layer with the waveform on both models', value('.expression-speaking .avatar-eyes', 'opacity') === '0'
+  && value('.expression-speaking .avatar-waveform', 'opacity') === '1');
+check('Waveform energy and light consume the existing live speech pulse', value('.avatar-wave-energy', 'transform') === 'scaleY(calc(.6 + clamp(0, var(--audio-pulse, 0), 1) * .4))'
+  && value('.expression-speaking .avatar-waveform', 'filter') === 'brightness(calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .5))');
+check('Listening and idle share their ring/eye rhythm, not their color', value('.expression-listening .avatar-eye', 'transform') === 'scale(1.15)'
+  && animation('.expression-listening .avatar-listen-ring') === 'avatar-listening-ring 1.5s ease-in-out infinite'
+  && animation('.expression-idle .avatar-idle-glow') === 'avatar-idle-glow 4.8s ease-in-out infinite');
+check('Offline dimness cannot paint an extra capsule over wink/sleepy lids', value('.is-offline .avatar-eye', 'opacity') === '.5'
+  && value('.is-offline .avatar-eye', 'transform') === 'scaleY(.9)' && !rule('.is-offline .avatar-eye-open'));
 
-// ---------------------------------------------------------------- listening
-check('listening: both eyes scale to exactly 115%', value('.is-listening', '--eye-sx') === '1.15' && value('.is-listening', '--eye-sy') === '1.15');
-check('listening: eye background brightens to #222', value('.is-listening', '--eye-color') === '#222' && value('.is-listening', '--eye-shadow') === '#1e1e1e');
-check('listening: body uses rotateY(5deg), never a Z tilt', value('.is-listening .avatar-figure', '--figure-y') === '5deg');
-check('listening: no perspective can make the two eyes unequal', !/\bperspective\s*:|perspective\(/.test(cssCode));
-check('listening: soft orange pulse ring repeats every 1.5s', animation('.is-listening .listen-ring') === 'listen-pulse 1.5s ease-out infinite'
-  && /rgba\(255, 106, 26, \.45\)/.test(value('.listen-ring', 'border')));
-const ringFrames = keyframes('listen-pulse');
-check('listening: ring expands outward and fades fully', transformAt(ringFrames, 0).endsWith('scale(1)')
-  && transformAt(ringFrames, 100).endsWith('scale(1.5)') && property(ringFrames.at(-1)?.body ?? '', 'opacity') === '0');
-
-// ---------------------------------------------------------------- thinking
-check('thinking: shared gaze uses a 2.8s ease-in-out cycle', animation('.is-thinking .eyes-gaze') === 'eyes-thinking 2.8s ease-in-out infinite');
-const shift = parseFloat(property(gaze?.attrs.style ?? '', '--eye-shift')) * unit;
-check('thinking: gaze displacement is 6 CSS pixels at the design size', near(shift, 6 * grow), `${shift}px at ${boxSize}px`);
-const gazeVars = [...new Set(keyframes('eyes-thinking').flatMap(({ body }) => [...body.matchAll(/var\((--[\w-]+)\)/g)].map((match) => match[1])))];
-check('thinking: the keyframes read exactly the variable the gaze element defines', gazeVars.length === 1
-  && Boolean(gazeVars[0]) && (gaze?.attrs.style ?? '').includes(`${gazeVars[0]}:`) && Number.isFinite(shift) && shift > 0);
-const thinkingFrames = keyframes('eyes-thinking');
-const leftFrames = thinkingFrames.filter(({ body }) => property(body, 'transform') === 'translateX(calc(-1 * var(--eye-shift)))');
-const rightFrames = thinkingFrames.filter(({ body }) => property(body, 'transform') === 'translateX(var(--eye-shift))');
-check('thinking: both sides pause for exactly 800ms', leftFrames.length === 2 && rightFrames.length === 2
-  && near((leftFrames[1].at - leftFrames[0].at) * 28, 800)
-  && near((rightFrames[1].at - rightFrames[0].at) * 28, 800));
-check('thinking: smooth 400ms moves left, right and home', thinkingFrames.length === 6
-  && near(leftFrames[0]?.at * 28, 400)
-  && near((rightFrames[0]?.at - leftFrames[1]?.at) * 28, 400)
-  && near((100 - rightFrames[1]?.at) * 28, 400)
-  && transformAt(thinkingFrames, 0) === 'translateX(0)' && transformAt(thinkingFrames, 100) === 'translateX(0)');
-check('thinking: body shrinks to 97%', value('.is-thinking .avatar-figure', '--figure-scale') === '.97');
-check('thinking: the same ±3px hold, now on a shallow arc, with no squint or rotation', animation('.is-thinking .robot-avatar') === 'orb-sway 3s ease-in-out infinite'
-  && transformAt(keyframes('orb-sway'), 0) === 'translateX(-3px) translateY(0) scale(1, 1)'
-  && transformAt(keyframes('orb-sway'), 50) === 'translateX(3px) translateY(0) scale(1, 1)'
-  && transformAt(keyframes('orb-sway'), 25) === 'translateX(-1px) translateY(-3px) scale(1.008, .994)'
-  && keyframes('orb-sway').length === 5 && !value('.is-thinking', '--eye-sy'));
-
-// ---------------------------------------------------------------- speaking
-check('speaking: brightness reads live boundary data on the shared pair', value('.is-speaking .eyes-voice', 'filter') === 'brightness(calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .8))');
-check('speaking: light has no fake looping animation or slow state transition', !animation('.is-speaking .eyes-voice') && !value('.eyes-voice', 'transition'));
-check('speaking: scale is clamped strictly to 100–104%', value('.is-speaking .avatar-figure', '--figure-scale') === 'calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .04)');
-check('speaking: quick gentle Y bounces never add extra scale', animation('.is-speaking .robot-avatar') === 'orb-word-bounce .5s ease-in-out infinite'
-  && transformAt(keyframes('orb-word-bounce'), 0) === 'translateY(0)' && transformAt(keyframes('orb-word-bounce'), 50) === 'translateY(-3px)'
-  && keyframes('orb-word-bounce').every(({ body }) => !/scale|rotate/.test(body)));
-check('speaking: retains the shared blink, never rapid or independent blinks', !/eye-blink-rapid/.test(cssCode)
-  && !animation('.is-speaking .eyes-blink') && !value('.is-speaking', '--eye-sx'));
-
-// ---------------------------------------------------------------- happy / wake
-check('happy/wake: both eyes have identical filled SVG crescents', crescents.length === 2 && crescents.every((node) => node.tag === 'path')
-  && crescents[0].attrs.d === crescents[1].attrs.d);
-// These mirrored cubic curves have extrema x=±14, y=±21: the same local eye
-// bounds before the requested scaleX(1.2)/scaleY(.4) pose is applied.
-check('crescent geometry is symmetric within the original 28×42 bounds', crescents.every((node) =>
-  node.attrs.d === 'M-14 21C-14 -35 14 -35 14 21C8 -11 -8 -11 -14 21Z'));
-check('crescents are hidden in the base state', value('.eye-crescent', 'opacity') === '0');
-for (const state of ['is-happy', 'is-waking']) {
-  check(`${state}: wide crescents scaleX(1.2), scaleY(.4)`, value(`.${state}`, '--eye-sx') === '1.2' && value(`.${state}`, '--eye-sy') === '.4');
-  check(`${state}: iris crossfades to crescent without a second blink`, value(`.${state} .eye-iris`, 'opacity') === '0'
-    && value(`.${state} .eye-crescent`, 'opacity') === '1' && animation(`.${state} .eyes-blink`) === 'none');
-  check(`${state}: one 800ms double bounce, not infinite hops`, animation(`.${state} .robot-avatar`) === 'orb-double-bounce .8s ease-in-out both');
+// ------------------------------------------------------ motion invariants
+check('Idle float, breathing and Y turn are shared exactly', animation('.robot-avatar') === 'orb-float 3s ease-in-out infinite'
+  && animation('.bot-drawing') === animation('.robot-avatar'));
+check('Float rises ten pixels and breathes to 102%, with a seamless loop', transformAt('orb-float', 50) === 'translateY(-10px) scale(1, 1.02) rotateY(0deg)'
+  && transformAt('orb-float', 0) === transformAt('orb-float', 100));
+for (const name of ['orb-float', 'orb-sway', 'orb-word-bounce', 'orb-double-bounce', 'orb-sad-sway']) {
+  check(`${name}: no sideways rotation, perspective or skew distorts either face`, frames(name).length > 0 && frames(name).every(f => !/rotate\(|rotateZ|skew|perspective/.test(f.body)));
 }
-const jumpFrames = keyframes('orb-double-bounce');
-check('double bounce: exactly two peaks with grounded landings', jumpFrames.length === 6
-  && [0, 40, 80, 100].every((at) => transformAt(jumpFrames, at) === 'translateY(0)')
-  && transformAt(jumpFrames, 20) === 'translateY(-12px)' && transformAt(jumpFrames, 60) === 'translateY(-6px)');
-check('offline: both eyes dim and droop equally, preserving tall capsules', value('.is-offline', '--eye-sy') === '.9'
-  && value('.is-offline .robot-eye', 'opacity') === '.5' && left.h * .9 > left.w);
-check('offline: slow lateral sway never tilts the eyes', animation('.is-offline .robot-avatar') === 'orb-sad-sway 4s ease-in-out infinite'
-  && keyframes('orb-sad-sway').length && keyframes('orb-sad-sway').every(({ body }) => !/rotate|skew/.test(body)));
-
-// ---------------------------------------------------------------- coupled sizing, including compact heights
-check('ring uses the visible 222/280 orb plus clearance, not SVG box width', value('.listen-ring', 'width') === 'calc(var(--avatar-size) * 222 / 280 + 26px)'
-  && value('.listen-ring', 'height') === value('.listen-ring', 'width'));
-check('backlight scales with the same avatar size', value('.avatar-backlight', 'width') === 'calc(var(--avatar-size) * 1.71875)'
-  && value('.avatar-backlight', 'height') === value('.avatar-backlight', 'width'));
-const sizes = styleRules.filter(({ selectors }) => selectors.includes('.avatar-container'))
-  .map(({ body }) => parseFloat(property(body, '--avatar-size'))).filter(Number.isFinite);
-check('compact sizes reuse the coupled variable, no stale SVG width overrides', sizes.join(' ') === '188 164 176 164 116 100'
-  && styleRules.filter(({ selectors, body }) => selectors.includes('.robot-avatar') && property(body, 'width')).length === 1);
-for (const size of sizes) {
-  const orb = size * 222 / 280, ring = orb + 26, glow = size * 1.71875;
-  check(`${size}px: ring clears jump travel and the 104% speaking bounce`, (ring - orb) / 2 > 12 && (ring - orb * 1.04) / 2 > 3 * 1.04,
-    `orb ${orb.toFixed(2)}px, ring ${ring.toFixed(2)}px`);
-  check(`${size}px: glow is wider than the ring`, glow >= ring, `${glow.toFixed(2)}px glow`);
+for (const state of ['thinking', 'speaking', 'happy', 'waking', 'sleepy']) {
+  check(`${state}: Orb and Bot use the same body rhythm`, animation(`.expression-${state} .robot-avatar`) === animation(`.expression-${state} .bot-drawing`)
+    && Boolean(animation(`.expression-${state} .bot-drawing`)));
 }
-
-// ---------------------------------------------------------------- ambient motion (pass 19)
-check('the halo, the body and the sheen each run on their own clock, never in step',
-  [animation('.orb-bloom'), animation('.blob-shape'), animation('.orb-sheen'), animation('.eyes-gaze'),
-    animation('.avatar-backlight')].every((entry) => /infinite$/.test(entry))
-  && new Set([animation('.orb-bloom'), animation('.blob-shape'), animation('.orb-sheen')].map((entry) => /(\d+(?:\.\d+)?)s/.exec(entry)?.[1])).size === 3);
-check('ambient layers pivot on a fixed view-box origin, not a drifting bounding box',
-  value('.orb-bloom', 'transform-box') === 'view-box' && value('.orb-bloom', 'transform-origin') === '140px 140px'
-  && value('.blob-shape', 'transform-box') === 'view-box' && value('.blob-shape', 'transform-origin') === '140px 140px'
-  && value('.orb-sheen', 'transform-box') === 'view-box' && value('.orb-sheen', 'transform-origin') === '116px 83px');
-check('the sheen is the highlight itself, given a handle and nothing else', byClass('orb-sheen').length === 1
-  && byClass('orb-sheen')[0].tag === 'ellipse' && byClass('orb-sheen')[0].attrs.fill === 'url(#orbHighlight)'
-  && byClass('orb-sheen')[0].attrs.opacity === '.72');
-check('the aura turns with the independent rotate property, so no state transform is shadowed',
-  animation('.avatar-backlight') === 'blob-morph 13s ease-in-out infinite, aura-turn 34s linear infinite'
-  && keyframes('aura-turn').map(({ body }) => body.replace(/\s+/g, ' ').trim()).join(' ') === 'rotate: 0deg; rotate: 360deg;'
-  && !/transform|opacity|scale\(/.test(keyframes('aura-turn').map(({ body }) => body).join(' ')));
-for (const name of ['bloom-breathe', 'orb-squirm', 'sheen-drift', 'gaze-drift']) {
-  const frames = keyframes(name);
-  check(`${name}: its rest frame is the shipped static paint, and the loop closes on it`, frames.length >= 3
-    && transformAt(frames, 0) === transformAt(frames, 100)
-    && new Set(frames.flatMap(({ body }) => [...body.matchAll(/opacity: ([\d.]+)/g)].map((match) => match[1]))).size <= 3
-    && parseFloat(property(frames[0].body, 'opacity') || '1') === parseFloat(property(frames.at(-1).body, 'opacity') || '1'));
+check('A post-reply wink cannot restart the happy body jump', animation('.activity-happy .robot-avatar') === 'orb-double-bounce .8s ease-in-out both'
+  && animation('.activity-happy .bot-drawing') === animation('.activity-happy .robot-avatar'));
+check('Happy/wake have exactly two peaks and finish grounded', transformAt('orb-double-bounce', 20) === 'translateY(-12px)'
+  && transformAt('orb-double-bounce', 60) === 'translateY(-6px)' && [0,40,80,100].every(at => transformAt('orb-double-bounce', at) === 'translateY(0)'));
+check('Speaking bounce adds no scale or rotation to the actual audio pulse', transformAt('orb-word-bounce', 50) === 'translateY(-3px)'
+  && frames('orb-word-bounce').every(f => !/scale|rotate/.test(f.body)));
+check('Shared figure pose retains the 400ms easing and 100–104% audio bound', value('.avatar-figure', 'transition') === 'transform 400ms ease-in-out'
+  && value('.is-speaking .avatar-figure', '--figure-scale') === 'calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .04)' && !animation('.avatar-figure'));
+check('Listening lean and thinking/offline scale remain unchanged', value('.is-listening .avatar-figure', '--figure-y') === '5deg'
+  && value('.is-thinking .avatar-figure', '--figure-scale') === '.97' && value('.is-offline .avatar-figure', '--figure-scale') === '.95');
+check('Blink stays synchronized on a four-second, 200ms close/open cycle', animation('.avatar-eye-blink') === 'eye-blink 4s ease-in-out infinite'
+  && transformAt('eye-blink', 95) === 'scaleY(1)' && transformAt('eye-blink', 97.5) === 'scaleY(.0952380952)' && transformAt('eye-blink', 100) === 'scaleY(1)');
+for (const state of ['happy','waking','wink','sleepy','surprised','speaking']) {
+  check(`${state}: blink never collapses the expression or waveform`, animation(`.expression-${state} .avatar-eye-blink`) === 'none');
 }
-check('the idle gaze yields to thinking, which keeps its own 2.8s pose', animation('.eyes-gaze') === 'gaze-drift 9.5s ease-in-out infinite'
-  && animation('.is-thinking .eyes-gaze') === 'eyes-thinking 2.8s ease-in-out infinite'
-  && /\.eyes-gaze \{ transform: translateX\(0\); transition: transform 400ms ease-in-out; animation: gaze-drift 9\.5s ease-in-out infinite; \}/.test(cssCode));
-check('nothing idle animates a property a state owns: transform on the figure, opacity on the aura',
-  !/\.avatar-figure \{[^}]*animation/.test(cssCode) && ![...cssCode.matchAll(/@keyframes (?:bloom-breathe|orb-squirm|sheen-drift|gaze-drift|orb-float) \{[\s\S]*?\n\}/g)]
-    .some((match) => /--figure-|border-left|listen-ring/.test(match[0])));
+check('Shared gaze retains the idle and thinking rhythms', animation('.avatar-eyes') === 'gaze-drift 9.5s ease-in-out infinite'
+  && animation('.expression-thinking .avatar-eyes') === 'eyes-thinking 2.8s ease-in-out infinite');
+const thinkFrames = frames('eyes-thinking');
+const holdTimes = (sign) => thinkFrames.filter(f => property(f.body, 'transform') === (sign < 0 ? 'translateX(calc(-1 * var(--eye-shift)))' : 'translateX(var(--eye-shift))')).map(f => f.at).sort((a,b)=>a-b);
+check('Thinking holds left and right for exactly 800ms each', [-1,1].every(sign => { const times=holdTimes(sign); return times.length===2 && near((times[1]-times[0])*28,800); }));
+check('Orb gaze stays at its original six design-pixel travel', find('orb', 'avatar-eyes').attrs.style === '--eye-shift:10.5px');
+check('Orb ambient surface clocks are still independent', animation('.orb-bloom') === 'bloom-breathe 5.4s ease-in-out infinite'
+  && animation('.blob-shape') === 'orb-squirm 7.2s ease-in-out infinite' && animation('.orb-sheen') === 'sheen-drift 9.6s ease-in-out infinite'
+  && animation('.avatar-backlight') === 'blob-morph 13s ease-in-out infinite, aura-turn 34s linear infinite');
+for (const name of ['orb-squirm','bloom-breathe','sheen-drift','gaze-drift']) {
+  check(`${name}: the loop returns to its rest frame`, frames(name).length > 0 && transformAt(name,0) === transformAt(name,100));
+}
+for (const [selector, origin] of [['.orb-bloom','140px 140px'],['.blob-shape','140px 140px'],['.orb-sheen','116px 83px']]) {
+  check(`${selector}: fixed SVG origin preserves the Orb surface`, value(selector, 'transform-box') === 'view-box' && value(selector, 'transform-origin') === origin);
+}
+check('Body shadows never travel upward with a jumping Bot', value('.bot-ground-shadow', 'transform-origin') === '352px 909px'
+  && cssBlocks.filter(b => b.header.startsWith('@keyframes bot-shadow-')).every(b => !/translate|rotate/.test(b.body)));
 
-// ---------------------------------------------------------------- reduced motion & hygiene
-const reduced = cssCode.slice(cssCode.indexOf('@media (prefers-reduced-motion: reduce)'));
-check('reduced motion disables float, gaze and blink, not just their durations', /\.robot-avatar, \.eyes-gaze, \.eyes-blink\s*\{[^}]*animation: none !important; transform: none;/.test(reduced));
-check('reduced motion parks every ambient layer on its rest pose too', /\.orb-bloom, \.blob-shape, \.orb-sheen \{[^}]*animation: none !important; transform: none;/.test(reduced)
-  && /\.avatar-backlight, \.orb-sheen \{ rotate: 0deg; \}/.test(reduced));
-check('reduced motion suppresses rotation, word swell, brightness and rings', /--figure-scale: 1 !important; --figure-y: 0deg !important/.test(reduced)
-  && /\.eyes-voice\s*\{\s*filter: none !important;/.test(reduced) && /\.listen-ring\s*\{[^}]*opacity: 0;/.test(reduced));
-check('no mouth selectors or obsolete eye animations remain', !/\.mouth-|\.orb-smile|mouth-(?:glow|light)-pulse|orb-wobble|orb-happy-hop|eye-drift|eye-tilt/.test(cssCode));
+// ------------------------------------------------------ reduced motion / switching
+const reducedBlocks = cssBlocks.filter(b => b.header === '@media (prefers-reduced-motion: reduce)').flatMap(b => blocks(b.body));
+const reducedValue = (selector, name) => property(reducedBlocks.filter(b => b.header.split(',').map(s=>s.trim()).includes(selector)).map(b=>b.body).join(';'),name);
+for (const selector of ['.robot-avatar','.bot-drawing','.avatar-eyes','.avatar-eye-blink','.avatar-eye-reveal','.avatar-eye-open','.avatar-idle-glow','.avatar-listen-ring','.avatar-wave-bar rect','.avatar-surprise-marks','.avatar-sleep-marks path']) {
+  check(`${selector}: reduced motion explicitly disables animation`, reducedValue(selector,'animation') === 'none !important');
+}
+check('Reduced motion also disables real speech light and wave-energy transforms', reducedValue('.expression-speaking .avatar-waveform','filter') === 'none !important'
+  && reducedValue('.avatar-wave-energy','transform') === 'none' && reducedValue('.avatar-container .avatar-figure','transform') === 'none');
+check('Reduced motion still shows a static listening ring and readable waveform', reducedValue('.expression-listening .avatar-listen-ring','opacity') === '.4'
+  && reducedValue('.expression-speaking .avatar-wave-bar:nth-child(4) rect','transform') === 'scaleY(1)');
+for (const avatar of ['orb','bot']) {
+  const picker = await renderAvatar('AvatarSwitcher', {avatar});
+  check(`picker/${avatar}: one selected native button and two labelled choices`, (picker.match(/aria-pressed="true"/g)||[]).length === 1
+    && (picker.match(/<button/g)||[]).length === 2 && picker.includes('role="group" aria-label="Avatar style"'));
+}
+check('The Orb preview icon remains charcoal while matching the slender ratio', (await renderAvatar('AvatarSwitcher', {avatar:'orb'})).includes('width="3" height="7.55" rx="1.5" fill="#1a1a1a"'));
 
-// ---------------------------------------------------------------- real-CSS state sheet
-const STATES = [
-  ['idle', 'IDLE', '188px box · capsules scale with the box · 4s blink / 200ms · 3s float, breathe and turn'],
-  ['is-listening', 'LISTENING', '115% · #222 · rotateY(5°) · 1.5s orange ring'],
-  ['is-thinking', 'THINKING', 'shared ±6px gaze · 800ms holds · 97% sway'],
-  ['is-speaking', 'SPEAKING', 'shared word light · 100–104% · gentle quick bounce'],
-  ['is-happy', 'HAPPY', 'matching wide crescents · one double jump'],
-  ['is-listening is-waking', 'WAKE', '800ms double jump · crescents → listening'],
-  ['is-offline', 'OFFLINE', 'equal droop · half brightness · lateral sway'],
-];
-// Per-cell SVG IDs matter: otherwise url(#eyeWell) in every cell resolves to the
-// first cell's gradient, so listening's local colors never reach its own eyes.
-const cellMarkup = (label) => markup.replace(/id="([^"]+)"/g, (_, id) => `id="${id}-${label.toLowerCase()}"`)
-  .replace(/url\(#([^)]+)\)/g, (_, id) => `url(#${id}-${label.toLowerCase()})`);
+// ------------------------------------------------------ actual-CSS review gallery
+const pose = {neutral:'', happy:'is-happy', wink:'', surprised:'', thinking:'is-thinking', sleepy:'', speaking:'is-speaking', listening:'is-listening', idle:'', waking:'is-listening is-waking'};
+const notes = {neutral:'tall capsules · float and blink',happy:'matching curved eyes · double jump',wink:'one pill · one diagonal lid',surprised:'130% eyes · three rays',thinking:'one folded eye · shared gaze',sleepy:'closed curves · drifting Zs',speaking:'seven bars · live speech energy',listening:'open eyes · pulsing ring',idle:'subtle glow · ready for you'};
 const sheet = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NOVA — avatar states</title>
-    <style>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NOVA — avatar expressions</title>
+<style>
 ${css}
-      body { margin: 0; padding: 34px 26px 44px; background: #050300; }
-      .sheet-head { max-width: 1080px; margin: 0 auto 26px; }
-      .sheet-head h1 { margin: 0; color: #fff7ef; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
-      .sheet-head p { margin: 7px 0 0; color: #a38a72; font-size: 11px; line-height: 1.6; }
-      .sheet-head button { margin-top: 10px; padding: 7px 12px; color: #f2d6b8; background: transparent; border: 1px solid #5e4733; border-radius: 6px; cursor: pointer; }
-      .sheet { display: grid; gap: 14px; max-width: 1080px; margin: 0 auto; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-      .cell { display: flex; flex-direction: column; align-items: center; padding: 18px 12px 16px; border: 1px solid rgba(245, 201, 154, .12); border-radius: 10px; background: rgba(255, 247, 239, .015); }
-      .cell .avatar-container { animation: none; }
-      .cell-label { margin-top: 12px; color: #f2d6b8; font: 10px var(--mono); letter-spacing: .16em; }
-      .cell-note { margin-top: 6px; color: #8f775f; font-size: 10px; line-height: 1.5; text-align: center; }
-    </style>
-  </head>
-  <body>
-    <div class="sheet-head">
-      <h1>NOVA — avatar states</h1>
-      <p>Real stylesheet and React-rendered SVG. No microphone, model or audio is used here.
-      Speaking holds a sample pulse of .8; real NOVA receives word-boundary events instead.
-      Happy and wake jump once. Wake then settles into listening after 800ms.
-      Dimensions are measured on the 188px box (the face is authored at 160px and scales with it); compact heights scale proportionally.</p>
-      <button type="button" id="replay">Replay happy / wake</button>
-    </div>
-    <div class="sheet">
-${STATES.map(([className, label, note]) => `      <div class="cell">
-        <div class="avatar-container ${className}"${label === 'SPEAKING' ? ' style="--audio-pulse: .8"' : ''}${label === 'WAKE' ? ' id="wake-preview"' : ''}>
-          <div class="avatar-backlight" aria-hidden="true"></div>
-          <div class="listen-ring" aria-hidden="true"></div>
-          <div class="avatar-figure">${cellMarkup(label)}</div>
-        </div>
-        <div class="cell-label">${label}</div>
-        <div class="cell-note">${note}</div>
-      </div>`).join('\n')}
-    </div>
-    <script>
-      const happy = document.querySelector('.is-happy');
-      const wake = document.getElementById('wake-preview');
-      let wakeTimer;
-      function replay() {
-        clearTimeout(wakeTimer);
-        happy.classList.remove('is-happy');
-        wake.classList.remove('is-waking');
-        void happy.offsetWidth;
-        happy.classList.add('is-happy');
-        wake.classList.add('is-waking');
-        wakeTimer = setTimeout(() => wake.classList.remove('is-waking'), 800);
-      }
-      document.getElementById('replay').addEventListener('click', replay);
-      wakeTimer = setTimeout(() => wake.classList.remove('is-waking'), 800);
-    </script>
-  </body>
-</html>
-`;
-const sheetIDs = [...sheet.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
-check('state sheet has unique SVG gradient/filter IDs for every state', sheetIDs.length === new Set(sheetIDs).size);
-check('state sheet URL references resolve to their own cell definitions', STATES.every(([, label]) => {
-  const cell = cellMarkup(label);
-  const ownIDs = new Set([...cell.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
-  return [...cell.matchAll(/url\(#([^)]+)\)/g)].every((m) => ownIDs.has(m[1]));
-}));
-
-for (const { label, ok, detail } of checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
-const failed = checks.filter(({ ok }) => !ok).length;
-console.log(failed ? `\n${failed} check(s) failed.` : `\nAll ${checks.length} checks passed.`);
-if (failed) process.exitCode = 1;
-else {
-  await writeFile(resolve(root, 'avatar-states.html'), sheet, 'utf8');
-  console.log('Wrote avatar-states.html — open it to review the states and replay happy / wake.');
-}
+${faceCss}
+body { margin:0; padding:32px 24px; background:#08080e; }
+.review-head,.review-section { max-width:1080px; margin:0 auto 28px; }
+.review-head h1 { font-size:24px; color:#f7f6fb; margin:0 0 10px; }
+.review-head p { font-size:12px; line-height:1.6; color:#aab0bf; max-width:860px; }
+.review-head button { border:1px solid #57617b; background:#161b2b; color:#e0e9fc; border-radius:7px; padding:8px 14px; cursor:pointer; }
+.review-section { padding:24px; border:1px solid; border-radius:16px; }
+.review-orb { background:#130b05; border-color:#694320; --review-ink:#fff7ed; --review-muted:#b4a38f; }
+.review-bot { background:#0a0a2e; border-color:#28437b; --review-ink:#e0f2fe; --review-muted:#a5b8d6; }
+.review-section h2 { color:var(--review-ink); font-size:20px; margin:0 0 8px; }
+.review-section p,.review-section h3 { color:var(--review-muted); font-size:11px; line-height:1.6; }
+.review-section h3 { text-transform:uppercase; letter-spacing:.18em; margin:26px 0 12px; }
+.review-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.cell { display:flex; flex-direction:column; align-items:center; border:1px solid rgba(160,166,192,.18); border-radius:12px; padding:16px 8px; background:rgba(255,255,255,.012); }
+.cell .avatar-container { animation:none; }
+.cell-label { color:var(--review-ink); font:10px var(--mono); letter-spacing:.16em; margin-top:12px; }
+.cell-note { color:var(--review-muted); font-size:10px; text-align:center; margin-top:8px; }
+@media(max-width:950px){.review-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:620px){.review-grid{grid-template-columns:1fr}body{padding:24px 12px}}
+</style></head><body>
+<header class="review-head"><h1>NOVA — shared expressions, individual colors</h1><p>Real React-rendered SVG and application CSS. Orb keeps its dark eyes, white blob and amber effects; Bot keeps its blue eyes and helmet. All nine shapes and states use the same face components and reaction clock. No microphone, model or audio is used here. Speaking holds a labelled sample audio pulse of .8.</p><button id="replay" type="button">Replay happy jumps</button></header>
+${Object.keys(models).map(skin=>`<section class="review-section review-${skin}"><h2>${skin==='orb'?'Orb — charcoal eyes / amber theme':'NOVA Bot — ice-blue eyes / navy theme'}</h2><p>Same expressions, not a color swap. In the app: a brief idle wink at 12s, sleepy at 45s; hover/touch wakes only the drawing. Listening and speech always take priority.</p>
+${[['Expressions',expressions.slice(0,6)],['States',expressions.slice(6,9)]].map(([title,list])=>`<h3>${title}</h3><div class="review-grid">
+${list.map(expression=>`<div class="cell"><div class="avatar-container ${skin==='bot'?'avatar-container-bot ':''}${pose[expression]}"${expression==='speaking'?' style="--audio-pulse:.8"':''}>${skin==='orb'?'<div class="avatar-backlight" aria-hidden="true"></div>':''}<div class="avatar-figure">${renders[skin][expression]}</div></div><div class="cell-label">${expression.toUpperCase()}</div><div class="cell-note">${notes[expression]}</div></div>`).join('\n')}
+</div>`).join('\n')}</section>`).join('\n')}
+<script>
+const happy = [...document.querySelectorAll('.expression-happy')].map(node=>[node,node.className]);
+document.getElementById('replay').addEventListener('click',()=>{
+  for(const [node] of happy){node.classList.remove('expression-happy','activity-happy');node.closest('.avatar-container').classList.remove('is-happy')}
+  void document.body.offsetWidth;
+  for(const [node,names] of happy){node.className=names;node.closest('.avatar-container').classList.add('is-happy')}
+});
+</script></body></html>`;
+check('Gallery shows all nine poses on each avatar', (sheet.match(/data-expression="/g)||[]).length === 18);
+check('Gallery definitions are unique across both avatars and every pose', ids(sheet).length === new Set(ids(sheet)).size);
+check('Gallery references all resolve locally', references(sheet).every(id=>ids(sheet).includes(id)));
+await writeFile(resolve(root,'avatar-states.html'),sheet,'utf8');
+for (const {label,ok,detail} of checks) console.log(`  ${ok?'PASS':'FAIL'}  ${label}${detail?` — ${detail}`:''}`);
+const failed=checks.filter(c=>!c.ok).length;
+console.log(failed?`\n${failed} check(s) failed.`:`\nAll ${checks.length} checks passed.\nWrote avatar-states.html — both palettes, all expressions.`);
+if(failed)process.exitCode=1;

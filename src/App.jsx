@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
+import BotAvatar from './BotAvatar.jsx';
+import AvatarSwitcher from './AvatarSwitcher.jsx';
+import { AVATAR_STORAGE_KEY, avatarExpression, readAvatar } from './avatar.js';
 import RichResponsePanel from './RichResponsePanel.jsx';
 import BrowsePanel from './BrowsePanel.jsx';
 import {
@@ -712,6 +715,21 @@ function App() {
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
   }));
+  const [avatar, setAvatar] = useState(readAvatar);
+  // Switching appearance leaves the live recognizer, request and audio refs intact.
+  // The shell paints immediately; the document attribute also themes the body blobs.
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute('data-avatar', avatar);
+    } catch { /* A document-less renderer still has the shell's palette. */ }
+  }, [avatar]);
+  const selectAvatar = useCallback((nextAvatar) => {
+    if (nextAvatar !== 'orb' && nextAvatar !== 'bot') return;
+    setAvatar(nextAvatar);
+    try {
+      window.localStorage.setItem(AVATAR_STORAGE_KEY, nextAvatar);
+    } catch { /* A blocked store must not prevent switching appearances. */ }
+  }, []);
   const [theme, setTheme] = useState(readTheme);
   // One class on the shell paints every surface; <html> is told as well, so the page canvas
   // and its lights flip with it. Both writes are guarded: a tree mounted without a document
@@ -1654,7 +1672,7 @@ function App() {
   const showRichPanel = Boolean(richContent && !settingsOpen);
 
   return (
-    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''} theme-${theme}`}>
+    <div data-avatar={avatar} className={`app-shell avatar-${avatar} stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''} theme-${theme}`}>
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
         {/* Two controls live in this corner, both always visible: the light the room is in,
@@ -1674,13 +1692,14 @@ function App() {
           <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
           <div
             ref={avatarContainerRef}
-            className={`avatar-container ${avatarActivity} ${avatarMood}`}
+            className={`avatar-container${avatar === 'bot' ? ' avatar-container-bot' : ''} ${avatarActivity} ${avatarMood}`}
           >
-            <div className="avatar-backlight" />
-            <div className="listen-ring" aria-hidden="true" />
-            {/* Pose on the wrapper, per-state rhythm on the SVG: nested transforms compose. */}
+            {avatar === 'orb' && <>
+              <div className="avatar-backlight" />
+            </>}
+            {/* Keep the outer ref mounted when switching, including during live speech. */}
             <div className="avatar-figure">
-              <RobotAvatar />
+              {avatar === 'bot' ? <BotAvatar expression={avatarExpression(stage, mood)} /> : <RobotAvatar expression={avatarExpression(stage, mood)} />}
             </div>
           </div>
           <p className="active-voice-label" title={activeVoiceName} aria-label={`Active voice: ${activeVoiceName}`} aria-live="polite" aria-atomic="true">{activeVoiceName}</p>
@@ -1730,6 +1749,7 @@ function App() {
             <span className="mic-button-sheen" />
           </button>
         </div>
+        <AvatarSwitcher avatar={avatar} onChange={selectAvatar} />
       </footer>
 
       {browse && <BrowsePanel browse={browse} onClose={closeBrowse} onNavigate={goBrowse} onBack={() => stepBrowse(-1)} onForward={() => stepBrowse(1)} onRefresh={refreshBrowse} />}

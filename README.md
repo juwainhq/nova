@@ -1,6 +1,6 @@
 # NOVA — Voice Intelligence
 
-A warm, voice-first personal assistant with a calm near-black interface, a softly glowing orb avatar, browser speech recognition, Ollama chat, and natural neural speech from [Kokoro TTS](https://www.npmjs.com/package/kokoro-js) running in the browser, with the Web Speech API as a fallback.
+A warm, voice-first personal assistant with a calm near-black interface, switchable Orb and NOVA Bot avatars with matching amber/blue themes, browser speech recognition, Ollama chat, and natural neural speech from [Kokoro TTS](https://www.npmjs.com/package/kokoro-js) running in the browser, with the Web Speech API as a fallback.
 
 > **Renamed from ARIA.** The assistant, package, and standalone download are now NOVA. Saved settings are picked up automatically — `readSetting` falls back to the older `aria.*` keys once, then writes the `nova.*` names from then on, so your voice, model, and endpoint choices survive the upgrade. The standalone file changed from `aria.html` to `nova.html`; an older copy keeps working, it just is not updated.
 >
@@ -25,6 +25,40 @@ npm run dev
 Vite opens the editable app at `/index.dev.html` and proxies browser requests to Ollama at `http://localhost:11434/v1`. The app defaults to `mistral:7b-instruct-q4_K_M` for chat completions. The repository-root `index.html` is the built, GitHub Pages-ready entry; its JS and CSS bundle paths are relative.
 
 Open the settings panel with the gear icon to choose an Ollama model, point at an Ollama endpoint, pick and test the speaking voice, toggle the last-response transcript, or test the Ollama connection. Settings are saved in this browser's local storage.
+
+## Install on Windows (PWA)
+
+NOVA can open as its own resizable Chrome/Edge app window, without the browser tab/address bar:
+
+1. Publish the result of `npm run build:pages`, or test the production build locally with `npm run build:pages && npm run preview` and open **`http://localhost:4173/`**.
+2. Open that URL **directly in a normal Chrome or Edge tab**, not inside an embedded preview, a private window, or the `file://` download. Installation requires HTTPS (localhost is also supported).
+3. Let the first visit finish, then choose the **Install NOVA** icon in the address bar, or the browser's install-app menu item.
+4. Resize the installed window to about **380px wide and 700–1000px tall**. The portrait layout keeps a compact header, readable avatar/status, and a bottom microphone/avatar dock. Settings scroll independently. You can place or snap it beside your other work.
+
+An installed PWA is a normal desktop window. **Always-on-top is not a web-app permission**; use Windows/window-management tools if you want it pinned above other apps.
+
+### What works offline
+
+After one successful online visit, the service worker caches the **app shell**: HTML, bundled JavaScript/CSS, manifest and icons. The interface, avatars, appearance preferences and saved-memory settings can reopen without the host being reachable. This does **not** make the external services offline:
+
+- Ollama still needs a reachable endpoint and the same origin/CORS configuration described below.
+- Browser speech recognition/online voices may need their provider's network service.
+- Kokoro's runtime/model downloads, external browse pages, and the standalone-download action are not precached by this worker.
+- Chat/API responses, streaming requests, and user memory are **never added to the PWA cache**. Memory stays in the existing local-storage store.
+
+Each build gets a content-versioned cache containing its actual hashed assets. A new snapshot must finish downloading before it can replace the previous one. Updates wait for existing NOVA tabs/windows to close, so a deployment cannot reload an active conversation; close all NOVA windows/tabs and reopen after an update has downloaded. Cleanup affects only NOVA's cache for the current deployment path, not other apps or model caches on the same origin.
+
+### PWA source and publishing
+
+- `public/manifest.json`: NOVA name/identity, `display: standalone`, relative `start_url`/scope and orange `#f97316` theme.
+- `public/icons/`: 192px/512px orange-circle **N** icons as SVG, with matching PNG fallbacks for Windows launchers. `npm run generate:icons` regenerates both formats without additional dependencies.
+- `src/sw.js`: app-shell-only service worker. `scripts/build-pwa.mjs` stamps its content version and production asset list during `npm run build`.
+- `src/pwa.js`: guarded registration, enabled only in production builds. Editable Vite/HMR sessions and the standalone `nova.html` do not register a worker.
+- `src/pwa.css`: the tall, narrow layout and installed-window overscroll behavior.
+
+`npm run build:pages` publishes **`index.html`, `assets/`, `manifest.json`, `sw.js`, `icons/` and `nova.html`** together at the repository root. Keep these generated files in sync; do not hand-edit the built worker's asset hashes. Relative URLs and per-path cache names support a project URL such as `/voice-assistant/` as well as a domain root.
+
+`npm run verify:pwa` checks the manifest/icons, generated asset list, offline navigation/assets at root and project paths, failed updates, cache isolation, network-only APIs, safe registration and portrait layout rules. Native Windows installation still depends on the browser/profile/administrator policy.
 
 ### Backend endpoints
 
@@ -298,43 +332,56 @@ The iframe is sandboxed without `allow-top-navigation`, so the framed page canno
 
 The code is in `src/web-browse.js` (intents and URLs) and `src/BrowsePanel.jsx`. The checks are in `scripts/web-browse-checks.mjs`. They cover intents, URLs, markup, the CSS layout contract, and the App's open, replace, close and slide-out behavior. They do not show whether Google actually renders in a real browser's iframe.
 
+## Avatars and appearance
+
+The two small avatar buttons below the microphone switch the **drawing and full color palette together**. The selected icon has a circular accent highlight. They are native buttons, so Tab, Enter and Space work without activating the microphone.
+
+- **Orb** (default): the original white blob and orange/amber fluid background, with the Bot’s facial shapes rendered in its original charcoal eye colors.
+- **NOVA Bot**: a reference-matched three-quarter SVG character: a wide pearl-white helmet, large curved dark-glass face, slim ice-blue eyes, recessed blue ear rings, a narrow neck and an upright egg body with an offset four-point sparkle. Its dark theme uses a `#0a0a2e` canvas, blue animated blobs, navy glass surfaces, `#e0f2fe` text and blue controls, including the browsing panel and URL focus ring. The red Stop button remains red.
+
+The selection is stored separately as `localStorage["nova_avatar"] = "orb" | "bot"`. A missing, invalid or unreadable preference defaults to Orb; denied storage does not prevent switching for the current session. The existing sun/moon control and `nova_theme` preference remain independent: Bot's light variant is icy blue rather than amber.
+
+Both avatars share the same presentation-only face components and reaction clock. They read the existing activity/mood without starting or stopping recognition, requests, speech, browsing or memory. **Shapes and behavior match; colors do not change:** Orb keeps its charcoal eyes/waveform and amber rings/marks, while Bot keeps its icy blue face lighting.
+
+| Expression / state | Bot appearance |
+| --- | --- |
+| Neutral | Tall 31:78 pill-shaped eyes; floating and synchronized blinking |
+| Happy | Upward eye arches and the one-shot double jump |
+| Wink | Left eye open, right eye a short diagonal lid |
+| Surprised | Eyes enlarge to 130% with three rays above the character; selection has a brief surprised reveal |
+| Thinking | One folded eye and one open eye, with shared glances and thoughtful body sway |
+| Sleepy | Closed U-shaped eyes, three drifting vector Zs and slow breathing |
+| Speaking | A centered seven-bar waveform **replaces the eyes**; live speech energy changes its height/brightness while the body bounces |
+| Listening | Open eyes, a listening lean and a pulsing ring in the avatar’s own accent color |
+| Idle | Normal eyes with a subtle slow glow; floating and blinking |
+
+The existing wake transition still uses happy eyes and its 800ms double jump. Offline keeps the existing dimness and gentle sway without painting a second eye shape over a wink or sleeping lid.
+
+**Automatic reactions:** a happy reply gives a quick wink after 900ms, within the existing happy mood. While the assistant remains ready, either avatar winks once at 12 seconds, returns to idle 800ms later, then looks sleepy after 45 seconds of uninterrupted rest. Hovering or touching the character resets only its visual rest clock. A new listening/thinking/speaking activity takes over immediately and cancels the old reaction deadlines. **Sleepy never pauses the microphone, wake word or assistant.** These local one-shot timers and their media-query listener are cleaned up on avatar switch/unmount.
+
+The Bot illustration follows the concept image rather than the earlier tall 160×180 CSS helmet: its projected head is about 1.26 times wider than tall, and the body is a smaller upright egg, not a flat pedestal. Shared SVG contours keep the switcher icon consistent. Ceramic/glass gradients, a subtle surface grain, a beveled display rim and grounded shadows provide depth without external images or a 3D runtime. A shared viewBox and responsive unit scale the character and its separate floor shadow together. The complete character now reuses the Orb’s body-animation keyframes and existing figure poses. Independent blink, gaze and expression layers preserve the reference’s tilted eye positions. A separate floor shadow softens with each rise instead of floating with the body. Speech waveform energy, light and body scale read the existing `--audio-pulse` signal; the local facial-reaction clock does not change speech or recognition logic. Reduced-motion mode keeps the poses visible but disables decorative wink timers, body movement, blinking, glancing, pulsing, drifting Zs, the entry reveal, waveform motion and speech-driven light/scale. The sleepy pose can still communicate rest without animation.
+
+Implementation: `src/AvatarFace.jsx` shares the shapes; `src/RobotAvatar.jsx` and `src/BotAvatar.jsx` supply the skins. Supporting modules: `src/bot-shape.js`, `src/avatar-expressions.js`, `src/useAvatarExpression.js`, `src/AvatarSwitcher.jsx`, `src/avatar.js` and `src/avatar.css`. No image downloads or new runtime dependencies are used. The App keeps the same outer avatar DOM ref when switching, including during a reply, so live audio and pulse callbacks are not disturbed. The dock reserves space for the picker, including beside/above an open browse panel.
+
+`verify:avatar` checks both drawings and generates `avatar-states.html` with all six expressions and three operating states for **both** palettes. `scripts/avatar-expression-checks.mjs` exercises both real avatar components and the shared hook with a deterministic clock, including inactivity, interruption, reduced motion and cleanup. `verify:speech` also runs `scripts/avatar-switch-checks.mjs`: persistence, safe defaults, keyboard-button semantics, independent light/dark choice, palette coverage, and switching during wake, question capture, model requests, speech and browsing.
+
 ## Avatar states
 
-The mouthless orb now has **two identical SVG capsules**, restoring the previous rounded-end eye shape while retaining the current sizing: **28×42 CSS pixels** each at the default 160px avatar size, with an **18px gap** and a shared center line at **y=60px**, in the upper half. A neutral radial well runs subtly from `#161616` at the center to `#1a1a1a` at the edge. Both eyes remain upright and matching: no per-eye rotation, skew, squint, independent drift or staggered blinks.
+### Orb
 
-The SVG keeps its 280-unit viewBox. A uniform 1.75 conversion makes the eye dimensions real on-screen pixels rather than accidentally smaller SVG units. Compact 108px / 92px avatars scale the whole face proportionally. The orange ring is sized against the **visible 222/280 orb**, plus movement clearance, and the backlight uses the same avatar-size variable.
+The Orb retains its original white silhouette, surface gradients, bloom and amber backlight. Its eyes stay **charcoal**, using the original `#161616` → `#1a1a1a` radial well (`#222` when listening). The Bot’s 31:78 capsule geometry is fitted to the Orb’s existing eye centers and 42px design-height, so the eyes become slimmer without moving the face. Orb stays front-facing; Bot retains its reference’s three-quarter tilt.
 
-Shared motion layers keep the pair synchronized:
+`AvatarFace.jsx` provides identical capsule, happy-arch, wink, folded-thinking-eye, sleepy-lid, seven-bar waveform and annotation paths. Per-skin paint variables keep all Orb eye/waveform strokes dark and its rings/rays/Zs amber; the Orb never imports the Bot’s blue gradient or eye-glow filter. Both skins use the same `useAvatarExpression` clock, including wink/sleepy timing, interruption, hover/touch reset, cleanup and reduced-motion preferences.
 
-| Layer | Carries |
-| --- | --- |
-| `.eyes-gaze` | the pair’s horizontal gaze |
-| `.eyes-blink` | one blink clock and one fixed center for both eyes |
-| `.eyes-voice` | shared speech brightness (Kokoro audio loudness, or fallback word boundaries) |
-| `.eye-scale` inside each eye | identical size/expression scaling about a fixed local origin |
+The shared `.avatar-eyes`, `.avatar-eye-blink`, `.avatar-eye-voice` and `.avatar-eye` layers separate gaze, synchronized blinking, speech light and per-eye expression. Fixed local origins avoid drifting pivots. The outer `.avatar-figure` retains its 400ms pose transitions and live speech scale bounded to 100–104%; each inner drawing keeps the existing float, sway, speech bounce and happy/wake double jump. Sleepy adds slower breathing without putting recognition to sleep.
 
-Body pose is separate from rhythm: `.avatar-figure` holds transitioned scale and `rotateY`, while `.robot-avatar` carries translation-only keyframes. No body state rotates on Z. There is no perspective that could make one eye appear larger than the other. Pose, eye color and capsule/crescent crossfades use **400ms ease-in-out** transitions; timed blinks and rapid word-light beats keep their own timings.
+With Kokoro, audio loudness publishes `--audio-pulse` (0–1). Browser TTS uses word-boundary events instead. Both waveform energy/brightness and figure scale consume that existing signal; no voice code changes. Where boundary events are unavailable, the waveform’s decorative rhythm still communicates speaking, without claiming to be measured audio.
 
-| State | Eyes | Body |
-| --- | --- | --- |
-| Idle | shared blink every **4s**, **42→4→42px over 200ms** | **0↔−8px** float, **3s ease-in-out infinite** |
-| Listening | both **115%**, brighter **#222** background | **rotateY(5deg)**; soft orange expanding/fading ring every **1.5s** |
-| Thinking | shared **left/right 6px** gaze, **800ms holds** and 400ms moves | slow lateral sway, **97%** scale |
-| Speaking | rapid shared brightness on actual speech word boundaries; no fake rapid blinks | gentle quick Y bounces, boundary-driven scale bounded to **100–104%** |
-| Happy / wake | matching filled wide crescents, **scaleX(1.2), scaleY(.4)** | one **800ms double-bounce jump** |
-| Offline | identical slight droop, half opacity | slow lateral sway; no eye tilt |
-
-With Kokoro, the loudness of the audio actually playing publishes a single `--audio-pulse` (0–1, every 50ms on the AudioContext clock), removed the moment playback ends or is canceled. In the Web Speech fallback, `speechSynthesis` word-boundary events publish it instead: capped at 1, decayed to 0 after 125ms, and removed on speech completion/cancellation. Both eye light and body scale read that value. Without boundary events the word light/scale stays neutral rather than being simulated.
-
-The wake flourish lasts **800ms** and then settles into listening. A same-utterance question moves directly to thinking/speaking without the wake expression masking it. Happy follows response completion and holds its crescent pose for **1.5s**; the double jump itself happens only once. Offline styling applies only at rest, so local memory replies still get the full speaking animation even when Ollama is unavailable. The offline notice stays below the orb.
-
-Reduced motion disables float, gaze, blinks, jumps, pulsing light and rings while preserving the current static expression.
-
-`npm run verify:avatar` renders the real SVG through React and checks pixel geometry, symmetry, radial colors, fixed pivots, exact timing, scale bounds, reduced motion and orb/ring/backlight sizing at all three viewport sizes. It also generates **`avatar-states.html`**, a real-CSS state sheet with a happy/wake replay button. Each cell has unique SVG definition IDs so its gradient colors cannot accidentally resolve to another state. The sheet holds a clearly labelled sample speech pulse; it does not generate audio.
+`npm run verify:avatar` renders every pose on both models, verifies exact shared path geometry, the Orb’s preserved charcoal/amber paint and original body, the Bot’s reference geometry, fixed pivots, animation timing, audio-pulse bindings and reduced motion. It generates **`avatar-states.html`**, with both nine-pose galleries and a happy-jump replay button. Every SVG definition has a unique per-avatar/per-pose ID. The gallery holds a labelled sample speech pulse and does not generate audio.
 
 `npm run verify:speech` checks rich response parsing/rendering and post-speech lifecycle, the exact personality prompt and friendly statuses/error copy, all voice-priority fallbacks, asynchronous loading, dropdown groups, preview cancellation/errors, active speaker labels and speaking parameters, the real wake controller and chime, persistent memory helpers/settings, and the compiled App lifecycle using recognition, timer, audio and storage doubles. Avatar regressions include the 800ms wake expiry, busy-state priority, actual boundary pulse/decay/cleanup, offline local speech and post-speech celebration. These are structural/behavioral checks, not a browser animation review, microphone accuracy test or audio audition.
 
-`build:pages` runs all four verification suites: standalone, avatar, speech, and brand/accessibility.
+`build:pages` runs all five verification suites: standalone, avatar, speech, brand/accessibility, and PWA.
 
 ## Build and publish
 
@@ -343,7 +390,7 @@ npm run build
 npm run preview
 ```
 
-After changing the app, run `npm run build:pages` to refresh the root `index.html` and `assets/` bundle used by branch-based GitHub Pages. Commit those generated root files with the source changes. GitHub Pages is static hosting and cannot use the local Vite proxy, so the hosted UI renders but starts in the offline state until you set the Ollama endpoint described above.
+After changing the app, run `npm run build:pages` to refresh the root `index.html`, `assets/`, manifest, service worker and icons used by branch-based GitHub Pages. Commit those generated root files with the source changes. GitHub Pages is static hosting and cannot use the local Vite proxy, so the hosted UI renders but starts in the offline state until you set the Ollama endpoint described above.
 
 In development, `npm run dev` serves the hot-reloading source entry at `/` and `/index.html`, so the stale root Pages bundle is never served from the dev server. `index.dev.html` remains the direct source entry and the build input; the root `index.html` is only ever the published artifact.
 

@@ -221,7 +221,7 @@ export async function verifyWebBrowse(check) {
     && !/aria-label="Refresh this page"[^>]*disabled/.test(html));
   check('browse chrome: a light pill bar, still under the 60px header and above the frame', /\.browse-chrome \{[^}]*flex: 0 0 46px/.test(css)
     && /\.browse-address-input \{[^}]*border-radius: 999px; background: var\(--card-alt\)/.test(css)
-    && /\.browse-address-input:focus \{ border-color: #f97316/.test(css)
+    && /\.browse-address-input:focus \{ border-color: var\(--accent\)/.test(css)
     && /\.browse-header \{ flex: 0 0 60px;/.test(css));
 
   const appSource = await readFile('src/App.jsx', 'utf8');
@@ -286,9 +286,9 @@ export async function verifyWebBrowse(check) {
     && /color: var\(--faint\)/.test(ruleBody('.settings-input::placeholder'))
     && /background: var\(--faint\)/.test(ruleBody('.settings-switch i'))
     && /color: var\(--on-card-strong\)/.test(ruleBody('.field-hint-error')));
-  check('theme: the reply, the toast and the offline notice keep an orange left edge on glass',
-    /\.response-transcript \{[^}]*border-left: 3px solid #f97316;[^}]*background: var\(--card\)/.test(flat)
-    && /border-left: 3px solid #f97316/.test(ruleBody('.toast')) && /border-left: 3px solid #f97316/.test(ruleBody('.avatar-offline-display'))
+  check('theme: the reply, the toast and the offline notice use the avatar accent on glass',
+    /\.response-transcript \{[^}]*border-left: 3px solid var\(--accent\);[^}]*background: var\(--card\)/.test(flat)
+    && /border-left: 3px solid var\(--accent\)/.test(ruleBody('.toast')) && /border-left: 3px solid var\(--accent\)/.test(ruleBody('.avatar-offline-display'))
     && /color: var\(--on-card\)/.test(ruleBody('.response-transcript p')));
   check('theme: the grain is fixed SVG noise, one token lighter on paper',
     /feTurbulence/.test(ruleBody('#root::after')) && /position: fixed/.test(ruleBody('#root::after'))
@@ -330,12 +330,13 @@ export async function verifyWebBrowse(check) {
     [1, 2, 3, 4, 5].every((n) => { const body = (css.match(new RegExp(`@keyframes blob-${n} \\{([^@]*)\\n\\}`)) || [, ''])[1];
       return [...body.matchAll(/([a-z-]+)\s*:/g)].every((m) => ['transform', 'opacity'].includes(m[1])); }));
 
+  const avatarCss = await readFile('src/avatar.css', 'utf8');
   check('theme: the avatar and the mic keep their own paints, so the orb never re-themes',
     !/--(orange|burnt|cream):/.test(lightBlock)
     && !/var\(--(ink|on-card|card)\b/.test(ruleBody('.avatar-backlight'))
     && /background: linear-gradient\(145deg, #fffaf2 0%, #f5c99a 100%\)/.test(ruleBody('.mic-button'))
     && /radial-gradient\(circle, rgba\(204, 68, 0, \.22\)/.test(ruleBody('.avatar-backlight'))
-    && /\.listen-ring \{ z-index: 0;[^}]*rgba\(255, 106, 26, \.45\)/.test(flat));  // the shared rule above it is not this one
+    && /\.nova-orb \{[^}]*--avatar-face-accent: #ff6a1a;/.test(avatarCss));
 
   check('browse chrome: the frame still fills what is left, bottom gap included', /\.browse-frame \{ flex: 1;[^}]*min-height: 0/.test(css)
     && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));

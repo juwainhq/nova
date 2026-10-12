@@ -294,7 +294,7 @@ export async function verifyRich(check) {
     && rule('.rich-content-slot').includes('overflow: hidden') && rule('.rich-content-panel').includes('overflow-y: auto'));
   check('rich motion CSS: entrance slides up inside its row, dismissal only fades', css.includes('@keyframes rich-panel-in { from { opacity: 0; transform: translateY(24px); }')
     && css.includes('@keyframes rich-panel-out { from { opacity: 1; } to { opacity: 0; } }'));
-  check('rich responsive CSS: header/dock metrics stay coupled to existing breakpoints', css.includes('--topbar-height: 76px;') && css.includes('--dock-height: 112px;')
-    && css.includes('--topbar-height: 52px; --dock-height: 76px;') && css.includes('--topbar-height: 44px; --dock-height: 66px;'));
+  check('rich responsive CSS: header/dock metrics reserve space for the avatar picker at each breakpoint', css.includes('--topbar-height: 76px;') && css.includes('--dock-height: 152px;')
+    && css.includes('--topbar-height: 52px; --dock-height: 128px;') && css.includes('--topbar-height: 44px; --dock-height: 124px;'));
   check('rich reduced motion: existing universal animation/transition override covers the sheet', /@media \(prefers-reduced-motion: reduce\)/.test(css) && css.includes('animation-duration: .01ms !important') && css.includes('transition-duration: .01ms !important'));
 }

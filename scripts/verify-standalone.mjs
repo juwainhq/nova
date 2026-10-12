@@ -62,11 +62,20 @@ const script = scriptMatch?.[1] ?? '';
 const guarded = [...script.matchAll(/function\s+([\w$]+)\s*\(\)\s*\{\s*return\s+([\w$]+)\s*\?\s*"([^"]*)"\s*:\s*""\s*\}/g)];
 const flag = guarded[0]?.[2];
 
+// Minifiers may choose `$a` or `a$`. A word boundary does not recognize a
+// leading $, and an unescaped $ is a regex anchor, not an identifier character.
+function compiledBoolean(source, name) {
+  const identifier = name.replace(/\$/g, '\\$');
+  const assignment = source.match(new RegExp(`(?:^|[^\\w$])${identifier}\\s*=\\s*(!0|!1|true|false)(?=[,;}\\s]|$)`));
+  return assignment ? /^(?:!0|true)$/.test(assignment[1]) : null;
+}
+check('compiled-default checks accept dollar-containing minified names', compiledBoolean('var $a=!0,next=1;', '$a') === true
+  && compiledBoolean('var a$=!1;', 'a$') === false && compiledBoolean('var other$a=true;', '$a') === null);
+
 if (!guarded.length || !flag) {
   check('defaults to a direct local Ollama endpoint', false, 'could not locate the compiled endpoint default');
 } else {
-  const assignment = script.match(new RegExp(`\\b${flag}\\s*=\\s*(!0|!1|true|false)`));
-  const flagValue = assignment ? /!0|true/.test(assignment[1]) : null;
+  const flagValue = compiledBoolean(script, flag);
   if (flagValue !== true) {
     check('defaults to a direct local Ollama endpoint', false,
       flagValue === null ? `could not resolve the value of ${flag}` : 'the standalone flag compiled to false');
@@ -108,6 +117,18 @@ check('loads Kokoro TTS at runtime from the pinned CDN browser build, not inline
 check('ships numbered/bulleted response item cards', script.includes('rich-items') && script.includes('rich-item-card'));
 check('keeps rich content in its own sliding/fading row, not an avatar overlay', styleMatch[1].includes('.app-shell.has-rich-content')
   && styleMatch[1].includes('minmax(min-content,1fr)') && styleMatch[1].includes('rich-panel-in') && styleMatch[1].includes('rich-panel-out'));
+
+check('ships both avatars and the persistent appearance picker', script.includes('nova_avatar') && script.includes('Avatar style')
+  && script.includes('bot-head') && script.includes('avatar-waveform') && script.includes('orbSurface'));
+check('inlines both avatar palettes and shared expression styles', /--canvas:\s*#0a0a2e/.test(styleMatch[1])
+  && /--canvas:\s*#050300/.test(styleMatch[1]) && styleMatch[1].includes('.expression-thinking .avatar-eye')
+  && styleMatch[1].includes('.expression-surprised .avatar-eye') && styleMatch[1].includes('.avatar-choice.is-selected'));
+
+check('keeps the Orb face charcoal and its effects amber', /\.nova-orb\{[^}]*--avatar-eye-line:\s*var\(--eye-color,\s*#1a1a1a\)/.test(styleMatch[1])
+  && /\.nova-orb\{[^}]*--avatar-face-accent:\s*#ff6a1a/.test(styleMatch[1]));
+
+check('the single-file download does not register a worker or need a manifest', !script.includes('serviceWorker.register')
+  && !script.includes('offline support could not be enabled') && !/rel=["']manifest["']/.test(html));
 
 // Guards the `</script>` escaping: a mangled inline script would otherwise still
 // satisfy every structural check above.

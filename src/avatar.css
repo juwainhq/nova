@@ -1,0 +1,285 @@
+/* Avatar palettes are independent of the existing light/dark preference. Keeping
+   tokens on both the document and shell also recolors the body-mounted fluid blobs. */
+:root[data-avatar='bot'], .app-shell.avatar-bot {
+  --canvas: #0a0a2e;
+  --ink: #e0f2fe;
+  --muted: #a5b8d6;
+  --accent: #3b82f6;
+  --accent-rgb: 59, 130, 246;
+  --accent-ink: #60a5fa;
+  --accent-glow: #93c5fd;
+  --accent-hover: #60a5fa;
+  --switch-thumb: #bfdbfe;
+  --button-ink: #0a0a2e;
+  --button-ink-rgb: 10, 10, 46;
+  --card: rgba(10, 10, 46, .85);
+  --card-strong: rgba(10, 10, 46, .95);
+  --card-alt: rgba(125, 211, 252, .065);
+  --on-card: #e0f2fe;
+  --on-card-soft: rgba(224, 242, 254, .72);
+  --on-card-strong: #93c5fd;
+  --faint: #9aaccb;
+  --card-line: rgba(59, 130, 246, .3);
+  --card-shadow: 0 14px 40px rgba(0, 0, 25, .55);
+  --glass: blur(20px);
+  --text-halo: 0 1px 3px rgba(10, 10, 46, .95), 0 0 18px rgba(10, 10, 46, .9);
+  --display-halo: 0 2px 34px rgba(10, 10, 46, .8), 0 1px 4px rgba(10, 10, 46, .8);
+  --option-bg: #101536;
+  --scrim: rgba(4, 8, 30, .65);
+  --blob-1: #1d4ed8;
+  --blob-2: #3b82f6;
+  --blob-3: #1e3a8a;
+  --blob-4: #60a5fa;
+  --blob-5: #60a5fa;
+}
+
+/* The sun/moon control still works; its light variant is icy blue, never amber.
+   Switching avatars does not overwrite the user's separately saved nova_theme. */
+:root[data-avatar='bot'][data-theme='light'], .app-shell.avatar-bot.theme-light {
+  --canvas: #f4f8ff;
+  --ink: #101d3c;
+  --muted: #425b80;
+  --accent-ink: #1d4ed8;
+  --accent-glow: #1e40af;
+  --card: rgba(244, 248, 255, .88);
+  --card-strong: rgba(244, 248, 255, .95);
+  --card-alt: rgba(29, 78, 216, .05);
+  --on-card: #101d3c;
+  --on-card-soft: rgba(16, 29, 60, .72);
+  --on-card-strong: #1d4ed8;
+  --faint: #526a8c;
+  --card-shadow: 0 14px 40px rgba(30, 58, 138, .16);
+  --text-halo: 0 1px 3px rgba(244, 248, 255, .95), 0 0 18px rgba(244, 248, 255, .9);
+  --display-halo: 0 2px 34px rgba(244, 248, 255, .9), 0 1px 4px rgba(244, 248, 255, .85);
+  --option-bg: #f4f8ff;
+  --scrim: rgba(30, 58, 138, .22);
+  --blob-1: #dbeafe;
+  --blob-2: #bfdbfe;
+  --blob-3: #93c5fd;
+  --blob-4: #dbeafe;
+  --blob-5: #bfdbfe;
+}
+
+/* The Orb keeps its original cream microphone. Bot gets a cool-white/blue one;
+   the red Stop state remains red so stopping a reply stays unmistakable. */
+.avatar-bot .mic-button:not(.mic-button-stop) {
+  border-color: #dbeafe;
+  background: linear-gradient(145deg, #f0f9ff 0%, #93c5fd 100%);
+  color: #0a0a2e;
+  box-shadow: 0 0 0 5px rgba(96, 165, 250, .08), 0 0 24px rgba(59, 130, 246, .25), inset 0 1px 0 rgba(255, 255, 255, .86);
+}
+.avatar-bot .mic-button:hover:not(:disabled):not(.mic-button-stop) {
+  border-color: #f0f9ff;
+  box-shadow: 0 0 0 6px rgba(96, 165, 250, .14), 0 0 32px rgba(59, 130, 246, .38), inset 0 1px 0 rgba(255, 255, 255, .95);
+}
+.avatar-bot .mic-button-active { animation-name: bot-mic-active; }
+.avatar-bot .mic-halo { border-color: rgba(147, 197, 253, .3); }
+.avatar-bot .mic-halo-active { border-color: rgba(191, 219, 254, .75); box-shadow: 0 0 18px rgba(59, 130, 246, .3); }
+.avatar-bot .wake-indicator.is-alert svg { filter: drop-shadow(0 0 6px rgba(59, 130, 246, .5)); }
+.avatar-bot .browse-panel { border-color: var(--accent); }
+@keyframes bot-mic-active {
+  0%, 100% { box-shadow: 0 0 0 5px rgba(59, 130, 246, .1), 0 0 27px rgba(59, 130, 246, .31), inset 0 1px 0 rgba(255, 255, 255, .84); }
+  50% { box-shadow: 0 0 0 7px rgba(59, 130, 246, .15), 0 0 39px rgba(59, 130, 246, .44), inset 0 1px 0 rgba(255, 255, 255, .9); }
+}
+
+/* The concept's wide helmet, inset glass and upright body are traced in one
+   SVG coordinate system. This replaces the earlier tall CSS helmet while keeping
+   the same stage height, so switching models cannot move the dock. */
+.avatar-container.avatar-container-bot { height: calc(var(--avatar-size) * 1.52); }
+.nova-bot {
+  --avatar-eye-line: #bae7ff;
+  --avatar-wave-color: #b7e6ff;
+  --avatar-face-accent: #80b8ff;
+  --avatar-surprise-color: #76a7ff;
+  position: relative;
+  width: 220em;
+  height: 284em;
+  font-size: calc(var(--avatar-size, 188px) / 188);
+  isolation: isolate;
+  user-select: none;
+}
+/* Same facial shapes, intentionally different paint. The Orb never inherits
+   the Bot's icy gradients, blue strokes or blue glow. Its hover target is stable
+   even while the inner SVG floats. */
+.nova-orb {
+  position: relative;
+  width: var(--avatar-size, 188px);
+  height: var(--avatar-size, 188px);
+  --avatar-eye-line: var(--eye-color, #1a1a1a);
+  --avatar-wave-color: var(--eye-color, #1a1a1a);
+  --avatar-face-accent: #ff6a1a;
+  --avatar-surprise-color: #ff6a1a;
+}
+.avatar-eye-surface { stop-color: var(--eye-color, #1a1a1a); transition: stop-color 400ms ease-in-out; }
+.avatar-eye-shade { stop-color: var(--eye-shadow, #161616); transition: stop-color 400ms ease-in-out; }
+
+/* Reuse the Orb's actual rhythms, not a separate animation controller. The outer
+   .avatar-figure still supplies its listening lean and live --audio-pulse scale. */
+.bot-drawing { position: relative; z-index: 1; display: block; width: 100%; height: 100%; overflow: visible; transform-origin: center; animation: orb-float 3s ease-in-out infinite; }
+.bot-shadow-drawing { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.bot-ground-shadow { transform-box: view-box; transform-origin: 352px 909px; animation: bot-shadow-float 3s ease-in-out infinite; }
+.avatar-eyes { --eye-shift: 16px; animation: gaze-drift 9.5s ease-in-out infinite; transition: opacity 180ms ease-in-out; }
+.avatar-eye, .avatar-eye-reveal, .avatar-eye-blink { transform-box: view-box; transform-origin: 0 0; }
+.avatar-eye { transition: transform 400ms ease-in-out, opacity 400ms ease-in-out; }
+.avatar-eye-blink { animation: eye-blink 4s ease-in-out infinite; }
+.avatar-eye-voice { filter: brightness(1); }
+.avatar-eye-reveal { animation: avatar-surprise-reveal .65s ease-out both; }
+.avatar-eye-open, .avatar-eye-smile, .avatar-eye-wink, .avatar-eye-sleep, .avatar-eye-thought { transition: opacity 180ms ease-in-out; }
+.avatar-eye-smile, .avatar-eye-wink, .avatar-eye-sleep, .avatar-eye-thought { opacity: 0; }
+.avatar-listen-ring, .avatar-idle-glow { opacity: 0; pointer-events: none; }
+.avatar-waveform { opacity: 0; transition: opacity 180ms ease-in-out; }
+.avatar-wave-energy { transform-box: view-box; transform-origin: 0 0; transform: scaleY(calc(.6 + clamp(0, var(--audio-pulse, 0), 1) * .4)); transition: transform 80ms linear; }
+.avatar-wave-bar rect { transform-box: fill-box; transform-origin: center; transform: scaleY(.3); }
+.avatar-surprise-marks { opacity: 0; animation: avatar-surprise-rays .65s ease-out both; pointer-events: none; }
+.avatar-sleep-marks { opacity: 0; transition: opacity 400ms ease-in-out; pointer-events: none; }
+.avatar-sleep-marks path { transform-box: fill-box; transform-origin: center; }
+
+/* Matching state movement; blink, gaze, eye shape, voice light and body motion
+   each have their own layer, so one animation cannot erase another's transform. */
+.expression-thinking .bot-drawing, .expression-thinking .robot-avatar { animation: orb-sway 3s ease-in-out infinite; }
+.expression-speaking .bot-drawing, .expression-speaking .robot-avatar { animation: orb-word-bounce .5s ease-in-out infinite; }
+.expression-happy .bot-drawing, .expression-waking .bot-drawing, .activity-happy .bot-drawing,
+.expression-happy .robot-avatar, .expression-waking .robot-avatar, .activity-happy .robot-avatar { animation: orb-double-bounce .8s ease-in-out both; }
+.expression-happy .avatar-eye-blink, .expression-waking .avatar-eye-blink, .expression-wink .avatar-eye-blink, .expression-sleepy .avatar-eye-blink, .expression-surprised .avatar-eye-blink, .expression-speaking .avatar-eye-blink { animation: none; }
+.expression-thinking .bot-ground-shadow { animation: bot-shadow-think 3s ease-in-out infinite; }
+.expression-speaking .bot-ground-shadow { animation: bot-shadow-talk .5s ease-in-out infinite; }
+.expression-happy .bot-ground-shadow, .expression-waking .bot-ground-shadow, .activity-happy .bot-ground-shadow { animation: bot-shadow-jump .8s ease-in-out both; }
+.expression-listening .avatar-eye { transform: scale(1.15); }
+.expression-speaking .avatar-eye-voice { filter: brightness(calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .8)); }
+.expression-happy .avatar-eye-open, .expression-waking .avatar-eye-open { opacity: 0; }
+.expression-happy .avatar-eye-smile, .expression-waking .avatar-eye-smile { opacity: 1; }
+.expression-wink .avatar-eye-right .avatar-eye-open { opacity: 0; }
+.expression-wink .avatar-eye-right .avatar-eye-wink { opacity: 1; }
+.expression-thinking .avatar-eye-left .avatar-eye-open { opacity: 0; }
+.expression-thinking .avatar-eye-left .avatar-eye-thought { opacity: 1; }
+.expression-sleepy .avatar-eye-open { opacity: 0; }
+.expression-sleepy .avatar-eye-sleep { opacity: 1; }
+.expression-sleepy .avatar-eyes { animation: none; }
+.expression-sleepy .avatar-sleep-marks { opacity: 1; }
+.expression-sleepy .avatar-sleep-marks path { animation: avatar-zzz 3s ease-in-out infinite; }
+.expression-sleepy .avatar-sleep-marks path:nth-child(2) { animation-delay: -.6s; }
+.expression-sleepy .avatar-sleep-marks path:nth-child(3) { animation-delay: -1.2s; }
+.expression-thinking .avatar-eyes { animation: eyes-thinking 2.8s ease-in-out infinite; }
+.expression-happy .avatar-surprise-marks, .expression-waking .avatar-surprise-marks, .expression-wink .avatar-surprise-marks,
+.expression-sleepy .avatar-surprise-marks, .expression-thinking .avatar-surprise-marks, .expression-speaking .avatar-surprise-marks, .expression-listening .avatar-surprise-marks { visibility: hidden; }
+.expression-idle .avatar-idle-glow { opacity: .24; animation: avatar-idle-glow 4.8s ease-in-out infinite; }
+.expression-idle .avatar-eye-open { animation: avatar-idle-eyes 4.8s ease-in-out infinite; }
+.expression-listening .avatar-eye-open { animation: avatar-eye-pulse 1.5s ease-in-out infinite; }
+.expression-listening .avatar-listen-ring, .expression-waking .avatar-listen-ring { animation: avatar-listening-ring 1.5s ease-in-out infinite; }
+.expression-speaking .avatar-eyes { opacity: 0; animation: none; }
+.expression-speaking .avatar-waveform { opacity: 1; filter: brightness(calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .5)); }
+.expression-speaking .avatar-wave-bar rect { animation: avatar-wave .6s ease-in-out infinite alternate; }
+.expression-speaking .avatar-wave-bar:nth-child(2n) rect { animation-delay: -.2s; animation-duration: .45s; }
+.expression-speaking .avatar-wave-bar:nth-child(3n) rect { animation-delay: -.4s; animation-duration: .7s; }
+.expression-surprised .avatar-eye { transform: scale(1.3); }
+.expression-surprised .avatar-eye-reveal { animation: none; }
+.expression-surprised .avatar-surprise-marks { animation: none; opacity: 1; }
+/* Connection mood comes from the same outer class as the Orb; it does not alter
+   the assistant state or override a later listening/thinking/speaking activity. */
+.is-offline .bot-drawing, .is-offline .robot-avatar { animation: orb-sad-sway 4s ease-in-out infinite; }
+.is-offline .avatar-eye { transform: scaleY(.9); opacity: .5; }
+.is-offline .bot-ground-shadow { animation: none; opacity: .7; }
+/* Even offline, the face owns its wink / sleepy shapes; no second set of eyes. */
+.expression-sleepy .bot-drawing, .expression-sleepy .robot-avatar { animation: avatar-doze 5.4s ease-in-out infinite; }
+.expression-sleepy .bot-ground-shadow { animation: bot-shadow-doze 5.4s ease-in-out infinite; }
+
+/* A brief surprised-eye hello on selection is visual only; it emits no events. */
+@keyframes avatar-surprise-rays { 0%, 30% { opacity: .9; } 100% { opacity: 0; } }
+@keyframes avatar-idle-glow { 0%, 100% { opacity: .12; } 50% { opacity: .32; } }
+@keyframes avatar-idle-eyes { 0%, 100% { opacity: .84; } 50% { opacity: 1; } }
+@keyframes avatar-doze { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.008); } }
+@keyframes bot-shadow-doze { 0%, 100% { transform: scale(1); opacity: .8; } 50% { transform: scale(.96); opacity: .65; } }
+@keyframes avatar-zzz { 0%, 100% { opacity: .45; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-5px); } }
+@keyframes avatar-surprise-reveal { from { transform: scale(1.3); } to { transform: scale(1); } }
+/* The stationary floor shadow softens as the character rises; its clock and
+   peaks exactly match the reused Orb float, thinking, talking and jump cycles. */
+@keyframes bot-shadow-float { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.86); opacity: .55; } }
+@keyframes bot-shadow-think { 0%, 50%, 100% { transform: scale(1); opacity: 1; } 25%, 75% { transform: scale(.96); opacity: .85; } }
+@keyframes bot-shadow-talk { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.96); opacity: .85; } }
+@keyframes bot-shadow-jump { 0%, 40%, 80%, 100% { transform: scale(1); opacity: 1; } 20% { transform: scale(.82); opacity: .45; } 60% { transform: scale(.91); opacity: .7; } }
+@keyframes avatar-eye-pulse { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
+@keyframes avatar-listening-ring { 0%, 100% { opacity: .2; } 50% { opacity: .8; } }
+@keyframes avatar-wave { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
+
+/* The switcher occupies dock space below the microphone, never an overlay. */
+.control-dock { flex-direction: column; gap: 4px; padding-bottom: 26px; }
+.control-dock .wake-message { padding-right: 0; padding-left: 0; }
+.avatar-switcher {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--card-line);
+  border-radius: 999px;
+  background: var(--card);
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+}
+.avatar-choice {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.avatar-choice svg { width: 25px; height: 28px; opacity: .55; transition: opacity .15s ease; }
+.avatar-choice:hover svg, .avatar-choice:focus-visible svg, .avatar-choice.is-selected svg { opacity: 1; }
+.avatar-choice.is-selected { border-color: var(--accent); background: rgba(var(--accent-rgb), .13); box-shadow: 0 0 12px rgba(var(--accent-rgb), .12); }
+.avatar-choice:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 3px; }
+.avatar-choice-name { position: absolute; bottom: calc(100% + 10px); left: 50%; padding: 5px 8px; border: 1px solid var(--card-line); border-radius: 6px; background: var(--card-strong); color: var(--on-card); font: 9px/1.2 var(--mono); transform: translateX(-50%); opacity: 0; pointer-events: none; }
+.avatar-choice:hover .avatar-choice-name, .avatar-choice:focus-visible .avatar-choice-name { opacity: 1; }
+
+/* The taller character and optional offline/transcript cards can scroll within
+   the stage on short screens without ever covering the microphone or picker. */
+.app-shell .main-stage { overflow-y: auto; overflow-x: hidden; align-items: safe center; scrollbar-width: thin; }
+@media (max-height: 560px) {
+  .app-shell.avatar-bot .status-word, .app-shell.avatar-orb .status-word { margin-bottom: 12px; }
+  .control-dock { gap: 4px; padding-bottom: 26px; }
+  .control-dock .mic-control-wrap { height: 56px; flex-shrink: 0; }
+  .control-dock .mic-halo { width: 64px; height: 64px; }
+  .avatar-switcher { padding: 1px; }
+  .avatar-choice { width: 34px; height: 34px; padding: 4px; }
+  .avatar-choice svg { width: 23px; height: 26px; }
+}
+@media (max-height: 420px) {
+  .control-dock .mic-control-wrap { height: 52px; }
+  .control-dock .mic-halo { width: 60px; height: 60px; }
+  .avatar-container-bot { --avatar-size: 94px; }
+}
+@media (max-width: 700px) {
+  .app-shell.has-browse-panel { --dock-height: 120px; }
+  .has-browse-panel .control-dock { gap: 4px; padding-bottom: 26px; }
+  .has-browse-panel .mic-control-wrap { height: 52px; }
+  .has-browse-panel .mic-button { width: 44px; height: 44px; }
+  .has-browse-panel .control-dock .mic-halo { width: 54px; height: 54px; }
+  .has-browse-panel .avatar-switcher { padding: 1px; }
+  .has-browse-panel .avatar-choice { width: 34px; height: 34px; padding: 4px; }
+  .has-browse-panel .avatar-container { --avatar-size: 100px; height: 112px; }
+  .has-browse-panel .avatar-container-bot { --avatar-size: 78px; height: 118px; }
+  .has-browse-panel .status-word { margin-bottom: 4px; }
+  /* Leave room for the shared 12px wake jump in the compact assistant strip. */
+  .has-browse-panel.avatar-bot .status-word { margin-bottom: 6px; }
+  .has-browse-panel .avatar-surprise-marks, .has-browse-panel .avatar-sleep-marks { display: none; }
+  .has-browse-panel .assistant-stage { padding: 4px 0; }
+  .has-browse-panel .active-voice-label { margin-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .robot-avatar, .bot-drawing, .bot-ground-shadow, .avatar-eye-blink, .avatar-eye-reveal, .avatar-eyes, .avatar-eye-open,
+  .avatar-listen-ring, .avatar-idle-glow, .avatar-wave-bar rect, .avatar-surprise-marks, .avatar-sleep-marks path { animation: none !important; }
+  .avatar-container .avatar-figure, .robot-avatar, .bot-drawing, .bot-ground-shadow, .avatar-eye-blink, .avatar-eye-reveal,
+  .avatar-eyes, .avatar-wave-energy, .avatar-sleep-marks path { transform: none; }
+  .avatar-eye-voice, .expression-speaking .avatar-waveform { filter: none !important; transition: none; }
+  .expression-listening .avatar-listen-ring, .expression-waking .avatar-listen-ring { opacity: .4; }
+  .expression-speaking .avatar-wave-bar rect { transform: scaleY(.65); }
+  .expression-speaking .avatar-wave-bar:nth-child(4) rect { transform: scaleY(1); }
+  .avatar-container .avatar-figure, .avatar-eye, .avatar-eyes, .avatar-eye-open, .avatar-eye-smile,
+  .avatar-eye-wink, .avatar-eye-sleep, .avatar-eye-thought, .avatar-waveform, .avatar-wave-energy, .avatar-sleep-marks { transition: none; }
+}
