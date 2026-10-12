@@ -113,7 +113,23 @@ export function parseWakeWord(text) {
   return match ? { question: text.slice(match.index + match[0].length).trim() } : null;
 }
 
-// One recognizer, two modes. A mode change waits for onend before restarting:
+// While NOVA speaks, only "stop", "wait" or "hey nova" interrupt. Her own voice can
+// reach the mic, so a command word she is saying in this reply only counts once
+// the recognizer finalizes it as the whole utterance. Returns the question said
+// after "hey nova" (if any), or null.
+const spokenWords = (text) => ` ${String(text || '').toLowerCase().replace(/[^\p{L}\p{N}']+/gu, ' ').trim()} `;
+export function parseInterrupt(transcript, { final = false, spoken = '' } = {}) {
+  const heard = spokenWords(transcript).trim();
+  if (!heard) return null;
+  const wake = parseWakeWord(transcript);
+  const command = wake ? WAKE_WORD : /(?:^|\s)(stop|wait)(?:\s+(?:it|please|nova|now))*$/.exec(heard)?.[1];
+  if (!command) return null;
+  const alone = heard === WAKE_WORD || /^(?:(?:hey\s+)?nova\s+)?(?:(?:stop|wait)\s*)+(?:\s*(?:it|please|nova|now))*$/.test(heard);
+  const echo = spokenWords(spoken).includes(` ${command} `);
+  return (alone && final) || !echo ? { command, question: wake?.question || '' } : null;
+}
+
+// One recognizer, three modes (standby, question and interrupt). A mode change waits for onend before restarting:
 // starting a second session while the first is stopping throws in real browsers.
 // Both modes ask for interim results, so the wake phrase is caught while it is
 // still being spoken rather than after the pause that ends a final result. That
@@ -127,6 +143,8 @@ export function createVoiceListener({
   onInputStart = () => {},
   onInputEnd = () => {},
   onSpeechDetected = () => {},
+  onInterrupt = () => {},
+  spokenText = () => '',
   onUnsupported = () => {},
   onError = () => {},
   timers = globalThis,
@@ -162,6 +180,8 @@ export function createVoiceListener({
   let startedAt = 0;
   let shortEnds = 0;
   let failures = 0;
+  // A question that follows an interrupt ends quietly if nothing is said.
+  let quiet = false;
 
   const reportStandby = () => {
     const next = phase === 'running' && mode === 'standby' && activeMode === 'standby';
@@ -181,8 +201,9 @@ export function createVoiceListener({
     timers.clearTimeout(questionTimer);
     questionTimer = timers.setTimeout(() => {
       if (disposed || mode !== 'question') return;
+      const reason = quiet ? 'quiet' : 'no-speech';
       setMode('standby');
-      onInputEnd('no-speech');
+      onInputEnd(reason);
     }, 15000);
   };
 
@@ -213,16 +234,24 @@ export function createVoiceListener({
     }
   };
 
-  function setMode(next) {
+  // `quiet`: after an interrupt, silence ends the question without a "didn't catch that".
+  function setMode(next, { quiet: quietly = false } = {}) {
     if (disposed) return;
-    const target = next === 'standby' && !standbyAllowed ? null : next;
+    const target = (next === 'standby' || next === 'interrupt') && !standbyAllowed ? null : next;
     if (target === mode) return;
     mode = target;
+    quiet = quietly && target === 'question';
     tail = '';
     wakeIndex = null;
     wakeText = '';
     timers.clearTimeout(restartTimer);
     timers.clearTimeout(questionTimer);
+    if (phase === 'running' && activeMode === 'interrupt' && target === 'standby') {
+      // NOVA finished speaking: same settings, so keep the session (no gap in wake listening).
+      activeMode = target;
+      reportStandby();
+      return;
+    }
     if (phase === 'starting' || phase === 'running') {
       phase = 'stopping';
       reportStandby();
@@ -238,6 +267,7 @@ export function createVoiceListener({
   }
 
   const submit = (text) => {
+    quiet = false;
     setMode(null); // Stop before the request / speaker can hear its own reply.
     onQuestion(text);
   };
@@ -271,7 +301,8 @@ export function createVoiceListener({
       onInputStart(activeMode);
     };
     recognition.onspeechstart = () => {
-      if (!disposed && phase === 'running' && mode === activeMode) onSpeechDetected();
+      // In interrupt mode the sound is usually NOVA herself.
+      if (!disposed && phase === 'running' && mode === activeMode && mode !== 'interrupt') onSpeechDetected();
     };
     recognition.onresult = (event) => {
       if (disposed || phase !== 'running' || mode !== activeMode) return;
@@ -283,6 +314,23 @@ export function createVoiceListener({
         const transcript = result[0]?.transcript || '';
         if (transcript.trim()) heardSpeech = true;
         (result.isFinal ? finals : interims).push({ index, transcript });
+      }
+      if (mode === 'interrupt') {
+        // Nothing heard while NOVA speaks is ever sent, except a question after "hey nova".
+        const heard = [...finals.map((entry) => ({ ...entry, final: true })), ...interims].sort((a, b) => a.index - b.index);
+        for (const { index, transcript, final = false } of heard) {
+          const command = parseInterrupt(transcript, { final, spoken: spokenText() });
+          if (!command) continue;
+          failures = shortEnds = 0;
+          // The same session becomes the question, so words right after the command aren't clipped.
+          continueAsQuestion(index);
+          quiet = true;
+          if (final) { wakeIndex = null; wakeText = ''; }
+          onInterrupt(command.command);
+          if (final && command.question && mode === 'question') submit(command.question);
+          return;
+        }
+        return;
       }
       if (heardSpeech) onSpeechDetected(); // Fallback for engines without speechstart.
       const join = (parts) => parts.map(({ transcript }) => transcript).join(' ').trim();
@@ -328,6 +376,13 @@ export function createVoiceListener({
     recognition.onerror = (event) => {
       if (disposed || phase === 'stopping' || !mode || event.error === 'aborted') return;
       if (event.error === 'no-speech' && mode === 'standby') return;
+      // Listening for an interrupt never disables standby; onend simply retries.
+      if (mode === 'interrupt' && !['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error)) return;
+      if (event.error === 'no-speech' && mode === 'question' && quiet) {
+        setMode('standby');
+        onInputEnd('quiet');
+        return;
+      }
       const failedMode = activeMode;
       if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error)) {
         standbyAllowed = false; // Do not loop permission prompts or missing devices.

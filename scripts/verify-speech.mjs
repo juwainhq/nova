@@ -17,6 +17,7 @@ import { verifyRich } from './rich-checks.mjs';
 import { verifyKokoro } from './kokoro-checks.mjs';
 import { verifyStreaming } from './streaming-checks.mjs';
 import { verifyWebBrowse } from './web-browse-checks.mjs';
+import { verifyInterrupt } from './interrupt-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -559,7 +560,7 @@ check('queued speech stays speaking, not happy or standby', atStage(ui, 'speakin
 const beforeSpeechEnd = mic.starts.length;
 ui.clock.tick(10000);
 ui.flush();
-check('standby cannot restart while speech is queued', mic.starts.length === beforeSpeechEnd);
+check('standby cannot restart while speech is queued; only the interrupt listener starts', mic.starts.length === beforeSpeechEnd + 1 && !ui.find('wake-indicator'));
 reply?.onstart();
 ui.flush();
 check('speaking: no fabricated pulse before a real word boundary', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '');
@@ -578,7 +579,11 @@ ui.clock.tick(100);
 reply?.onboundary({ name: 'word', charLength: 1 });
 ui.clock.tick(25);
 check('speaking: a new word cancels the previous decay timer', ui.avatarElement.style.getPropertyValue('--audio-pulse') === '0.685');
-check('standby stays paused while speech is playing', mic.starts.length === beforeSpeechEnd && !ui.find('wake-indicator'));
+const requestsWhileSpeaking = ui.requests.length;
+mic.result('and that is my answer for you');
+await ui.settle();
+check('standby stays paused while speech is playing; NOVA\'s own words are never sent', mic.starts.length === beforeSpeechEnd + 1 && !ui.find('wake-indicator')
+  && ui.requests.length === requestsWhileSpeaking && atStage(ui, 'speaking'));
 reply?.onend();
 await ui.settle();
 ui.clock.tick();
@@ -730,6 +735,7 @@ await verifyRich(check);
 await verifyKokoro(check);
 await verifyStreaming(check);
 await verifyWebBrowse(check);
+await verifyInterrupt(check);
 await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);

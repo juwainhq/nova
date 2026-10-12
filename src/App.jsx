@@ -182,6 +182,14 @@ function MicIcon({ stopped = false }) {
   );
 }
 
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor" />
+    </svg>
+  );
+}
+
 // Reads the SSE stream. `onDelta` gets each piece of text; `onChunk` runs after
 // each network chunk, so speech can start while the rest is still generating.
 async function readChatCompletionStream(response, { onDelta = () => {}, onChunk = () => {} } = {}) {
@@ -710,6 +718,8 @@ function App() {
   const requestControllerRef = useRef(null);
   const promptRef = useRef(null);
   const speakRef = useRef(null);
+  const interruptRef = useRef(null);
+  const speakingSourceRef = useRef(null); // What NOVA is saying now, to tell her voice from an interrupt.
   const avatarContainerRef = useRef(null);
   const conversationRef = useRef([]);
   const memoriesRef = useRef(memoryState.facts);
@@ -1220,6 +1230,7 @@ function App() {
   // Kokoro fails mid-reply. `input` is text or a speech stream.
   const speakAnswer = useCallback((input, selectedVoiceKey = settings.voiceKey, preview = false, kokoroVoiceId = settings.kokoroVoice) => {
     const source = typeof input === 'string' ? textSpeechStream(input) : input;
+    speakingSourceRef.current = source;
     const engine = kokoroRef.current;
     const audio = kokoroAudioRef.current;
     const browserVoice = typeof window.speechSynthesis?.speak === 'function' && typeof SpeechSynthesisUtterance === 'function';
@@ -1297,6 +1308,8 @@ function App() {
       Recognition: SpeechRecognition,
       onStandbyChange: setWakeStandby,
       onSpeechDetected: () => dismissRichResponse(),
+      onInterrupt: () => interruptRef.current?.(),
+      spokenText: () => speakingSourceRef.current?.text || '',
       onUnsupported: () => setWakeMessage(WAKE_UNSUPPORTED_MESSAGE),
       onInputStart: () => {
         if (listener.wakeSupported) setWakeMessage('');
@@ -1337,19 +1350,23 @@ function App() {
     };
   }, [SpeechRecognition, notify, dismissRichResponse]);
 
-  // Standby is automatic on load / after a reply. Never listen to the speaker,
-  // settings edits, or a hidden tab; resume when the main view is idle again.
+  // Standby is automatic on load / after a reply. Never listen to settings edits
+  // or a hidden tab; resume when the main view is idle again. While NOVA speaks,
+  // listen only for "stop", "wait" or "hey nova" (not during a voice test).
+  // speechVoiceName changes when a reply switches to the fallback voice, whose
+  // start pauses the listener, so the interrupt mode is restored then too.
   useEffect(() => {
     const updateMode = () => {
-      const mode = settingsOpen || document.hidden || stage === 'thinking' || stage === 'speaking'
+      const mode = settingsOpen || document.hidden || stage === 'thinking'
         ? null
-        : stage === 'listening' ? 'question' : 'standby';
+        : stage === 'speaking' ? (voiceTestPlaying ? null : 'interrupt')
+          : stage === 'listening' ? 'question' : 'standby';
       voiceListenerRef.current?.setMode(mode);
     };
     updateMode();
     document.addEventListener('visibilitychange', updateMode);
     return () => document.removeEventListener('visibilitychange', updateMode);
-  }, [settingsOpen, stage, SpeechRecognition]);
+  }, [settingsOpen, stage, SpeechRecognition, voiceTestPlaying, speechVoiceName]);
 
   useEffect(() => () => {
     requestControllerRef.current?.abort();
@@ -1357,7 +1374,29 @@ function App() {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }, []);
 
+  // Stop talking at once (mic button, Space, or "stop" / "wait" / "hey nova") and
+  // just listen. Aborting the request ends the reply; canceling its stream stops
+  // Kokoro's Web Audio sources and queued chunks, or Web Speech, right away.
+  const interruptSpeech = () => {
+    requestControllerRef.current?.abort();
+    speakingSourceRef.current?.cancel();
+    speakingSourceRef.current = null;
+    speechFinishRef.current?.(false);
+    window.speechSynthesis?.cancel();
+    dismissRichResponse();
+    window.clearTimeout(moodTimerRef.current);
+    setMood('idle');
+    setStage('listening');
+    voiceListenerRef.current?.setMode('question', { quiet: true });
+  };
+  interruptRef.current = interruptSpeech;
+  const canInterrupt = stage === 'speaking' && !voiceTestPlaying;
+
   const toggleListening = () => {
+    if (stage === 'speaking') {
+      if (canInterrupt) interruptSpeech();
+      return;
+    }
     if (stage === 'listening') {
       voiceListenerRef.current?.setMode(null);
       setStage('ready');
@@ -1382,13 +1421,13 @@ function App() {
       if ((event.code !== 'Space' && event.key !== ' ') || settingsOpen) return;
       const target = event.target;
       if (target?.isContentEditable || target?.closest?.('button, input, textarea, select, a, .rich-content-panel')) return;
-      if (stage !== 'ready' && stage !== 'listening') return;
+      if (stage !== 'ready' && stage !== 'listening' && !canInterrupt) return;
       event.preventDefault();
       if (!event.repeat) toggleListening();
     };
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
-  }, [settingsOpen, stage, dismissRichResponse]);
+  }, [settingsOpen, stage, dismissRichResponse, canInterrupt]);
 
   const statusText = stage === 'ready' && connection === 'checking'
     ? STATUS_TEXT.starting : STATUS_TEXT[stage];
@@ -1489,14 +1528,15 @@ function App() {
           <div className={`mic-halo ${stage === 'listening' ? 'mic-halo-active' : ''}`} />
           <button
             ref={micButtonRef}
-            className={`mic-button ${stage === 'listening' ? 'mic-button-active' : ''}`}
+            className={`mic-button ${stage === 'listening' ? 'mic-button-active' : ''}${canInterrupt ? ' mic-button-stop' : ''}`}
             type="button"
             onClick={toggleListening}
-            disabled={stage === 'thinking' || stage === 'speaking'}
-            aria-label={stage === 'listening' ? 'Stop listening' : 'Start listening'}
+            disabled={stage === 'thinking' || (stage === 'speaking' && !canInterrupt)}
+            aria-label={canInterrupt ? 'Stop speaking' : stage === 'listening' ? 'Stop listening' : 'Start listening'}
+            title={canInterrupt ? 'Stop speaking (or say “stop”)' : undefined}
             aria-keyshortcuts="Space"
           >
-            <MicIcon stopped={stage === 'listening'} />
+            {canInterrupt ? <StopIcon /> : <MicIcon stopped={stage === 'listening'} />}
             <span className="mic-button-sheen" />
           </button>
         </div>

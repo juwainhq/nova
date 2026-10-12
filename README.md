@@ -60,6 +60,25 @@ NOVA attempts to start continuous microphone recognition as soon as the page loa
 
 Standby requests **interim results** with one recognition alternative, so “hey nova” is detected while it is still being spoken, without waiting for the pause that ends a final result. On an interim wake, the same recognition session continues as the question, with no restart that could clip words said right after the wake phrase. The question is taken from final results, with the wake phrase and anything said before it removed. If the final result turns out not to contain the wake phrase, nothing is sent, and the wake times out like any wake without a question. Everything except the wake phrase and the question that follows is discarded, so unrelated background speech is not saved or sent to Ollama. Recognition pauses while NOVA thinks and speaks, then automatically returns to standby **after speech actually finishes** (or an error is handled). A wake without a question returns to standby after 15 seconds of silence. Opening settings or hiding the tab also suspends listening; returning to the idle main view resumes it.
 
+### Interrupting NOVA
+
+While NOVA is talking, the mic button turns into a **red stop button**. Pressing it, or its Space shortcut, stops her right away. Saying **“stop”**, **“wait”** or **“hey nova”** does the same.
+
+When NOVA is interrupted:
+- The reply's request is aborted.
+- Web Speech is canceled with `speechSynthesis.cancel()`.
+- Kokoro's Web Audio sources are stopped and disconnected, and any chunks it still has queued are canceled.
+- The avatar goes straight to listening.
+
+NOVA says nothing after an interrupt. She just listens. If you say a question after the command (for example “hey nova, what time is it?”), she answers it. If you stay quiet, she returns to wake standby after 15 seconds without showing a “didn't catch that” message. The command word itself is never sent to the model.
+
+How this works:
+- To hear these commands, recognition runs while NOVA speaks, in an interrupt-only mode. Nothing heard in that mode is sent anywhere, except a question said after “hey nova”, and her own voice never counts as you speaking.
+- The mic can pick up NOVA's own voice. For that reason, a command word that appears in what she is currently saying (for example “stop” in “the next stop”) only counts once the recognizer finalizes it as the whole utterance. That is slightly slower than usual.
+- When she finishes speaking, the same recognition session continues in standby, so there is no gap in wake listening.
+- Voice interrupts need continuous recognition. They work best with headphones or good echo cancellation, and on some phones the mic and speaker may not work at the same time.
+- A Settings voice test is not interruptible from the mic button.
+
 ### Browser limits and permissions
 
 - Microphone permission and a secure browser context (HTTPS or localhost) are still required. If automatic startup is blocked, allow microphone access and use the mic button once to retry. The mic button and Space shortcut still work without a wake phrase.
