@@ -491,14 +491,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 @keyframes rich-panel-in { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rich-panel-out { from { opacity: 1; } to { opacity: 0; } }
 
-/* Browsing: NOVA keeps the left 40%; Google results fill the right 60%. */
-.app-shell.has-browse-panel { width: 40%; padding-left: clamp(16px, 2.4vw, 40px); padding-right: clamp(16px, 2.4vw, 40px); }
+/* Browsing: NOVA keeps the left 45%; results sit in a card on the right 55% (at most
+   600px, with NOVA taking the rest, so no empty gap opens between them). */
+.app-shell.has-browse-panel { width: max(45%, calc(100% - 600px)); padding-left: clamp(16px, 2.4vw, 40px); padding-right: clamp(16px, 2.4vw, 40px); }
 .app-shell.has-browse-panel.browse-closing { width: 100%; }
 .has-browse-panel .tagline { max-width: 100%; font-size: clamp(26px, 2.8vw, 42px); }
 .has-browse-panel .toast, .has-browse-panel .response-transcript, .has-browse-panel .active-voice-label { max-width: calc(100% - 24px); }
-.browse-panel { position: fixed; z-index: 8; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: 60%; overflow: hidden; border-left: 1px solid rgba(245, 201, 154, .16); background: #0b0705; box-shadow: -18px 0 48px rgba(0, 0, 0, .45); animation: browse-in .3s ease both; }
+.browse-panel { position: fixed; z-index: 8; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: 55%; max-width: 600px; padding-bottom: 20px; overflow: hidden; border-left: 1px solid rgba(255, 255, 255, .08); border-radius: 12px 0 0 12px; background: #0b0705; box-shadow: -18px 0 48px rgba(0, 0, 0, .45); animation: browse-in .3s ease both; }
 .browse-panel.is-closing { pointer-events: none; animation: browse-out .3s ease both; }
-.browse-header { flex: 0 0 52px; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 10px 0 18px; border-bottom: 1px solid rgba(245, 201, 154, .12); background: #140d09; }
+.browse-header { flex: 0 0 60px; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 10px 0 18px; border-bottom: 1px solid rgba(245, 201, 154, .12); background: #140d09; }
 .browse-kind { flex-shrink: 0; padding: 3px 8px; border: 1px solid rgba(245, 201, 154, .22); border-radius: 999px; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .browse-query { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .browse-close { flex-shrink: 0; width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--cream); font-size: 24px; line-height: 1; cursor: pointer; transition: background .2s; }
@@ -512,7 +513,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
   .app-shell.has-browse-panel.browse-closing { height: 100dvh; }
   .has-browse-panel .tagline { display: none; }
   .has-browse-panel .avatar-container { height: 104px; }
-  .browse-panel { top: auto; width: 100%; height: 60dvh; border-left: 0; border-top: 1px solid rgba(245, 201, 154, .16); animation-name: browse-up; }
+  .browse-panel { top: auto; width: 100%; max-width: none; height: 60dvh; border-left: 0; border-top: 1px solid rgba(255, 255, 255, .08); border-radius: 12px 12px 0 0; animation-name: browse-up; }
   .browse-panel.is-closing { animation-name: browse-down; }
   @keyframes browse-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
   @keyframes browse-down { from { transform: translateY(0); } to { transform: translateY(100%); } }

@@ -79,9 +79,11 @@ export async function verifyWebBrowse(check) {
   check('browse panel: the iframe shows the Google results URL', frame.includes(`src="${browseUrl('images', 'red car').replace(/&/g, '&amp;')}"`) && frame.includes('class="browse-frame"'));
   check('browse panel: the iframe is sandboxed so Google cannot navigate NOVA away', frame.includes('sandbox="') && !frame.includes('allow-top-navigation'));
   const css = await readFile('src/index.css', 'utf8');
-  check('browse layout: left 40% / right 60%, sliding in over 300ms ease', /\.app-shell\.has-browse-panel \{[^}]*width: 40%/.test(css)
-    && /\.browse-panel \{[^}]*width: 60%[^}]*animation: browse-in \.3s ease both/.test(css) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
+  check('browse layout: left 45% / right 55% (max 600px), sliding in over 300ms ease', /\.app-shell\.has-browse-panel \{[^}]*width: max\(45%, calc\(100% - 600px\)\)/.test(css)
+    && /\.browse-panel \{[^}]*width: 55%; max-width: 600px;[^}]*animation: browse-in \.3s ease both/.test(css) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
     && css.includes('@keyframes browse-in { from { transform: translateX(100%); }'));
+  check('browse layout: a floating card with a rounded, subtly bordered left edge', /\.browse-panel \{[^}]*border-left: 1px solid rgba\(255, 255, 255, \.08\);[^}]*border-radius: 12px 0 0 12px/.test(css));
+  check('browse layout: the frame leaves 60px for the header and 20px at the bottom', /\.browse-header \{ flex: 0 0 60px;/.test(css) && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
   check('browse layout: the panel never scrolls; the iframe fills it with no border', /\.browse-panel \{[^}]*overflow: hidden/.test(css)
     && /\.browse-frame \{[^}]*flex: 1;[^}]*width: 100%;[^}]*border: 0/.test(css));
   check('browse layout: the closed app keeps its full width', /\.app-shell \{[^}]*width: 100%/.test(css) && /\.browse-closing \{ width: 100%; \}/.test(css));

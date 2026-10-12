@@ -270,7 +270,7 @@ For predictable rendering, previews show up to 24 distinct links and 60 list ite
 
 ## Web browsing
 
-Search requests open a **browsing panel beside NOVA** instead of a new tab. NOVA keeps the left 40% of the screen: avatar, status and mic, exactly as usual. The panel takes the right 60% and slides in over 300ms. It has a dark header with the search type, the query and an **×** button, and Google's results fill the rest of the panel. NOVA says **“Here's what I found!”**. A new search while the panel is open replaces its results.
+Search requests open a **browsing panel beside NOVA** instead of a new tab. NOVA keeps the left 45% of the screen: avatar, status and mic, exactly as usual. The panel is a card on the right 55%, at most 600px wide; on wider screens NOVA takes the rest. It has a rounded, subtly bordered left edge and slides in over 300ms. Results leave 60px at the top for the header and 20px at the bottom. It has a dark header with the search type, the query and an **×** button, and Google's results fill the rest of the panel. NOVA says **“Here's what I found!”**. A new search while the panel is open replaces its results.
 
 | Say | Opens |
 |---|---|
