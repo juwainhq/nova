@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BROWSE_KINDS } from './web-browse.js';
 
 // On phones the results sheet is dismissed by dragging its grabber down: a release
@@ -10,11 +10,29 @@ const CLOSE_FRACTION = 1 / 3;
 const FLICK_PX_PER_MS = 0.5; // A deliberate downward toss, not a slow slide.
 const RELEASE_MS = 220; // Kept under the panel's own 300ms unmount window.
 
-export default function BrowsePanel({ browse, onClose }) {
+export default function BrowsePanel({ browse, onClose, onNavigate, onBack, onForward, onRefresh }) {
   const rootRef = useRef(null);
+  const addressRef = useRef(null);
   const dragRef = useRef(null);
   // Sticky: once the finger has taken the sheet, the entry keyframes stop filling.
   const [dragged, setDragged] = useState(false);
+  const [address, setAddress] = useState(browse.url);
+  // An address the app refuses (a non-web scheme) marks the bar instead of doing nothing.
+  const [refused, setRefused] = useState(false);
+
+  // The frame is cross-origin: nothing here can read where Google went next, so
+  // the bar shows the address NOVA last loaded, and follows back/forward/refresh.
+  useEffect(() => { setAddress(browse.url); setRefused(false); }, [browse.url]);
+
+  const submitAddress = useCallback((event) => {
+    event.preventDefault();
+    const raw = address.trim();
+    if (!raw) return;
+    // The app owns the address rules (see browseInputStop), so it also reports back.
+    if (onNavigate?.(raw) === false) { setRefused(true); return; }
+    setRefused(false);
+    addressRef.current?.select?.(); // Ready for the next address without another tap.
+  }, [address, onNavigate]);
 
   const endDrag = useCallback((snapBack = false) => {
     const root = rootRef.current;
@@ -66,6 +84,9 @@ export default function BrowsePanel({ browse, onClose }) {
   const classes = ['browse-panel'];
   if (browse.closing) classes.push('is-closing');
   if (dragged) classes.push('is-dragged');
+  const onGoogle = /^https:\/\/(?:www\.)?google\.com\/search\?/.test(browse.url);
+  const canBack = (browse.entries?.length ?? 0) > 0 && browse.step > 0;
+  const canForward = browse.step >= 0 && browse.step < (browse.entries?.length ?? 0) - 1;
   return (
     <aside
       ref={rootRef}
@@ -86,13 +107,36 @@ export default function BrowsePanel({ browse, onClose }) {
         <h2 className="browse-query" title={browse.query}>{browse.query}</h2>
         <button className="browse-close" type="button" aria-label="Close search panel" disabled={browse.closing} onClick={onClose}>×</button>
       </header>
+      <div className="browse-chrome">
+        <div className="browse-nav">
+          <button className="browse-nav-button" type="button" aria-label="Go back" title="Back" disabled={!canBack || browse.closing} onClick={onBack}>←</button>
+          <button className="browse-nav-button" type="button" aria-label="Go forward" title="Forward" disabled={!canForward || browse.closing} onClick={onForward}>→</button>
+          <button className="browse-nav-button" type="button" aria-label="Refresh this page" title="Refresh" disabled={browse.closing} onClick={onRefresh}>↺</button>
+        </div>
+        <form className="browse-address" onSubmit={submitAddress}>
+          <input
+            ref={addressRef}
+            className={`browse-address-input${refused ? ' is-refused' : ''}`}
+            type="text"
+            aria-label="Address or search"
+            aria-invalid={refused || undefined}
+            title={refused ? 'Only a web address or a search can open in here.' : undefined}
+            placeholder="Search or type an address"
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck="false"
+            value={address}
+            onChange={(event) => { setAddress(event.target.value); setRefused(false); }}
+          />
+        </form>
+      </div>
       <iframe
-        key={browse.url}
+        key={`${browse.url}#${browse.frame || 0}`}
         className="browse-frame"
         src={browse.url}
-        title={`Google ${kind.toLowerCase()} results for ${browse.query}`}
+        title={onGoogle ? `Google ${kind.toLowerCase()} results for ${browse.query}` : `${browse.query} in the browsing panel`}
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-        allow="fullscreen; picture-in-picture"
+        allow="autoplay; fullscreen; picture-in-picture"
         referrerPolicy="strict-origin-when-cross-origin"
       />
     </aside>

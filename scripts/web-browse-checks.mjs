@@ -8,7 +8,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import {
-  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseRequest, browseUrl, imageRequestQuery, isCloseCommand,
+  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseGoto, browseInputStop, browseNavRequest,
+  browseRequest, browseTargetUrl, browseUrl, imageRequestQuery, isCloseCommand, pushBrowseHistory,
   videoRequestQuery, webSearchQuery,
 } from '../src/web-browse.js';
 import { createAppHarness, createStorageDouble } from './speech-test-fixtures.mjs';
@@ -56,10 +57,58 @@ export async function verifyWebBrowse(check) {
   check('browse intent: videos win over the "show me …" picture rule', imageRequestQuery('show me videos') === null && videoRequestQuery('show me a video of cats') === 'cats');
   check('browse intent: "search for pictures of X" is an image search, not web', webSearchQuery('search for pictures of cats') === null
     && browseRequest('search for pictures of cats')?.kind === 'images');
-  for (const command of ['close', 'Close.', 'hide', 'go back', 'close the panel', 'hide the results', 'close it please', 'okay close', 'Go back.']) {
+  for (const command of ['close', 'Close.', 'hide', 'close the panel', 'hide the results', 'close it please', 'okay close', 'close browser', 'close the browser', 'dismiss the search results']) {
     check(`browse close: "${command}" closes the panel`, isCloseCommand(command));
   }
   check('browse close: longer requests are not close commands', ['close the door', 'how do I go back to sleep', 'hide and seek rules', 'close friends'].every((text) => !isCloseCommand(text)));
+  check('browse close: "go back" is a navigation command now, not a way to close', !isCloseCommand('go back') && browseNavRequest('go back')?.action === 'back');
+
+  // ------------------------------------------------------- browser commands + address
+  for (const phrase of ['go back', 'Go back.', 'back', 'please go back', 'go back one page', 'head back']) {
+    check(`browse nav: "${phrase}" goes back`, browseNavRequest(phrase)?.action === 'back');
+  }
+  for (const phrase of ['go forward', 'forward', 'next page', 'Next.']) {
+    check(`browse nav: "${phrase}" goes forward`, browseNavRequest(phrase)?.action === 'forward');
+  }
+  for (const phrase of ['refresh', 'Refresh.', 'reload the page', 'refresh the panel']) {
+    check(`browse nav: "${phrase}" refreshes`, browseNavRequest(phrase)?.action === 'refresh');
+  }
+  for (const phrase of ['go to github.com', 'open example.com/docs', 'visit https://news.ycombinator.com/item?id=1', 'navigate to en.wikipedia.org']) {
+    check(`browse nav: "${phrase}" goes to that site`, browseNavRequest(phrase)?.action === 'goto'
+      && /^https:\/\//.test(browseNavRequest(phrase).url));
+  }
+  for (const phrase of ['go to bed', 'how do I go back to sleep', 'open the pod bay doors', 'refresh my memory', 'go to the store', 'what is github.com']) {
+    check(`browse nav: "${phrase}" stays an ordinary request`, browseNavRequest(phrase) === null && browseGoto(phrase) === null);
+  }
+  check('browse nav: "go to the website of reddit.com" still finds the host', browseGoto('go to the website of reddit.com')?.url === 'https://reddit.com/');
+  const first = pushBrowseHistory([], -1, { url: 'https://a.test/' });
+  const second = pushBrowseHistory(first.entries, first.step, { url: 'https://b.test/' });
+  const third = pushBrowseHistory(second.entries, second.step, { url: 'https://c.test/' });
+  check('browse trail: each opened page becomes one stop, newest last', second.step === 1 && third.step === 2
+    && third.entries.map((stop) => stop.url).join(' ') === 'https://a.test/ https://b.test/ https://c.test/');
+  check('browse trail: opening from the middle drops the forward stops', pushBrowseHistory(third.entries, 0, { url: 'https://d.test/' }).entries.length === 2);
+  check('browse trail: the same page twice does not stack a duplicate stop', pushBrowseHistory(third.entries, third.step, { url: 'https://c.test/' }).step === 2
+    && pushBrowseHistory(third.entries, third.step, { url: 'https://c.test/' }).entries.length === 3);
+  check('browse trail: the bar keeps at most 12 stops', pushBrowseHistory(Array.from({ length: 12 }, (_, i) => ({ url: `https://${i}.test/` })), 11, { url: 'https://x.test/' }).entries.length === 12);
+  const typed = [
+    ['example.com', 'https://example.com/'],
+    ['http://localhost:8080/x', 'http://localhost:8080/x'],
+    ['//example.com/a', 'https://example.com/a'],
+    ['dogs', 'https://www.google.com/search?igu=1&q=dogs'],
+    ['best pizza in Dhaka', 'https://www.google.com/search?igu=1&q=best+pizza+in+Dhaka'],
+  ];
+  for (const [input, url] of typed) {
+    check(`browse address: "${input}" loads ${url}`, browseInputStop(input)?.url === url);
+  }
+  check('browse address: a bare word is searched, not treated as a host', browseTargetUrl('dogs') === null
+    && browseTargetUrl('localhost:3000') === null && browseTargetUrl('localhost') === null);
+  for (const blocked of ['javascript:alert(1)', 'data:text/html,<script>1</script>', 'file:///etc/passwd', 'view-source:https://example.com', 'vbscript:msgbox']) {
+    check(`browse address: "${blocked.split(':')[0]}:" is never loaded into the frame`, browseTargetUrl(blocked) === null
+      && browseInputStop(blocked) === null);
+  }
+  check('browse address: a search keeps the words as the label, a host keeps its name', browseInputStop('red panda')?.query === 'red panda'
+    && browseInputStop('wikipedia.org/wiki/Cat')?.query === 'wikipedia.org');
+  check('browse address: DuckDuckGo is still not used for typed searches', !browseInputStop('dogs').url.includes('duckduckgo.com'));
 
   // ------------------------------------------------------------------- URLs
   const web = new URL(browseUrl('web', 'cats & dogs / ঢাকা #1'));
@@ -79,6 +128,7 @@ export async function verifyWebBrowse(check) {
   check('browse panel: the iframe shows the Google results URL', frame.includes(`src="${browseUrl('images', 'red car').replace(/&/g, '&amp;')}"`) && frame.includes('class="browse-frame"'));
   check('browse panel: the iframe is sandboxed so Google cannot navigate NOVA away', frame.includes('sandbox="') && !frame.includes('allow-top-navigation'));
   const css = await readFile('src/index.css', 'utf8');
+  const handle = await readFile('src/BrowsePanel.jsx', 'utf8');
   check('browse layout: left 45% / right 55% (max 600px), sliding in over 300ms ease', /\.app-shell\.has-browse-panel \{[^}]*width: max\(45%, calc\(100% - 600px\)\)/.test(css)
     && /\.browse-panel \{[^}]*width: 55%; max-width: 600px;[^}]*animation: browse-in \.3s ease both/.test(css) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
     && css.includes('@keyframes browse-in { from { transform: translateX(100%); }'));
@@ -94,13 +144,41 @@ export async function verifyWebBrowse(check) {
     && /@media \(max-width: 700px\)[\s\S]*\.browse-handle \{ display: block;/.test(css)
     && /\.browse-handle \{[^}]*touch-action: none/.test(css.replace(/\n\s*/g, ' ')));
   check('browse layout: a held sheet keeps its own transform instead of the entry fill', /\.browse-panel\.is-dragged \{ animation-fill-mode: none; \}/.test(css));
-  const handle = await readFile('src/BrowsePanel.jsx', 'utf8');
   check('browse drag: the grabber owns one pointer gesture, start to release', /onPointerDown=\{[^}]*\}[\s\S]*?onPointerMove=[\s\S]*?onPointerUp=[\s\S]*?onPointerCancel=/.test(handle.replace(/\n\s*/g, ' '))
     && /setPointerCapture\?\.\(event\.pointerId\)/.test(handle));
   check('browse drag: the sheet only follows the finger downward, and a release hands the close to the app',
     /Math\.max\(0, event\.clientY - drag\.from\)/.test(handle) && /onClose\(\)/.test(handle)
     && /close \? 'translateY\(100%\)' : 'translateY\(0\)'/.test(handle)
     && /height \* CLOSE_FRACTION \|\| speed >= FLICK_PX_PER_MS/.test(handle));
+  const addressInput = html.match(/<input[^>]*class="browse-address-input"[^>]*>/)?.[0] ?? '';
+  check('browse chrome: the address bar shows the page the frame last loaded', addressInput.includes('aria-label="Address or search"')
+    && addressInput.includes(`value="${browseUrl('images', 'red car').replace(/&/g, '&amp;')}"`)
+    && /<form class="browse-address" action="[^"]*"|<form class="browse-address"/.test(html));
+  check('browse chrome: back, forward and refresh sit on the left of the bar', /class="browse-nav">\s*<button[^>]*class="browse-nav-button"[^>]*aria-label="Go back"[^>]*>←<\/button>[\s\S]*aria-label="Go forward"[^>]*>→<\/button>[\s\S]*aria-label="Refresh this page"[^>]*>↺<\/button>/.test(html.replace(/><\/button>/g, '></button>')));
+  check('browse chrome: the arrows start disabled where the trail cannot go', (html.match(/aria-label="Go (?:back|forward)"[^>]*disabled/g) || []).length === 2
+    && !/aria-label="Refresh this page"[^>]*disabled/.test(html));
+  check('browse chrome: a dark pill bar, still under the 60px header and above the frame', /\.browse-chrome \{[^}]*flex: 0 0 46px/.test(css)
+    && /\.browse-address-input \{[^}]*border-radius: 999px; background: rgba\(10, 6, 4, \.72\)/.test(css)
+    && /\.browse-header \{ flex: 0 0 60px;/.test(css));
+  check('browse chrome: the frame still fills what is left, bottom gap included', /\.browse-frame \{ flex: 1;[^}]*min-height: 0/.test(css)
+    && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
+  const sandboxTokens = (frame.match(/sandbox="([^"]*)"/)?.[1] ?? '').split(/\s+/).filter(Boolean);
+  const KNOWN_SANDBOX = new Set(['allow-downloads', 'allow-forms', 'allow-modals', 'allow-orientation-lock', 'allow-pointer-lock',
+    'allow-popups', 'allow-popups-to-escape-sandbox', 'allow-presentation', 'allow-same-origin', 'allow-scripts',
+    'allow-storage-access-by-user-activation', 'allow-top-navigation', 'allow-top-navigation-by-user-activation',
+    'allow-top-navigation-to-custom-protocols']);
+  check('browse iframe: every sandbox token is one browsers know (allow-navigation is not)',
+    sandboxTokens.length > 0 && sandboxTokens.every((token) => KNOWN_SANDBOX.has(token)));
+  check('browse iframe: pages the user clicks can load inside the frame, and the panel keeps NOVA',
+    sandboxTokens.includes('allow-scripts') && sandboxTokens.includes('allow-forms') && sandboxTokens.includes('allow-same-origin')
+    && sandboxTokens.includes('allow-popups') && !sandboxTokens.some((token) => token.startsWith('allow-top-navigation')));
+  check('browse iframe: media may autoplay and take fullscreen inside the panel', /allow="autoplay; fullscreen[^"]*"/.test(frame));
+  const blockedRules = [...css.matchAll(/^(\.browse[^{\n]*)\s*\{([^}\n]*)\}/gm)]
+    .filter(([, , body]) => /pointer-events:\s*none/.test(body)).map(([, selector]) => selector);
+  check('browse panel: no rule keeps the pointer away from the frame except while closing',
+    blockedRules.every((selector) => selector.includes('is-closing')));
+  check('browse panel: the frame is not covered by an absolutely placed layer', !/\.browse-(frame|chrome)[^{]*\{[^}]*position: absolute/.test(css)
+    && /<iframe[\s\S]*class="browse-frame"/.test(html) && !/\.browse-panel > :last-child[^}]*\{[^}]*inset: 0/.test(css));
   check('browse layout: the closed app keeps its full width', /\.app-shell \{[^}]*width: 100%/.test(css) && /\.browse-closing \{ width: 100%; \}/.test(css));
 
   // ---------------------------------------------------------------------- App
@@ -172,6 +250,73 @@ export async function verifyWebBrowse(check) {
   button.flush();
   check('browse App: …and the old close timer cannot remove it', Boolean(panel(button)));
   button.unmount();
+
+  // ------------------------------------------------- the trail, the bar and the arrows
+  const trail = await ready();
+  await ask(trail, 'show me a dog');
+  await end(trail);
+  await ask(trail, 'search for cats');
+  await end(trail);
+  const stops = (ui) => panel(ui)?.props.browse;
+  check('browse App: the bar shows the page the frame last loaded', stops(trail).url === browseUrl('web', 'cats') && stops(trail).frame === 0);
+  const chatsBeforeChrome = chats(trail);
+  panel(trail).props.onBack();
+  trail.flush();
+  check('browse App: the back arrow steps to the earlier search', stops(trail).url === browseUrl('images', 'dog')
+    && stops(trail).query === 'dog' && stops(trail).step === 0);
+  panel(trail).props.onForward();
+  trail.flush();
+  check('browse App: the forward arrow steps to the newest page', stops(trail).url === browseUrl('web', 'cats') && stops(trail).step === 1);
+  panel(trail).props.onRefresh();
+  trail.flush();
+  check('browse App: refresh remounts the same address instead of asking the frame', stops(trail).frame === 1
+    && stops(trail).url === browseUrl('web', 'cats'));
+  panel(trail).props.onNavigate('wikipedia.org/wiki/Cat');
+  trail.flush();
+  check('browse App: a typed address is loaded in place, host as its label', stops(trail).url === 'https://wikipedia.org/wiki/Cat'
+    && stops(trail).query === 'wikipedia.org' && stops(trail).step === 2);
+  panel(trail).props.onBack();
+  trail.flush();
+  check('browse App: a typed page lands on the trail, so back returns to the search', stops(trail).url === browseUrl('web', 'cats'));
+  const refusedBefore = stops(trail).url;
+  check('browse App: a non-web scheme is refused rather than opened', panel(trail).props.onNavigate('javascript:alert(1)') === false);
+  trail.flush();
+  check('browse App: a refused address leaves the frame where it was', stops(trail).url === refusedBefore);
+  check('browse chrome: a refused address marks the bar instead of floating a layer over the frame',
+    /className=\{`browse-address-input\$\{refused \? ' is-refused' : ''\}`\}/.test(handle)
+    && /aria-invalid=\{refused \|\| undefined\}/.test(handle)
+    && /\.browse-address-input\.is-refused \{[^}]*border-color/.test(css) && !/\.browse-note/.test(css));
+  panel(trail).props.onNavigate('red pandas');
+  trail.flush();
+  check('browse App: a word without a dot becomes a search in the same panel', stops(trail).url === browseUrl('web', 'red pandas')
+    && stops(trail).query === 'red pandas');
+  check('browse App: none of the chrome touched the model or spoke', chats(trail) === chatsBeforeChrome && trail.utterances.length === 2);
+  trail.unmount();
+
+  const voiceNav = await ready();
+  await ask(voiceNav, 'go to example.com');
+  check('browse voice: "go to example.com" opens the panel on that page', panel(voiceNav)?.props.browse.url === 'https://example.com/'
+    && panel(voiceNav)?.props.browse.query === 'example.com' && shell(voiceNav).includes('has-browse-panel'));
+  check('browse voice: a goto is answered by the frame, not the model, and in silence', chats(voiceNav) === 0
+    && voiceNav.utterances.length === 0 && atStage(voiceNav, 'ready'));
+  await ask(voiceNav, 'go to news.ycombinator.com');
+  check('browse voice: a second goto pushes onto the same open panel', panel(voiceNav)?.props.browse.url === 'https://news.ycombinator.com/'
+    && panel(voiceNav)?.props.browse.step === 1);
+  await ask(voiceNav, 'go back');
+  check('browse voice: "go back" navigates the panel instead of closing it', panel(voiceNav)?.props.browse.url === 'https://example.com/'
+    && panel(voiceNav)?.props.browse.closing === false);
+  await ask(voiceNav, 'refresh');
+  check('browse voice: "refresh" reloads the current page', panel(voiceNav)?.props.browse.frame === 1
+    && panel(voiceNav)?.props.browse.url === 'https://example.com/');
+  await ask(voiceNav, 'back');
+  check('browse voice: at the start of the trail "back" leaves the panel', panel(voiceNav)?.props.browse.closing === true
+    && shell(voiceNav).includes('browse-closing'));
+  voiceNav.clock.tick(BROWSE_SLIDE_MS);
+  voiceNav.flush();
+  check('browse voice: and it is gone after the slide', !panel(voiceNav) && !shell(voiceNav).includes('has-browse-panel'));
+  await ask(voiceNav, 'close browser');
+  check('browse voice: "close browser" with nothing open is an ordinary request', chats(voiceNav) === 1);
+  voiceNav.unmount();
 
   const offline = await ready({ modelsOffline: true });
   await ask(offline, 'search for tea');

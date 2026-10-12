@@ -6,7 +6,8 @@ import {
   RICH_FADE_MS, RICH_VISIBLE_MS, hasRichResponse, richResponse,
 } from './rich-response.js';
 import {
-  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseRequest, browseUrl, isCloseCommand,
+  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseGoto, browseInputStop, browseNavRequest, browseRequest,
+  browseUrl, isCloseCommand, pushBrowseHistory,
 } from './web-browse.js';
 import { APP_NAME } from './brand.js';
 import {
@@ -783,11 +784,54 @@ function App() {
   }, []);
 
   // The browsing panel slides in beside NOVA, and out on "close" or its × button.
-  const openBrowse = useCallback((kind, query) => {
+  // Every page it loads goes through one stop on the panel's own trail, so the
+  // address bar, the arrows and NOVA's voice commands all move the same state.
+  const pushBrowseStop = useCallback((stop) => {
     window.clearTimeout(browseTimerRef.current);
-    const next = { kind, query, url: browseUrl(kind, query), closing: false };
+    const current = browseRef.current;
+    const open = current && !current.closing;
+    const trail = pushBrowseHistory(open ? current.entries : [], open ? current.step : -1, stop);
+    const next = { ...stop, ...trail, frame: 0, closing: false };
     browseRef.current = next;
     setBrowse(next);
+    return true;
+  }, []);
+
+  const openBrowse = useCallback((kind, query) => {
+    pushBrowseStop({ kind, query, url: browseUrl(kind, query) });
+  }, [pushBrowseStop]);
+
+  // Typed or pasted into the address bar. Returns false for an address the frame
+  // must not load, so the panel can say so instead of sitting still.
+  const goBrowse = useCallback((text) => {
+    const stop = browseInputStop(text);
+    return stop ? pushBrowseStop(stop) : false;
+  }, [pushBrowseStop]);
+
+  // The frame is cross-origin, so its own history is unreadable and unsteerable:
+  // "back" means the previous stop NOVA opened. At the start of the trail it means
+  // leaving the panel, which is what "go back" did before the panel had a trail.
+  const stepBrowse = useCallback((delta) => {
+    const current = browseRef.current;
+    if (!current || current.closing) return false;
+    const step = current.step + delta;
+    const stop = current.entries[step];
+    if (!stop) return false;
+    const next = { ...current, ...stop, step, frame: 0 };
+    browseRef.current = next;
+    setBrowse(next);
+    return true;
+  }, []);
+
+  // contentWindow.location.reload() throws across origins, so a refresh remounts
+  // the frame on the same address instead.
+  const refreshBrowse = useCallback(() => {
+    const current = browseRef.current;
+    if (!current || current.closing) return false;
+    const next = { ...current, frame: (current.frame || 0) + 1 };
+    browseRef.current = next;
+    setBrowse(next);
+    return true;
   }, []);
   const closeBrowse = useCallback(() => {
     const current = browseRef.current;
@@ -933,9 +977,13 @@ function App() {
 
     const currentMemory = refreshMemories(false);
     const intent = parseMemoryIntent(prompt);
-    // With the browsing panel open, "close" / "hide" / "go back" just closes it.
-    const closeRequest = !intent && Boolean(browseRef.current && !browseRef.current.closing) && isCloseCommand(prompt);
-    const browseQuery = intent || closeRequest ? null : browseRequest(prompt);
+    // With the panel open these are browser commands, not questions: "close"/"hide"
+    // leave it, "go back"/"next"/"refresh" move the frame, and "go to <site>" loads a
+    // page whether or not the panel is already there.
+    const panelOpen = Boolean(browseRef.current && !browseRef.current.closing);
+    const navRequest = !intent && (panelOpen ? browseNavRequest(prompt) : browseGoto(prompt));
+    const closeRequest = !intent && panelOpen && !navRequest && isCloseCommand(prompt);
+    const browseQuery = intent || closeRequest || navRequest ? null : browseRequest(prompt);
     if (browseQuery) openBrowse(browseQuery.kind, browseQuery.query);
 
     let speech = null;
@@ -945,6 +993,16 @@ function App() {
         closeBrowse();
         setStage('ready');
         // The stage ends where it started ("ready"), so the mode effect won't re-run: resume here.
+        voiceListenerRef.current?.setMode(document.hidden ? null : 'standby');
+        return;
+      }
+      if (navRequest) {
+        // Panel commands are answered by the frame itself, so they stay silent and
+        // work with Ollama offline: no request, no reply, straight back to standby.
+        if (navRequest.action === 'goto') pushBrowseStop({ kind: 'web', query: navRequest.query, url: navRequest.url });
+        else if (navRequest.action === 'refresh') refreshBrowse();
+        else if (!stepBrowse(navRequest.action === 'back' ? -1 : 1) && navRequest.action === 'back') closeBrowse();
+        setStage('ready');
         voiceListenerRef.current?.setMode(document.hidden ? null : 'standby');
         return;
       }
@@ -1053,7 +1111,7 @@ function App() {
     } finally {
       if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
-  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse, openBrowse, closeBrowse]);
+  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse, openBrowse, closeBrowse, pushBrowseStop, stepBrowse, refreshBrowse]);
 
   // Resolve only when speech ends, not when it is queued. Otherwise standby
   // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
@@ -1595,7 +1653,7 @@ function App() {
         </div>
       </footer>
 
-      {browse && <BrowsePanel browse={browse} onClose={closeBrowse} />}
+      {browse && <BrowsePanel browse={browse} onClose={closeBrowse} onNavigate={goBrowse} onBack={() => stepBrowse(-1)} onForward={() => stepBrowse(1)} onRefresh={refreshBrowse} />}
 
       {notice && <div className="toast" role="status"><span className="toast-mark">!</span><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
       {settingsOpen && (
