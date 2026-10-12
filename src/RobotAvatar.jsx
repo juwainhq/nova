@@ -72,7 +72,9 @@ function RobotAvatar() {
       <circle className="orb-bloom" cx="140" cy="140" r="106" fill="#FFF0DB" filter="url(#orbBloom)" />
       <path className="blob-shape" d="M141 29C202 29 251 77 251 139C251 199 207 247 146 251C83 254 31 208 29 146C27 84 74 32 134 29C136 29 139 29 141 29Z" fill="url(#orbSurface)" stroke="#FFFDFC" strokeOpacity=".88" strokeWidth="2" filter="url(#orbShadow)" />
       <ellipse className="orb-sheen" cx="116" cy="83" rx="52" ry="39" fill="url(#orbHighlight)" opacity=".72" />
-      <path d="M63 171C73 215 108 237 146 237" stroke="#C6AD92" strokeOpacity=".22" strokeWidth="2" strokeLinecap="round" />
+      {/* One arc only: the rim light catching the upper right. The matching curve that used to
+          shade the lower left reads as a chin line on a face that has no mouth, so the volume is
+          left to the surface gradient and the drop shadow, which is where it came from anyway. */}
       <path d="M217 76C237 95 246 119 246 144" stroke="#FFFFFF" strokeOpacity=".58" strokeWidth="2" strokeLinecap="round" />
 
       {/* Gaze, blink and speech light each act on the pair, never on just one eye.

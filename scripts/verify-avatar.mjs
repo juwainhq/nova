@@ -115,6 +115,9 @@ check('renders an accessible SVG with lowercase aria-label', svg?.tag === 'svg' 
   && svg.attrs['aria-label']?.startsWith('NOVA,')
   && Object.keys(svg.attrs).filter((name) => /^aria-/i.test(name)).every((name) => name === name.toLowerCase()));
 check('keeps the mouthless orb body and bloom', byClass('blob-shape').length === 1 && byClass('orb-bloom').length === 1 && !/mouth/i.test(markup));
+const arcs = nodes(svg).filter((node) => node.tag === 'path' && node.attrs.stroke && !hasClass(node, 'blob-shape'));
+check('the orb carries one rim light and no chin or jaw line', arcs.length === 1
+  && arcs[0].attrs.stroke === '#FFFFFF' && arcs[0].attrs.d.startsWith('M217 76') && !/C6AD92/i.test(markup));
 check('has exactly two named eyes', eyeGroups.length === 2 && hasClass(eyeGroups[0], 'robot-eye-left') && hasClass(eyeGroups[1], 'robot-eye-right'));
 check('both base eyes restore the SVG capsule silhouette with semicircular ends', irises.length === 2 && irises.every((node) =>
   node.tag === 'rect' && near(Number(node.attrs.rx), Number(node.attrs.width) / 2)
