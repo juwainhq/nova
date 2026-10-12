@@ -166,7 +166,7 @@ While this happens, a tiny pulsing **warming up...** appears under the voice lab
 4. NOVA shows **“Let me think...”** until the first audio, then **“Talking with you.”** The reply ends when its last sentence actually finishes playing. Then rich cards appear (built from the whole reply) and wake-word standby resumes.
 5. If the stream breaks or is canceled mid-reply, speech stops right away, queued Kokoro generation is canceled, and the usual connection message appears.
 
-Replies that are already complete, such as memory answers, image and web search replies and the voice test, use the same path all at once. Their first sentence is still generated alone.
+Replies that are already complete, such as memory answers, the “Here's what I found!” search reply and the voice test, use the same path all at once. Their first sentence is still generated alone.
 
 **Latency.** The target is the first word within about 1–2 seconds of you finishing speaking. What's left is roughly:
 - Ollama's time to its first sentence: prompt processing plus a few tokens; a cold model load adds seconds.
@@ -257,7 +257,7 @@ This is a recovery path, not a fix for Chrome's cut-off: a wedged reply still st
 After NOVA finishes speaking, replies with useful extra content open a soft panel **below the avatar and response area**, above the microphone controls:
 
 - **Links:** `http://` and `https://` URLs become clickable cards with the actual domain, a short path, and a subtle open icon. Clicking opens a new tab using `noopener noreferrer`. Markdown/prose punctuation is cleaned up, even when stacked like `(see https://example.com.)`. Canonical duplicates are removed, and malformed/non-web/credential-bearing links are not made clickable. No page previews, favicons, or remote thumbnails are fetched automatically.
-- **Image requests:** found pictures appear in a three-image card. See [Web browsing](#web-browsing).
+- **Searches:** image, video and web search requests open the browsing panel instead of cards. See [Web browsing](#web-browsing).
 - **Lists:** numbered (`1.`, `1)`) and bulleted (`-`, `*`, `•`, etc.) lines become clean cards/chips. Common Markdown emphasis is removed from visual labels. Code fences, Markdown rules like `* * *`, and marker-only lines are not mistaken for list items. The original reply is still spoken in full and unchanged.
 
 The panel appears only after the actual speech-end event, not when text arrives or audio is queued. Silent/unsupported-speech browsers can still use visual replies once the text is ready; failed or canceled utterances do not publish unfinished content. Cards work independently of the optional **Show last response** transcript.
@@ -270,26 +270,33 @@ For predictable rendering, previews show up to 24 distinct links and 60 list ite
 
 ## Web browsing
 
-NOVA can search for images and the web. It does not browse pages or read them back. Requests are recognized locally, before anything is sent to Ollama, so both work with Ollama offline. They are never saved as memories.
+Search requests open a **browsing panel beside NOVA** instead of a new tab. NOVA keeps the left 40% of the screen: avatar, status and mic, exactly as usual. The panel takes the right 60% and slides in over 300ms. It has a dark header with the search type, the query and an **×** button, and Google's results fill the rest of the panel. NOVA says **“Here's what I found!”**. A new search while the panel is open replaces its results.
 
-**Image search:** for example **“show me a dog”**, **“find a picture of a red car”**, **“what does a platypus look like?”** or **“pictures of sunsets”**.
-- NOVA says **“Here's what I found!”** and, once it finishes speaking, opens the rich panel. The panel slides up from the bottom with three pictures.
-- Each picture opens its full-size original in a new tab. **More on Google Images** links to the full search.
-- The panel follows the usual rules: it fades after 30 seconds or as soon as you speak again.
-- “Show me …” only counts as a picture request for things. “Show me how to…”, “show me the weather” and “show me my reminders” stay normal chat.
-- Pictures come from two keyless public APIs searched together, with results interleaved:
-  - [Wikimedia Commons](https://commons.wikimedia.org/w/api.php);
-  - [Openverse](https://api.openverse.org/v1/), which is limited to about 20 searches a minute and 200 a day per visitor; mature results are excluded.
-- Each search gives up after 5 seconds.
-- If both fail, [LoremFlickr](https://loremflickr.com) tag pictures are used. If those fail too, the `source.unsplash.com/400x300/?term,N` URLs are tried. Unsplash shut that service down in June 2024, so it is only a last resort.
-- A picture that fails to load is replaced by the next one. If none load, the card goes back to the Google Images placeholder with **View Images**.
-- Pictures are loaded without a referrer. Wikimedia Commons has no safe-search filter.
+| Say | Opens |
+|---|---|
+| “show me a dog”, “picture of a sunset”, “image of the Eiffel Tower”, “what does a platypus look like?” | Google Images |
+| “show me a video of cats”, “video of a rocket launch”, “find videos about volcanoes” | Google Videos |
+| “search for best pizza in Dhaka”, “look up the capital of Peru”, “find info on Mars”, “google Bangladesh cricket” | Google web results |
+| “close”, “hide”, “go back” (also “close the panel”, “hide the results”) | Closes the panel |
 
-**Web search:** **“search for best pizza in Dhaka”**, **“look up the capital of Peru”**, **“find information about black holes”** or **“google Bangladesh cricket”**.
-- NOVA opens `https://www.google.com/search?q=…` in a new tab and says **“Opening that search for you!”**
-- Browsers often block new tabs that were not started by a click, and a voice command may not count as one. When the tab is blocked, NOVA says so and shows a **google.com** link card to tap instead. Allowing pop-ups for NOVA's site avoids this.
+How it works:
+- Requests are recognized locally, so they work with Ollama offline and are never saved as memories.
+- Video requests are checked before images, so “show me a video of cats” isn't treated as a picture.
+- “Show me how to…”, “show me the weather” and similar requests stay normal chat.
+- Close commands only apply while the panel is open. Closing is silent: NOVA goes straight back to wake standby. Otherwise “go back” is an ordinary question.
+- The panel stays until you close it. It has no timeout.
+- On screens 700px wide or narrower, NOVA takes the top 40% and the results slide up into the bottom 60%.
 
-Image requests are checked first and web searches second; anything else goes to the model. The code is in `src/web-browse.js`, and the checks are in `scripts/web-browse-checks.mjs`. They cover intent parsing, API response parsing, ordering, fallbacks, timeouts, cancellation, the swap on load errors, panel markup, and the App flow. They use fetch and window doubles, not the live APIs or a real pop-up blocker.
+**Why Google:** DuckDuckGo can't be shown inside another site. It sends `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'`, checked on 12 Oct 2026. Google allows framing when the URL includes the undocumented `igu=1` parameter:
+- web results: `https://www.google.com/search?igu=1&q=…`
+- images: the same URL plus `&tbm=isch`
+- videos: the same URL plus `&tbm=vid`
+
+Google could change this at any time. Google may also show a consent or “unusual traffic” page inside the panel, and some result links lead to sites that refuse framing too.
+
+The iframe is sandboxed without `allow-top-navigation`, so the framed page cannot navigate NOVA away. Links that open a new window still work when you click them.
+
+The code is in `src/web-browse.js` (intents and URLs) and `src/BrowsePanel.jsx`. The checks are in `scripts/web-browse-checks.mjs`. They cover intents, URLs, markup, the CSS layout contract, and the App's open, replace, close and slide-out behavior. They do not show whether Google actually renders in a real browser's iframe.
 
 ## Avatar states
 

@@ -189,8 +189,9 @@ export async function verifyRich(check) {
   check('rich image requests: spoken answer is the requested found-pictures line, panel waits for speech', images.utterances[0]?.text === "Here's what I found!" && !props(images));
   check('rich image requests: local search does not call chat or write memories/preferences', !images.requests.some((request) => request.url.endsWith('/chat/completions')) && images.storage.writes.length === 0);
   await end(images);
-  check('rich image requests: speech completion supplies the encoded Google Images card', content(images)?.images[0].query === 'cats & dogs'
-    && new URL(content(images).images[0].href).searchParams.get('q') === 'cats & dogs');
+  const browsing = images.nodes().find((node) => node.props.browse && node.props.onClose)?.props.browse;
+  check('rich image requests: results open in the browsing panel (Google Images), not as a rich card', !props(images)
+    && browsing?.kind === 'images' && new URL(browsing.url).searchParams.get('q') === 'cats & dogs');
   images.unmount();
   const silent = await ready({ speech: false });
   silent.chatAnswer = sample;

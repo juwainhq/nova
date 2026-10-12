@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
 import RichResponsePanel from './RichResponsePanel.jsx';
+import BrowsePanel from './BrowsePanel.jsx';
 import {
   RICH_FADE_MS, RICH_VISIBLE_MS, hasRichResponse, richResponse,
 } from './rich-response.js';
 import {
-  IMAGE_FOUND_TEXT, WEB_SEARCH_BLOCKED_TEXT, WEB_SEARCH_TEXT, findImages, imageRequestQuery,
-  openSearchTab, searchCard, webSearchQuery,
+  BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseRequest, browseUrl, isCloseCommand,
 } from './web-browse.js';
 import { APP_NAME } from './brand.js';
 import {
@@ -675,6 +675,9 @@ function App() {
   const richContentRef = useRef(null);
   const richVersionRef = useRef(0);
   const richTimersRef = useRef({ expiry: null, removal: null });
+  const [browse, setBrowse] = useState(null);
+  const browseRef = useRef(null);
+  const browseTimerRef = useRef(null);
   const richSlotRef = useRef(null);
   const micButtonRef = useRef(null);
   const [notice, setNotice] = useState('');
@@ -755,6 +758,27 @@ function App() {
       setRichContent(null);
     }, RICH_FADE_MS);
   }, []);
+
+  // The browsing panel slides in beside NOVA, and out on "close" or its × button.
+  const openBrowse = useCallback((kind, query) => {
+    window.clearTimeout(browseTimerRef.current);
+    const next = { kind, query, url: browseUrl(kind, query), closing: false };
+    browseRef.current = next;
+    setBrowse(next);
+  }, []);
+  const closeBrowse = useCallback(() => {
+    const current = browseRef.current;
+    if (!current || current.closing) return;
+    const closing = { ...current, closing: true };
+    browseRef.current = closing;
+    setBrowse(closing);
+    browseTimerRef.current = window.setTimeout(() => {
+      if (browseRef.current !== closing) return;
+      browseRef.current = null;
+      setBrowse(null);
+    }, BROWSE_SLIDE_MS);
+  }, []);
+  useEffect(() => () => window.clearTimeout(browseTimerRef.current), []);
 
   const showRichResponse = useCallback((content, version) => {
     if (version !== richVersionRef.current || !hasRichResponse(content)) return;
@@ -885,16 +909,21 @@ function App() {
 
     const currentMemory = refreshMemories(false);
     const intent = parseMemoryIntent(prompt);
-    const imageQuery = intent ? null : imageRequestQuery(prompt);
-    const searchQuery = intent || imageQuery ? null : webSearchQuery(prompt);
-    // Open the tab before any await so the browser is most likely to allow it.
-    const searchOpened = searchQuery ? openSearchTab(searchQuery, window) : false;
-    // Pictures load while NOVA speaks; the search never rejects.
-    const picturesFound = imageQuery ? findImages(imageQuery, { fetch: (...args) => fetch(...args), signal: controller.signal }) : null;
+    // With the browsing panel open, "close" / "hide" / "go back" just closes it.
+    const closeRequest = !intent && Boolean(browseRef.current && !browseRef.current.closing) && isCloseCommand(prompt);
+    const browseQuery = intent || closeRequest ? null : browseRequest(prompt);
+    if (browseQuery) openBrowse(browseQuery.kind, browseQuery.query);
 
     let speech = null;
     let stream = null;
     try {
+      if (closeRequest) {
+        closeBrowse();
+        setStage('ready');
+        // The stage ends where it started ("ready"), so the mode effect won't re-run: resume here.
+        voiceListenerRef.current?.setMode(document.hidden ? null : 'standby');
+        return;
+      }
       let answer;
       if (intent) {
         // Memory commands run locally, so listing/saving/forgetting still works
@@ -925,8 +954,8 @@ function App() {
           }
         }
       }
-      if (imageQuery || searchQuery) {
-        answer = imageQuery ? IMAGE_FOUND_TEXT : searchOpened ? WEB_SEARCH_TEXT : WEB_SEARCH_BLOCKED_TEXT;
+      if (browseQuery) {
+        answer = BROWSE_FOUND_TEXT;
         conversationRef.current = [
           ...conversationRef.current,
           { role: 'user', content: prompt },
@@ -979,13 +1008,7 @@ function App() {
       const speechCompleted = await (stream ? (speech ?? speakRef.current?.(stream)) : speakRef.current?.(answer));
       if (!controller.signal.aborted) {
         celebrate();
-        if (speechCompleted) {
-          const pictures = picturesFound ? await picturesFound : [];
-          if (controller.signal.aborted) return;
-          if (searchQuery) {
-            if (!searchOpened) showRichResponse(searchCard(searchQuery), richVersion);
-          } else showRichResponse(richResponse(answer, imageQuery, pictures), richVersion);
-        }
+        if (speechCompleted) showRichResponse(richResponse(answer), richVersion);
       }
     } catch (error) {
       // A reply that fails or is canceled mid-stream stops speaking right away.
@@ -1006,7 +1029,7 @@ function App() {
     } finally {
       if (requestControllerRef.current === controller) requestControllerRef.current = null;
     }
-  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse]);
+  }, [notify, settings, celebrate, refreshMemories, commitMemories, dismissRichResponse, showRichResponse, openBrowse, closeBrowse]);
 
   // Resolve only when speech ends, not when it is queued. Otherwise standby
   // starts too early, hears NOVA's own answer, and "happy" masks speaking eyes.
@@ -1472,7 +1495,7 @@ function App() {
   const showRichPanel = Boolean(richContent && !settingsOpen);
 
   return (
-    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}`}>
+    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''}`}>
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
         <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
@@ -1541,6 +1564,8 @@ function App() {
           </button>
         </div>
       </footer>
+
+      {browse && <BrowsePanel browse={browse} onClose={closeBrowse} />}
 
       {notice && <div className="toast" role="status"><span className="toast-mark">!</span><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
       {settingsOpen && (
