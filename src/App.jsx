@@ -15,16 +15,18 @@ import {
   friendlyOllamaError, ollamaError,
 } from './personality.js';
 import {
-  MEMORY_KEY, describeMemoryFact, forgetFact, memoryPrompt, parseMemoryIntent,
+  MEMORY_KEY, describeMemoryFact, forgetFact, memoryName, memoryPrompt, parseMemoryIntent,
   readMemoryStore, rememberFact, writeMemoryStore,
 } from './memory.js';
 import {
   TTS,
   TTS_TEST_TEXT,
   TTS_VOICE_KEY,
+  WAKE_GREET_MS,
   WAKE_WORD,
   WAKE_UNSUPPORTED_MESSAGE,
   createVoiceListener,
+  isSameSpeech,
   createWakeChime,
   defaultVoice,
   describeVoice,
@@ -739,6 +741,8 @@ function App() {
   const speakRef = useRef(null);
   const interruptRef = useRef(null);
   const speakingSourceRef = useRef(null); // What NOVA is saying now, to tell her voice from an interrupt.
+  const greetTimerRef = useRef(null);     // A name greeting waiting for a question that may not come.
+  const greetingRef = useRef('');         // The greeting being spoken, so hearing it back is not a question.
   const avatarContainerRef = useRef(null);
   const conversationRef = useRef([]);
   const memoriesRef = useRef(memoryState.facts);
@@ -1362,6 +1366,11 @@ function App() {
 
   // Keep the recognizer's event handler pointed at the latest assistant request.
   promptRef.current = (text) => {
+    window.clearTimeout(greetTimerRef.current); // The question is here; skip the hello.
+    if (greetingRef.current && isSameSpeech(text, greetingRef.current)) {
+      greetingRef.current = ''; // Her own greeting, heard back by the mic. Not a question.
+      return;
+    }
     askAria(text).then(() => {});
   };
 
@@ -1415,6 +1424,8 @@ function App() {
       onSpeechDetected: (mode) => {
         dismissRichResponse();
         if (mode === 'standby') flashWakeAlert();
+        // Words after the wake phrase are the request itself: no room for a hello.
+        if (mode === 'question') window.clearTimeout(greetTimerRef.current);
       },
       onInterrupt: () => interruptRef.current?.(),
       spokenText: () => speakingSourceRef.current?.text || '',
@@ -1422,7 +1433,7 @@ function App() {
       onInputStart: () => {
         if (listener.wakeSupported) setWakeMessage('');
       },
-      onWake: () => {
+      onWake: (reason = 'wake') => {
         dismissRichResponse();
         window.clearTimeout(moodTimerRef.current);
         window.clearTimeout(wakeAlertTimerRef.current);
@@ -1432,6 +1443,20 @@ function App() {
         setNotice('');
         setStage('listening');
         void wakeChimeRef.current?.play();
+        // Once the name is known, a wake word on its own is answered with a hello by name —
+        // after a beat, and never when the request came in the same breath as the wake phrase.
+        window.clearTimeout(greetTimerRef.current);
+        const name = reason === 'question' ? '' : memoryName(memoriesRef.current);
+        if (name && !requestControllerRef.current && !speechFinishRef.current) {
+          greetTimerRef.current = window.setTimeout(() => {
+            greetTimerRef.current = null;
+            if (requestControllerRef.current || speechFinishRef.current) return;
+            const greeting = `Hi ${name}!`;
+            greetingRef.current = greeting;
+            const settle = () => { if (greetingRef.current === greeting) greetingRef.current = ''; };
+            void speakRef.current?.(greeting)?.then(settle, settle);
+          }, WAKE_GREET_MS);
+        }
       },
       onQuestion: (text) => promptRef.current?.(text),
       onInputEnd: (reason) => {
@@ -1455,6 +1480,7 @@ function App() {
     });
     voiceListenerRef.current = listener;
     return () => {
+      window.clearTimeout(greetTimerRef.current);
       listener.dispose();
       voiceListenerRef.current = null;
     };

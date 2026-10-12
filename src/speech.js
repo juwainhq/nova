@@ -104,7 +104,29 @@ export function voiceOptionLabel(voice) {
 
 export const WAKE_WORD = `hey ${APP_NAME.toLowerCase()}`;
 export const WAKE_UNSUPPORTED_MESSAGE = `I can’t listen for “${WAKE_WORD}” in this browser. Try the mic button instead.`;
+// How long a bare "hey nova" waits before NOVA says hello by name. A question said in the
+// same breath lands first and cancels this, so she never talks over what was asked.
+export const WAKE_GREET_MS = 700;
+
+// onWake is called with why: 'question' (the request came in the same breath, so the app must
+// not greet over it), 'wake' (a bare wake phrase, finalized), 'partial' (heard mid-word, and a
+// question may still follow).
 const wakePattern = new RegExp(`\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b[\\s,.!?:;—-]*`, 'i');
+
+// Speech recognition hears the user's own name as ordinary English, so "my name is
+// Juwain" arrives as "join hug" and the fact is saved (or greeted) wrong. Every
+// transcript is repaired here, before wake detection, question capture and interrupt
+// listening read it — one place, so no path sees the unrepaired words. Whole words
+// only: "join the hug" and "a hawk" are left exactly as they came.
+const NAME_REPAIRS = [
+  [/\bjoin\s+(?:hug|hawk|hock)\b/gi, 'Juwain'],
+  [/\b(?:joo|ju|do)\s+wayne\b/gi, 'Juwain'],
+];
+export function correctTranscript(text) {
+  let corrected = String(text ?? '');
+  for (const [pattern, name] of NAME_REPAIRS) corrected = corrected.replace(pattern, name);
+  return corrected;
+}
 
 // Keep the user's question, including its punctuation, but never send the wake
 // phrase or unrelated standby transcripts to Ollama.
@@ -118,6 +140,13 @@ export function parseWakeWord(text) {
 // the recognizer finalizes it as the whole utterance. Returns the question said
 // after "hey nova" (if any), or null.
 const spokenWords = (text) => ` ${String(text || '').toLowerCase().replace(/[^\p{L}\p{N}']+/gu, ' ').trim()} `;
+
+// Case- and punctuation-insensitive equality: how a transcript is recognised as something
+// NOVA said herself instead of a question the user asked.
+export function isSameSpeech(left, right) {
+  const heard = spokenWords(left).trim();
+  return Boolean(heard) && heard === spokenWords(right).trim();
+}
 export function parseInterrupt(transcript, { final = false, spoken = '' } = {}) {
   const heard = spokenWords(transcript).trim();
   if (!heard) return null;
@@ -137,6 +166,7 @@ export function parseInterrupt(transcript, { final = false, spoken = '' } = {}) 
 // its speech engine runs.
 export function createVoiceListener({
   Recognition,
+  // Called with why she was woken, so a greeting can wait out a question that is still coming.
   onWake = () => {},
   onQuestion = () => {},
   onStandbyChange = () => {},
@@ -312,7 +342,7 @@ export function createVoiceListener({
       let heardSpeech = false;
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
-        const transcript = result[0]?.transcript || '';
+        const transcript = correctTranscript(result[0]?.transcript || '');
         if (transcript.trim()) heardSpeech = true;
         (result.isFinal ? finals : interims).push({ index, transcript });
       }
@@ -343,7 +373,7 @@ export function createVoiceListener({
           tail = /\bhey[,\s]*$/i.test(text) ? 'hey ' : '';
           if (wake) {
             setMode('question');
-            onWake();
+            onWake(wake.question ? 'question' : 'wake');
             if (wake.question) submit(wake.question);
             return;
           }
@@ -352,7 +382,7 @@ export function createVoiceListener({
         if (interims.length && parseWakeWord(`${tail}${join(interims)}`)) {
           failures = shortEnds = 0;
           continueAsQuestion(interims[0].index);
-          onWake();
+          onWake('partial');
         }
       } else if (mode === 'question') {
         armQuestionTimeout();

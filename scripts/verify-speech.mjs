@@ -18,6 +18,7 @@ import { verifyKokoro } from './kokoro-checks.mjs';
 import { verifyStreaming } from './streaming-checks.mjs';
 import { verifyWebBrowse } from './web-browse-checks.mjs';
 import { verifyInterrupt } from './interrupt-checks.mjs';
+import { verifyNames } from './name-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -780,6 +781,7 @@ await verifyInterrupt(check);
 await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);
+await verifyNames(check);
 
 const failed = problems.length;
 for (const { label, ok, detail } of checks) {
