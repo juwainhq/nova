@@ -115,8 +115,10 @@ export function parseWakeWord(text) {
 
 // One recognizer, two modes. A mode change waits for onend before restarting:
 // starting a second session while the first is stopping throws in real browsers.
-// Standby asks for final results only (less JS work), not a promise of low-power
-// or offline recognition — the browser decides how its speech engine runs.
+// Both modes ask for interim results, so the wake phrase is caught while it is
+// still being spoken rather than after the pause that ends a final result. That
+// is not a promise of low-power or offline recognition — the browser decides how
+// its speech engine runs.
 export function createVoiceListener({
   Recognition,
   onWake = () => {},
@@ -152,6 +154,9 @@ export function createVoiceListener({
   let disposed = false;
   let standby = false;
   let tail = '';
+  // After an interim wake: results from this index on still hold the wake phrase.
+  let wakeIndex = null;
+  let wakeText = '';
   let restartTimer;
   let questionTimer;
   let startedAt = 0;
@@ -188,7 +193,7 @@ export function createVoiceListener({
     phase = 'starting';
     try {
       if (wakeSupported) recognition.continuous = true;
-      recognition.interimResults = mode === 'question';
+      recognition.interimResults = true;
       recognition.start();
     } catch (error) {
       const failedMode = activeMode;
@@ -214,6 +219,8 @@ export function createVoiceListener({
     if (target === mode) return;
     mode = target;
     tail = '';
+    wakeIndex = null;
+    wakeText = '';
     timers.clearTimeout(restartTimer);
     timers.clearTimeout(questionTimer);
     if (phase === 'starting' || phase === 'running') {
@@ -233,6 +240,20 @@ export function createVoiceListener({
   const submit = (text) => {
     setMode(null); // Stop before the request / speaker can hear its own reply.
     onQuestion(text);
+  };
+
+  // An interim wake keeps the running session as the question: both modes use the
+  // same settings, so a restart would only risk clipping words said right after
+  // the wake phrase. The question itself still comes from final results.
+  const continueAsQuestion = (index) => {
+    mode = activeMode = 'question';
+    wakeText = tail;
+    wakeIndex = index;
+    tail = '';
+    timers.clearTimeout(restartTimer);
+    armQuestionTimeout();
+    reportStandby();
+    onInputStart('question');
   };
 
   if (recognition) {
@@ -255,28 +276,52 @@ export function createVoiceListener({
     recognition.onresult = (event) => {
       if (disposed || phase !== 'running' || mode !== activeMode) return;
       const finals = [];
+      const interims = [];
       let heardSpeech = false;
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
         const transcript = result[0]?.transcript || '';
         if (transcript.trim()) heardSpeech = true;
-        if (result.isFinal) finals.push(transcript);
+        (result.isFinal ? finals : interims).push({ index, transcript });
       }
       if (heardSpeech) onSpeechDetected(); // Fallback for engines without speechstart.
-      const text = finals.join(' ').trim();
+      const join = (parts) => parts.map(({ transcript }) => transcript).join(' ').trim();
+      const text = join(finals);
       if (mode === 'standby') {
-        if (!text) return;
-        failures = shortEnds = 0;
-        const wake = parseWakeWord(`${tail}${text}`);
-        tail = /\bhey[,\s]*$/i.test(text) ? 'hey ' : '';
-        if (!wake) return;
-        setMode('question');
-        onWake();
-        if (wake.question) submit(wake.question);
+        if (text) {
+          failures = shortEnds = 0;
+          const wake = parseWakeWord(`${tail}${text}`);
+          tail = /\bhey[,\s]*$/i.test(text) ? 'hey ' : '';
+          if (wake) {
+            setMode('question');
+            onWake();
+            if (wake.question) submit(wake.question);
+            return;
+          }
+        }
+        // The wake phrase in an interim result: wake now, mid-word, not after the pause.
+        if (interims.length && parseWakeWord(`${tail}${join(interims)}`)) {
+          failures = shortEnds = 0;
+          continueAsQuestion(interims[0].index);
+          onWake();
+        }
       } else if (mode === 'question') {
         armQuestionTimeout();
+        let said = text;
+        if (wakeIndex !== null) {
+          // The interim wake's own result: drop earlier chatter and the wake phrase.
+          const fresh = join(finals.filter(({ index }) => index >= wakeIndex));
+          if (!fresh) return;
+          wakeText = wakeText ? `${wakeText} ${fresh}` : fresh;
+          const wake = parseWakeWord(wakeText);
+          if (!wake && /\bhey[,\s]*$/i.test(wakeText)) return; // "hey" | "nova …" split across results.
+          // If the final lost the wake phrase, the interim was a mishearing: say nothing.
+          said = wake ? wake.question : '';
+          wakeIndex = null;
+          wakeText = '';
+        }
         // Also accept a repeated wake phrase at the start of a question.
-        const question = /^hey[\s,]/i.test(text) ? parseWakeWord(text)?.question ?? text : text;
+        const question = /^hey[\s,]/i.test(said) ? parseWakeWord(said)?.question ?? said : said;
         if (question) submit(question);
       }
     };
@@ -308,6 +353,8 @@ export function createVoiceListener({
       activeMode = null;
       reportStandby();
       tail = ''; // Never combine words from different sessions.
+      wakeIndex = null;
+      wakeText = '';
       if (!switching && endedMode === 'standby' && mode === 'standby') {
         shortEnds = now() - startedAt < 1000 ? shortEnds + 1 : 0;
         if (shortEnds >= 3) {

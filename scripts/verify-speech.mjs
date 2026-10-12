@@ -275,13 +275,13 @@ function listenerHarness(options = {}) {
 const wake = listenerHarness({ autoStart: false });
 check('startup is deferred so StrictMode cleanup can cancel it', wake.recognition.starts.length === 0 && wake.clock.pending === 1);
 wake.clock.tick();
-check('standby starts continuous final-only recognition', wake.recognition.starts[0].continuous === true && wake.recognition.starts[0].interim === false);
+check('standby starts continuous recognition with interim results', wake.recognition.starts[0].continuous === true && wake.recognition.starts[0].interim === true);
 check('standby indicator waits for actual onstart', wake.events.standby.length === 0);
 wake.recognition.onstart();
 check('standby indicator reflects a running microphone', wake.events.standby.at(-1) === true);
-wake.recognition.result('hey nova', false);
+wake.recognition.result('ordinary interim chatter', false);
 wake.recognition.result('ordinary background speech');
-check('standby discards unrelated and interim transcripts', wake.events.wakes === 0 && wake.events.questions.length === 0);
+check('standby discards unrelated interim and final transcripts', wake.events.wakes === 0 && wake.events.questions.length === 0);
 wake.recognition.result('Hey Nova!');
 check('wake triggers once and does not send an empty question', wake.events.wakes === 1 && wake.events.questions.length === 0);
 check('wake immediately hides standby and aborts the old session', wake.events.standby.at(-1) === false && wake.recognition.aborts === 1);
@@ -310,12 +310,12 @@ inline.recognition.result('Hey, Nova, tell me a joke.');
 check('same-utterance question is not lost during wake handoff', inline.events.wakes === 1 && inline.events.questions[0] === 'tell me a joke.');
 inline.listener.dispose();
 
-const split = listenerHarness();
-split.clock.tick();
-split.recognition.result('Hey,');
-split.recognition.result('Nova, what is two plus two?');
-check('wake phrase may span adjacent final results', split.events.wakes === 1 && split.events.questions[0] === 'what is two plus two?');
-split.listener.dispose();
+const splitWake = listenerHarness();
+splitWake.clock.tick();
+splitWake.recognition.result('Hey,');
+splitWake.recognition.result('Nova, what is two plus two?');
+check('wake phrase may span adjacent final results', splitWake.events.wakes === 1 && splitWake.events.questions[0] === 'what is two plus two?');
+splitWake.listener.dispose();
 
 const indexed = listenerHarness();
 indexed.clock.tick();
@@ -350,8 +350,80 @@ silence.clock.tick(15000);
 check('a wake without a question times out instead of staying awake', silence.events.ended[0] === 'no-speech');
 silence.recognition.end();
 silence.clock.tick(150);
-check('question timeout returns to final-only standby', silence.recognition.starts.at(-1).interim === false && silence.events.standby.at(-1) === true);
+check('question timeout returns to standby', silence.recognition.starts.at(-1).interim === true && silence.events.standby.at(-1) === true);
 silence.listener.dispose();
+
+// Interim wake: "hey nova" is caught while it is still being spoken.
+const early = listenerHarness();
+early.clock.tick();
+early.recognition.results([{ text: 'hey nova', isFinal: false }]);
+check('interim wake: "hey nova" in an interim result wakes before the final result', early.events.wakes === 1
+  && early.events.questions.length === 0 && early.events.standby.at(-1) === false);
+check('interim wake: the running session continues as the question (no abort, no restart gap)', early.recognition.aborts === 0
+  && early.recognition.starts.length === 1 && early.recognition.active);
+early.recognition.results([{ text: 'hey nova what time', isFinal: false }]);
+check('interim wake: later interims neither wake again nor submit early', early.events.wakes === 1 && early.events.questions.length === 0);
+early.recognition.results([{ text: 'hey nova what time is it', isFinal: true }]);
+check('interim wake: a question in the same breath is kept, without the wake phrase', early.events.questions.join('|') === 'what time is it'
+  && early.recognition.aborts === 1);
+early.listener.dispose();
+check('interim wake: dispose leaves no timers', early.clock.pending === 0);
+
+const paused = listenerHarness();
+paused.clock.tick();
+paused.recognition.results([{ text: 'hey nova', isFinal: false }]);
+paused.recognition.results([{ text: 'hey nova', isFinal: true }]);
+check('interim wake: a final "hey nova" alone sends no empty question', paused.events.questions.length === 0 && paused.events.wakes === 1);
+paused.recognition.results([{ text: 'hey nova', isFinal: true }, { text: 'tell me a joke', isFinal: true }], 1);
+check('interim wake: a question after a pause is sent from the next final result', paused.events.questions.join('|') === 'tell me a joke');
+paused.listener.dispose();
+
+const chatter = listenerHarness();
+chatter.clock.tick();
+chatter.recognition.results([{ text: 'okay so hey nova', isFinal: false }]);
+chatter.recognition.results([{ text: 'okay so hey nova what is up', isFinal: true }]);
+check('interim wake: words before the wake phrase are never sent', chatter.events.wakes === 1 && chatter.events.questions.join('|') === 'what is up');
+chatter.listener.dispose();
+
+const separate = listenerHarness();
+separate.clock.tick();
+separate.recognition.results([{ text: 'okay so', isFinal: false }, { text: 'hey nova', isFinal: false }]);
+separate.recognition.results([{ text: 'okay so', isFinal: true }, { text: 'hey nova how are you', isFinal: false }]);
+check('interim wake: earlier chatter finalizing on its own is not a question', separate.events.wakes === 1 && separate.events.questions.length === 0);
+separate.recognition.results([{ text: 'okay so', isFinal: true }, { text: 'hey nova how are you', isFinal: true }], 1);
+check('interim wake: the wake result then delivers the question', separate.events.questions.join('|') === 'how are you');
+separate.listener.dispose();
+
+const split = listenerHarness();
+split.clock.tick();
+split.recognition.results([{ text: 'and hey', isFinal: true }]);
+split.recognition.results([{ text: 'and hey', isFinal: true }, { text: 'nova what', isFinal: false }], 1);
+check('interim wake: a "hey" in a final result plus "nova" in an interim still wakes', split.events.wakes === 1);
+split.recognition.results([{ text: 'and hey', isFinal: true }, { text: 'nova what is new', isFinal: true }], 1);
+check('interim wake: the split wake phrase is removed from the question', split.events.questions.join('|') === 'what is new');
+split.listener.dispose();
+
+const misheard = listenerHarness();
+misheard.clock.tick();
+misheard.recognition.results([{ text: 'hey nova', isFinal: false }]);
+misheard.recognition.results([{ text: 'hey noah come here', isFinal: true }]);
+check('interim wake: if the final drops the wake phrase, nothing is sent', misheard.events.wakes === 1 && misheard.events.questions.length === 0);
+misheard.clock.tick(15000);
+check('interim wake: a misheard wake times out like any wake without a question', misheard.events.ended.at(-1) === 'no-speech');
+misheard.listener.dispose();
+
+const interimUi = await createAppHarness();
+interimUi.clock.tick();
+interimUi.flush();
+interimUi.recognition.instances[0].result('hey nova', false);
+interimUi.flush();
+check('interim wake: the App switches to listening while the wake word is still being spoken', interimUi.find('status-word')?.props.className.includes('status-word-listening')
+  && interimUi.recognition.instances[0].aborts === 0);
+interimUi.recognition.instances[0].result('hey nova what do you suggest', true);
+await interimUi.settle();
+const interimChat = interimUi.requests.find((request) => request.url.endsWith('/chat/completions'));
+check('interim wake: the App sends the question without the wake phrase', JSON.parse(interimChat?.options.body || '{}').messages?.at(-1)?.content === 'what do you suggest');
+interimUi.unmount();
 
 const unsupported = listenerHarness({ continuous: false });
 unsupported.clock.tick();
