@@ -93,6 +93,18 @@ function readSetting(key, fallback = '') {
   }
 }
 
+/* The theme lives under its own key, outside the nova. settings namespace: it is a display
+   preference, not a connection, and it defaults to dark when nothing was ever stored. */
+const THEME_STORAGE_KEY = 'nova_theme';
+const readTheme = (fallback = 'dark') => {
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === 'light' || stored === 'dark' ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 function trimTrailingSlashes(url) {
   return url.trim().replace(/\/+$/, '');
 }
@@ -166,6 +178,23 @@ function ConnectionHelp() {
         </p>
       </div>
     </details>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.1" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 2.8v2.1M12 19.1v2.1M2.8 12h2.1M19.1 12h2.1M5.5 5.5l1.5 1.5M17 17l1.5 1.5M18.5 5.5L17 7M7 17l-1.5 1.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M19.6 13.4A8.2 8.2 0 1 1 10.6 4.4a6.5 6.5 0 0 0 9 9Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -683,6 +712,23 @@ function App() {
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
   }));
+  const [theme, setTheme] = useState(readTheme);
+  // One class on the shell paints every surface; <html> is told as well, so the page canvas
+  // and its lights flip with it. Both writes are guarded: a tree mounted without a document
+  // element or storage still themes itself, it just cannot remember the choice.
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch {
+      /* no document to theme */
+    }
+    try {
+      // A first visit seeds the default; reloading the choice nobody changed is a read.
+      if (window.localStorage.getItem(THEME_STORAGE_KEY) !== theme) window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      /* a blocked store loses the preference, never the appearance */
+    }
+  }, [theme]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryState, setMemoryState] = useState(readMemoryStore);
   const [lastResponse, setLastResponse] = useState('');
@@ -1608,13 +1654,19 @@ function App() {
   const showRichPanel = Boolean(richContent && !settingsOpen);
 
   return (
-    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''}`}>
+    <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''} theme-${theme}`}>
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
-        {/* The only way into settings sits in the top-right corner, always visible. */}
-        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
-          <SettingsIcon />
-        </button>
+        {/* Two controls live in this corner, both always visible: the light the room is in,
+            then the way into settings. */}
+        <div className="topbar-actions">
+          <button className="icon-button theme-toggle" type="button" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'light'} onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
+            {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
+            <SettingsIcon />
+          </button>
+        </div>
       </header>
 
       <main className="main-stage">

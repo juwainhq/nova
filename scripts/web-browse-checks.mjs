@@ -186,10 +186,11 @@ export async function verifyWebBrowse(check) {
   const css = await readFile('src/index.css', 'utf8');
   const handle = await readFile('src/BrowsePanel.jsx', 'utf8');
   const panelSources = [handle, await readFile('src/App.jsx', 'utf8'), await readFile('src/web-browse.js', 'utf8')].join('\n');
+  const flat = css.replace(/\s*\n\s*/g, ' ');
   check('browse layout: left 45% / right 55% (max 600px), sliding in over 300ms ease', /\.app-shell\.has-browse-panel \{[^}]*width: max\(45%, calc\(100% - 600px\)\)/.test(css)
-    && /\.browse-panel \{[^}]*width: 55%; max-width: 600px;[^}]*animation: browse-in \.3s ease both/.test(css) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
+    && /\.browse-panel \{[^}]*width: 55%; max-width: 600px;[^}]*animation: browse-in \.3s ease both/.test(flat) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
     && css.includes('@keyframes browse-in { from { transform: translateX(100%); }'));
-  check('browse layout: a white card with a rounded, hairline-bordered left edge', /\.browse-panel \{[^}]*border-left: 1px solid rgba\(26, 18, 8, \.16\);[^}]*border-radius: 12px 0 0 12px/.test(css)
+  check('browse layout: a glass card with a rounded, hairline-bordered left edge', /\.browse-panel \{[^}]*border-left: 1px solid var\(--card-line\);[^}]*border-radius: 12px 0 0 12px/.test(css)
     && /\.browse-panel \{[^}]*background: var\(--card\)/.test(css) && /\.browse-header \{[^}]*background: var\(--card-alt\)/.test(css));
   check('browse layout: the frame leaves 60px for the header and 20px at the bottom', /\.browse-header \{ flex: 0 0 60px;/.test(css) && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
   check('browse layout: the panel never scrolls; the iframe fills it with no border', /\.browse-panel \{[^}]*overflow: hidden/.test(css)
@@ -224,43 +225,102 @@ export async function verifyWebBrowse(check) {
     && /\.browse-header \{ flex: 0 0 60px;/.test(css));
 
   const appSource = await readFile('src/App.jsx', 'utf8');
-  // The light theme is a contract of its own: white paper, charcoal ink, orange accent,
-  // a ground that breathes on an 8s cycle, and nothing light-on-light inside a card.
-  check('theme: the ground is four blurred blobs on one shared 12s cycle',
-    /\.app-shell::before, \.app-shell::after, body::before, body::after \{[^}]*animation: blobMove 12s ease-in-out infinite alternate;/.test(css)
-    && /@keyframes blobMove \{[^@]*translate3d\(var\(--blob-x/.test(css)
-    && /will-change: transform, opacity;/.test(css) && /filter: blur\(120px\)/.test(css));
-  const blobBodies = [...css.matchAll(/^(?:\.app-shell|body)::(?:before|after) \{([^}]*)\n\}/gm)].map(m => m[1]);
-  check('theme: the blobs are 400-700px, out of sync, and use the amber palette',
-    blobBodies.length === 4
-    && blobBodies.every(b => { const w = +(b.match(/width: (\d+)px/) || [])[1]; return w >= 400 && w <= 700 && /animation-delay: -[\d.]+s/.test(b); })
-    && new Set(blobBodies.map(b => (b.match(/animation-delay: (-[\d.]+)s/) || [,''])[1])).size === 4
-    && ['#c2410c', '#f97316', '#7c2d00', '#fed7aa'].every(hexv => blobBodies.some(b => b.includes(hexv)))
-    && /body \{[^}]*background: #050300/.test(css) && !/0f0d0b/.test(css) && !/--ember/.test(css));
-  const grainLayer = (css.match(/#root::after \{([^}]*)\n\}/) || [])[1] || '';
-  check('theme: the grain is fixed SVG noise at 3% and cannot be interacted with',
-    grainLayer.includes('feTurbulence') && grainLayer.includes('position: fixed')
-    && grainLayer.includes('pointer-events: none') && grainLayer.includes('opacity: .03'));
-  check('theme: the sheets keep white paper and charcoal ink', /--card: #ffffff;/.test(css)
-    && /--card-alt: #faf7f5;/.test(css) && /--on-card: #1a1208;/.test(css)
-    && /--on-card-strong: #c2410c;/.test(css) && /\.settings-panel \{[^}]*background: var\(--card\)/.test(css));
-  check('theme: the reply, the toast and the offline notice are white cards with an orange left edge',
-    /\.response-transcript \{[^}]*border-left: 3px solid #f97316;[^}]*border-radius: 14px; background: var\(--card\)/.test(css)
-    && /\.toast \{[^}]*border-left: 3px solid #f97316/.test(css)
-    && /\.avatar-offline-display \{[^}]*border-left: 3px solid #f97316/.test(css)
-    && /\.response-transcript p \{[^}]*color: var\(--on-card\)/.test(css));
-  check('theme: the settings gear is an always-visible 40px white circle with an orange glyph',
-    /\.icon-button \{[^}]*width: 40px;[^}]*height: 40px;[^}]*border-radius: 50%;[^}]*background: var\(--card\);[^}]*color: #f97316;[^}]*box-shadow/.test(css)
-    && !/\.dock-corner/.test(css) && !/\.icon-button \{[^}]*opacity: \./.test(css));
   const statusAt = appSource.indexOf('status-word status-word-');
   const avatarAt = appSource.indexOf('className={`avatar-container');
-  check('theme: the status line is bold orange above the avatar',
-    /\.status-word \{[^}]*color: #f97316;[^}]*font-weight: 700/.test(css)
-    && /\.assistant-stage \{[^}]*flex-direction: column/.test(css)
-    && statusAt > 0 && statusAt < avatarAt);
+  const lightAt = flat.indexOf(":root[data-theme='light']");
+  const lightBlock = flat.slice(lightAt, flat.indexOf('}', lightAt) + 1);
+  const ruleBody = (selector) => (flat.match(new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{([^}]*)\\}')) || [, ''])[1];
+  // Pass 18's contract: one set of token names, two paints. Dark is the default; light is the
+  // same glass over peach. The ground is five lights on five closed paths, and the choice is
+  // remembered under nova_theme. The avatar and the mic are deliberately outside all of it.
+  check('theme: the ground is five lights, each blurred and compositor-only',
+    /\.app-shell::before, \.app-shell::after, body::before, body::after, #root::before \{[^}]*filter: blur\(140px\);[^}]*will-change: transform, opacity;[^}]*animation-timing-function: cubic-bezier\(\.45, \.05, \.55, \.95\)/.test(flat)
+    && !/blobMove/.test(css) && !/\.bg-blob/.test(css));
+  const blobBodies = [...css.matchAll(/^(?:\.app-shell|body|#root)::(?:before|after) \{([^}]*)\n\}/gm)]
+    .map((m) => m[1]).filter((body) => /width: \d+px/.test(body));
+  check('theme: four of them are 500-800px on 6-8s cycles, none in step',
+    blobBodies.length === 5
+    && blobBodies.slice(0, 4).every((body) => { const w = +(body.match(/width: (\d+)px/) || [])[1]; return w >= 500 && w <= 800; })
+    && blobBodies.slice(0, 4).every((body) => { const d = +(body.match(/animation: blob-\d ([\d.]+)s/) || [])[1]; return d >= 6 && d <= 8; })
+    && new Set(blobBodies.map((body) => (body.match(/(-[\d.]+)s infinite/) || [])[1])).size === 5
+    && blobBodies.every((body) => /var\(--blob-\d\)/.test(body) && /cubic-bezier\(\.45, \.05, \.55, \.95\)/.test(body)));
+  check('theme: each path is four curved waypoints that end where they began',
+    [1, 2, 3, 4, 5].every((n) => {
+      const body = (css.match(new RegExp(`@keyframes blob-${n} \\{([^@]*)\\n\\}`)) || [, ''])[1];
+      const legs = [...body.matchAll(/transform: ([^;]+);/g)].map((m) => m[1]);
+      return legs.length >= 5 && legs[0] === legs[legs.length - 1] && new Set(legs.slice(1, -1)).size >= 3;
+    }));
+  check('theme: the lights brighten and dim between .5 and .8 as they travel',
+    [1, 2, 3, 4].every((n) => {
+      const body = (css.match(new RegExp(`@keyframes blob-${n} \\{([^@]*)\\n\\}`)) || [, ''])[1];
+      const steps = [...body.matchAll(/opacity: (\.\d+)/g)].map((m) => +m[1]);
+      return steps.length >= 5 && Math.min(...steps) >= 0.5 && Math.max(...steps) <= 0.8;
+    }));
+  check('theme: the fifth light is a 200px hot spot at 80px of blur, and the fastest',
+    /#root::before \{[^}]*width: 200px;[^}]*filter: blur\(80px\);[^}]*opacity: \.3;[^}]*animation: blob-5 5s/.test(flat)
+    && +((css.match(/@keyframes blob-5 \{[\s\S]*?opacity: (\.\d+)/) || [])[1] ?? 1) <= 0.4);
+  check('theme: dark mode puts the specified five lights on #050300',
+    ['--blob-1: #ea580c', '--blob-2: #c2410c', '--blob-3: #7c2d00', '--blob-4: #f97316', '--blob-5: #fed7aa',
+      '--canvas: #050300', '--ink: #f5f0eb', '--card: rgba(15, 10, 5, .85)', '--card-strong: rgba(10, 7, 3, .92)',
+      '--glass: blur(20px)', '--card-line: rgba(249, 115, 22, .2)'].every((token) => css.includes(`${token};`))
+    && /body \{[^}]*background: var\(--canvas\)/.test(flat) && !/--ember|0f0d0b/.test(css));
+  check('theme: light mode puts three peaches on #fffbf7 through the same names',
+    lightBlock.startsWith(":root[data-theme='light'], .app-shell.theme-light {")
+    && ['--canvas: #fffbf7', '--ink: #1a0a00', '--card: rgba(255, 255, 255, .88)', '--card-strong: rgba(255, 255, 255, .95)',
+      '--on-card: #1a0a00', '--card-line: rgba(249, 115, 22, .3)', '--blob-1: #fff7ed', '--blob-2: #ffedd5',
+      '--blob-3: #fed7aa', '--grain: .02'].every((token) => lightBlock.includes(`${token};`)));
+  check('theme: every open surface is glass in both modes',
+    ['.settings-panel', '.rich-content-panel', '.browse-panel', '.toast', '.response-transcript',
+      '.avatar-offline-display', '.icon-button'].every((sel) => /backdrop-filter: var\(--glass\)/.test(ruleBody(sel)))
+    && /\.settings-panel \{[^}]*background: var\(--card-strong\)/.test(flat)
+    && /\.settings-select option \{ background: var\(--option-bg\); color: var\(--on-card\); \}/.test(css));
   const sheetRegion = css.slice(css.indexOf('.settings-panel-backdrop'), css.indexOf('@keyframes browse-out'));
-  check('theme: no sheet keeps light-on-dark ink or cream hairlines', !/color: var\(--(ink|cream|muted)\)/.test(sheetRegion)
-    && !/#f5c99a|rgba\(245, 201, 154/.test(sheetRegion));
+  check('theme: no sheet hardcodes ink, so labels, inputs and sliders flip with the theme',
+    !/#1a1208|#54453a|#8a7a6d|#f3ece7|#e9e0d9|rgba\(26, 18, 8|color-scheme: light/.test(sheetRegion)
+    && /color: var\(--on-card\)/.test(ruleBody('.settings-input, .settings-select'))
+    && /color: var\(--on-card-soft\)/.test(ruleBody('.field-label span'))
+    && /color: var\(--faint\)/.test(ruleBody('.settings-input::placeholder'))
+    && /background: var\(--faint\)/.test(ruleBody('.settings-switch i'))
+    && /color: var\(--on-card-strong\)/.test(ruleBody('.field-hint-error')));
+  check('theme: the reply, the toast and the offline notice keep an orange left edge on glass',
+    /\.response-transcript \{[^}]*border-left: 3px solid #f97316;[^}]*background: var\(--card\)/.test(flat)
+    && /border-left: 3px solid #f97316/.test(ruleBody('.toast')) && /border-left: 3px solid #f97316/.test(ruleBody('.avatar-offline-display'))
+    && /color: var\(--on-card\)/.test(ruleBody('.response-transcript p')));
+  check('theme: the grain is fixed SVG noise, one token lighter on paper',
+    /feTurbulence/.test(ruleBody('#root::after')) && /position: fixed/.test(ruleBody('#root::after'))
+    && /pointer-events: none/.test(ruleBody('#root::after')) && /opacity: var\(--grain\)/.test(ruleBody('#root::after'))
+    && /--grain: \.03;/.test(css));
+  check('theme: the gear and the toggle share the top-right action row',
+    /\.topbar-actions \{ display: flex; align-items: center; gap: 8px; \}/.test(flat)
+    && /width: 40px; height: 40px; padding: 0; border: 1px solid var\(--card-line\); border-radius: 50%; background: var\(--card\); backdrop-filter: var\(--glass\)/.test(ruleBody('.icon-button'))
+    && !/\.icon-button \{[^}]*opacity: \./.test(flat) && !/\.dock-corner/.test(css)
+    && /<div className="topbar-actions">[\s\S]*?theme-toggle[\s\S]*?<\/button>[\s\S]*?settings-trigger[\s\S]*?<\/div>\s*<\/header>/.test(appSource));
+  check('theme: the toggle swaps sun for moon and tells the reader which way it goes',
+    /className="icon-button theme-toggle"/.test(appSource)
+    && /aria-label=\{theme === 'dark' \? 'Switch to light theme' : 'Switch to dark theme'\}/.test(appSource)
+    && /aria-pressed=\{theme === 'light'\}/.test(appSource)
+    && /\{theme === 'dark' \? <SunIcon \/> : <MoonIcon \/>\}/.test(appSource)
+    && /setTheme\(\(current\) => \(current === 'dark' \? 'light' : 'dark'\)\)/.test(appSource));
+  check('theme: the choice is remembered under nova_theme and survives a denied store',
+    /const THEME_STORAGE_KEY = 'nova_theme';/.test(appSource)
+    && /const readTheme = \(fallback = 'dark'\)/.test(appSource)
+    && /stored === 'light' \|\| stored === 'dark' \? stored : fallback/.test(appSource)
+    && /useState\(readTheme\)/.test(appSource)
+    && /theme-\$\{theme\}`/.test(appSource)  // the template ends the shell class list here
+    && /localStorage\.setItem\(THEME_STORAGE_KEY, theme\)/.test(appSource)
+    && /documentElement\.setAttribute\('data-theme', theme\)/.test(appSource)
+    && /try \{\n      documentElement|try \{\n      document\.documentElement/.test(appSource));
+  check('theme: the status line is bold accent above the avatar in whichever ink the theme uses',
+    /color: var\(--accent-ink\)/.test(ruleBody('.status-word')) && /font-weight: 700/.test(ruleBody('.status-word'))
+    && /--accent-ink: #f97316;/.test(css) && /--accent-ink: #c2410c;/.test(lightBlock)
+    && statusAt > 0 && statusAt < avatarAt);
+  check('theme: the avatar and the mic keep their own paints, so the orb never re-themes',
+    !/--(orange|burnt|cream):/.test(lightBlock)
+    && !/var\(--(ink|on-card|card)\b/.test(ruleBody('.avatar-backlight'))
+    && /background: linear-gradient\(145deg, #fffaf2 0%, #f5c99a 100%\)/.test(ruleBody('.mic-button'))
+    && /radial-gradient\(circle, rgba\(204, 68, 0, \.22\)/.test(ruleBody('.avatar-backlight'))
+    && /\.listen-ring \{ z-index: 0;[^}]*rgba\(255, 106, 26, \.45\)/.test(flat));  // the shared rule above it is not this one
+
   check('browse chrome: the frame still fills what is left, bottom gap included', /\.browse-frame \{ flex: 1;[^}]*min-height: 0/.test(css)
     && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
   const sandboxTokens = SANDBOX_TOKENS;

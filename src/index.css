@@ -1,36 +1,85 @@
 :root {
   color-scheme: dark;
   font-family: Inter, 'Avenir Next', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #fff7ef;
-  background: #050300;
+  color: var(--ink);
+  background: var(--canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --ink: #fff7ef;
+  /* One set of names, two paints. What follows is dark mode, the default: a near-black
+  canvas, glassy charcoal surfaces, #f5f0eb ink, orange hairlines. The light block below
+  only changes values, so no other rule has to know a theme exists. --orange, --burnt and
+  --cream are deliberately not re-themed - the avatar glow and the mic ring are built from
+  them and stay exactly as they are in both modes. */
+  --canvas: #050300;
+  --ink: #f5f0eb;
+  --muted: #ab9582;
   --cream: #f5c99a;
   --orange: #ff6a1a;
   --burnt: #cc4400;
   --dark: #050300;
-  --muted: #ab9582;
-  /* White cards float on the dark ground: one paper colour, one ink, one hairline.
-     Amber #f97316 is the accent; small text on white uses --on-card-strong, because
-     #f97316 on white falls under the legibility floor. */
-  --card: #ffffff;
-  --card-alt: #faf7f5;
-  --on-card: #1a1208;
-  --on-card-soft: rgba(26, 18, 8, .64);
-  --on-card-strong: #c2410c;
-  --card-line: rgba(26, 18, 8, .13);
-  --card-shadow: 0 12px 34px rgba(6, 3, 1, .34);
+  --accent: #f97316;
+  --accent-ink: #f97316;
+  --accent-glow: #ff9a5a;
+  --card: rgba(15, 10, 5, .85);
+  --card-strong: rgba(10, 7, 3, .92);
+  --card-alt: rgba(255, 255, 255, .055);
+  --on-card: #f5f0eb;
+  --on-card-soft: rgba(245, 240, 235, .66);
+  --on-card-strong: #ffb066;
+  --faint: #9b8a7c;
+  --card-line: rgba(249, 115, 22, .2);
+  --card-shadow: 0 14px 40px rgba(0, 0, 0, .55);
+  --glass: blur(20px);
+  --text-halo: 0 1px 14px rgba(0, 0, 0, .82);
+  --option-bg: #150e08;
+--scrim: rgba(7, 4, 2, .62);
+  --blob-1: #ea580c;
+  --blob-2: #c2410c;
+  --blob-3: #7c2d00;
+  --blob-4: #f97316;
+  --blob-5: #fed7aa;
+  --grain: .03;
   --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
+/* Light mode: the same glass, flipped. `data-theme` is set on <html> by the App, so <body>'s
+   canvas and its blobs follow it; `.app-shell.theme-light` carries the identical state on the
+   frame, which is what a tree rendered without a document element still gets. */
+:root[data-theme='light'], .app-shell.theme-light {
+  color-scheme: light;
+  --canvas: #fffbf7;
+  --ink: #1a0a00;
+  --muted: #6a5346;
+  --accent: #f97316;
+  --accent-ink: #c2410c;
+  --accent-glow: #9a3412;
+  --card: rgba(255, 255, 255, .88);
+  --card-strong: rgba(255, 255, 255, .95);
+  --card-alt: rgba(26, 10, 0, .045);
+  --on-card: #1a0a00;
+  --on-card-soft: rgba(26, 10, 0, .62);
+  --on-card-strong: #c2410c;
+  --faint: #7a6a5e;
+  --card-line: rgba(249, 115, 22, .3);
+  --card-shadow: 0 14px 40px rgba(124, 45, 0, .16);
+  --text-halo: 0 1px 14px rgba(255, 255, 255, .85);
+  --option-bg: #ffffff;
+  --scrim: rgba(124, 45, 0, .22);
+  --grain: .02;
+  --blob-1: #fff7ed;
+  --blob-2: #ffedd5;
+  --blob-3: #fed7aa;
+  --blob-4: #ffedd5;
+  --blob-5: #ffffff;
 }
 
 * { box-sizing: border-box; }
 html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
-body { min-height: 100vh; min-height: 100dvh; background: #050300; }
+body { min-height: 100vh; min-height: 100dvh; background: var(--canvas); }
 button, input { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible { outline: 2px solid #f97316; outline-offset: 3px; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .app-shell {
   position: relative;
@@ -49,56 +98,75 @@ button:focus-visible, input:focus-visible { outline: 2px solid #f97316; outline-
   background: transparent;
   transition: width .3s ease, height .3s ease;
 }
-/*
-   The liquid ground: four big soft lights floating over the #050300 canvas. Each one is
-   a circle 420-700px across, blurred by 120px into a glow, rasterized once and then moved
-   by the compositor alone (transform and opacity, never background-position). All four
-   share one 12s ease-in-out `alternate` cycle, but each carries a different negative
-   animation-delay plus its own --blob-x / --blob-y / --blob-s, so a single keyframe sends
-   them along four paths and the group never falls into an obvious beat. Two are painted
-   inside the app frame and two on <body> behind it, and .app-shell has no background of its
-   own, so the swirl reads through every gap. Reduced motion parks all four at rest. */
-.app-shell::before, .app-shell::after, body::before, body::after {
+/* The living ground: five lights over the canvas, each on its own closed path. Four are
+   500-800px and blurred by 140px into soft glow; the fifth is a 200px hot spot at 80px of
+   blur that darts around fastest, which is what makes the field read as liquid. Each
+   keyframe gives a blob four waypoints and returns it to the first, so the loop never snaps,
+   and the same keyframe swings opacity between .5 and .8 while it travels. Durations are
+   uneven (5s to 8s) and every layer has its own negative delay, so the group never settles
+   into a shared beat, while cubic-bezier(.45,.05,.55,.95) eases each leg. Only transform and
+   opacity animate, so a blurred layer is rasterized once and handed to the compositor. The
+   paints are tokens: burnt orange and amber on near-black in dark mode, peach tints on warm
+   white in light mode. Reduced motion parks a blob on its first waypoint - where it starts
+   anyway - and #root::after drops the grain to a flat tint. */
+.app-shell::before, .app-shell::after, body::before, body::after, #root::before {
   content: '';
   position: fixed;
   z-index: -1;
   border-radius: 50%;
-  filter: blur(120px);
-  opacity: .6;
   pointer-events: none;
+  opacity: .62;
+  filter: blur(140px);
   will-change: transform, opacity;
-  animation: blobMove 12s ease-in-out infinite alternate;
+  animation-timing-function: cubic-bezier(.45, .05, .55, .95);
+  animation-iteration-count: infinite;
 }
 .app-shell::before {
-  /* Blob 1 - deep burnt orange, the large mass above and left of the face. */
-  --blob-x: 9%; --blob-y: 7%; --blob-s: 1.14;
-  width: 660px; height: 660px; left: 8%; top: 3%;
-  background: radial-gradient(circle, #c2410c 0%, rgba(194, 65, 12, .55) 42%, transparent 72%);
-  animation-delay: -1.5s;
+  /* Blob 1 - #ea580c, the big one, crossing the stage from upper left to lower right. */
+  width: 720px;
+  height: 720px;
+  left: 2%;
+  top: -6%;
+  background: radial-gradient(circle, var(--blob-1) 0%, transparent 68%);
+  animation: blob-1 7s cubic-bezier(.45, .05, .55, .95) -2s infinite;
 }
 .app-shell::after {
-  /* Blob 2 - warm amber, the brightest partner, lower right, travelling against blob 1. */
-  --blob-x: -8%; --blob-y: -10%; --blob-s: 1.2; --blob-o: .5;
-  width: 520px; height: 520px; left: 55%; top: 44%;
-  background: radial-gradient(circle, #f97316 0%, rgba(249, 115, 22, .5) 40%, transparent 70%);
-  animation-delay: -6.5s;
+  /* Blob 2 - #c2410c, lower right, looping against blob 1. */
+  width: 560px;
+  height: 560px;
+  left: 54%;
+  top: 42%;
+  background: radial-gradient(circle, var(--blob-2) 0%, transparent 66%);
+  animation: blob-2 6s cubic-bezier(.45, .05, .55, .95) -4.5s infinite;
 }
-/* Blob 3 - dark red-orange, heavy and slow, anchored off the bottom-left corner; it lives
-   on <body> because .app-shell clips its own children. */
 body::before {
-  --blob-x: 7%; --blob-y: -7%; --blob-s: 1.1; --blob-o: .62;
-  width: 700px; height: 700px; left: -10%; top: 42%;
-  background: radial-gradient(circle, #7c2d00 0%, rgba(124, 45, 0, .6) 45%, transparent 74%);
-  animation-delay: -9.5s;
+  /* Blob 3 - #7c2d00, the heavy base mass, slowest of the four. */
+  width: 800px;
+  height: 800px;
+  left: -12%;
+  top: 34%;
+  background: radial-gradient(circle, var(--blob-3) 0%, transparent 70%);
+  animation: blob-3 8s cubic-bezier(.45, .05, .55, .95) -1s infinite;
 }
-/* Blob 4 - the pale peach highlight: small, faint, blurred a little tighter, drifting
-   against the other three. */
 body::after {
-  --blob-x: -11%; --blob-y: 9%; --blob-s: 1.3; --blob-o: .17;
-  width: 420px; height: 420px; left: 34%; top: 8%;
-  filter: blur(96px);
-  background: radial-gradient(circle, #fed7aa 0%, rgba(254, 215, 170, .34) 40%, transparent 68%);
-  animation-delay: -3.5s;
+  /* Blob 4 - #f97316, the amber sweep that passes behind the face. */
+  width: 500px;
+  height: 500px;
+  left: 26%;
+  top: 58%;
+  background: radial-gradient(circle, var(--blob-4) 0%, transparent 64%);
+  animation: blob-4 6.5s cubic-bezier(.45, .05, .55, .95) -3s infinite;
+}
+#root::before {
+  /* Blob 5 - the #fed7aa hot spot: small, tight, faint at rest and brightest mid-leg. */
+  width: 200px;
+  height: 200px;
+  left: 60%;
+  top: 10%;
+  filter: blur(80px);
+  opacity: .3;
+  background: radial-gradient(circle, var(--blob-5) 0%, transparent 62%);
+  animation: blob-5 5s cubic-bezier(.45, .05, .55, .95) -.5s infinite;
 }
 /* Film grain: one 240px tile of SVG fractalNoise at 3% strength, fixed above every layer of
    the page - including the open sheets - and inert to pointer and keyboard input. */
@@ -108,7 +176,7 @@ body::after {
   z-index: 9999;
   inset: 0;
   pointer-events: none;
-  opacity: .03;
+  opacity: var(--grain);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 240px 240px;
@@ -122,9 +190,13 @@ body::after {
   justify-content: space-between;
   min-width: 0;
 }
-.brand-name { color: #fff7ef; font-size: 19px; font-weight: 700; letter-spacing: .23em; line-height: 1; animation: brand-fade-in .56s cubic-bezier(.2, .75, .25, 1) both; }
-/* The only control in the corner: a 40px white circle with an orange glyph and a shadow to
-   hold it off a background that now moves. Always visible, no hover surprise. */
+.topbar-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+.brand-name { color: var(--ink); font-size: 19px; font-weight: 700; letter-spacing: .23em; line-height: 1; animation: brand-fade-in .56s cubic-bezier(.2, .75, .25, 1) both; }
+/* The two corner controls: 40px circles of the same glass as everything else, an orange
+   glyph and a hairline, so they read on a moving background in either theme. Always
+   visible - no hover surprise. */
 .icon-button {
   position: relative;
   display: grid;
@@ -132,15 +204,19 @@ body::after {
   width: 40px;
   height: 40px;
   padding: 0;
-  border: 0;
+  border: 1px solid var(--card-line);
   border-radius: 50%;
   background: var(--card);
-  color: #f97316;
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+  color: var(--accent);
   cursor: pointer;
-  box-shadow: 0 2px 10px rgba(6, 3, 1, .3);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
   transition: background .2s ease, color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
-.icon-button:hover { color: #ea5f05; background: #fff; box-shadow: 0 5px 16px rgba(6, 3, 1, .38); transform: scale(1.06); }
+.icon-button:hover {
+  color: var(--accent-ink); background: var(--card-strong); box-shadow: 0 5px 16px rgba(0, 0, 0, .38); transform: scale(1.06);
+}
 .icon-button:active { transform: scale(.96); }
 .icon-button svg { width: 20px; height: 20px; }
 
@@ -172,6 +248,8 @@ body::after {
 /* Sits below the orb rather than over it: the eyes and body carry the offline
    mood, so nothing may cover them. */
 .avatar-offline-display {
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -303,7 +381,7 @@ body::after {
 .tagline {
   max-width: min(760px, 90vw);
   margin: 27px 0 0;
-  color: #fff7ef;
+  color: var(--ink);
   font-size: clamp(34px, 4.4vw, 52px);
   font-weight: 500;
   letter-spacing: -.055em;
@@ -314,23 +392,23 @@ body::after {
 .status-word {
   min-height: 16px;
   margin: 0 0 18px;
-  color: #f97316;
+  color: var(--accent-ink);
   font-size: 13px;
   font-weight: 700;
   font-variant-caps: all-small-caps;
   letter-spacing: .16em;
   line-height: 1.2;
   text-align: center;
-  text-shadow: 0 1px 14px rgba(15, 13, 11, .78);
+  text-shadow: var(--text-halo);
 }
 
 .control-dock { position: relative; z-index: 2; display: flex; align-items: center; justify-content: center; width: 100%; padding-bottom: 8px; }
 /* Standby earner: dim until the mic hears something on the way to the wake word. */
 .wake-indicator { position: absolute; left: 0; bottom: 24px; display: flex; align-items: center; gap: 7px; color: var(--muted); opacity: .42; transition: opacity 400ms ease-in-out, color 400ms ease-in-out; }
-.wake-indicator:hover, .wake-indicator.is-alert { opacity: 1; color: #ff9a5a; }
+.wake-indicator:hover, .wake-indicator.is-alert { opacity: 1; color: var(--accent-glow); }
 .wake-indicator.is-alert svg { filter: drop-shadow(0 0 6px rgba(255, 106, 26, .5)); }
 .wake-indicator svg { display: block; width: 15px; height: 15px; }
-.wake-hint { opacity: 0; color: #ff9a5a; font: 9px/1.3 var(--mono); letter-spacing: .06em; white-space: nowrap; transition: opacity 400ms ease-in-out; }
+.wake-hint { opacity: 0; color: var(--accent-glow); font: 9px/1.3 var(--mono); letter-spacing: .06em; white-space: nowrap; transition: opacity 400ms ease-in-out; }
 .wake-indicator:hover .wake-hint { opacity: 1; }
 /* The message keeps its distance from the corners, so a hover-revealed button never
    lands on top of it on a narrow screen. */
@@ -364,7 +442,29 @@ body::after {
 .mic-halo { position: absolute; width: 78px; height: 78px; border: 1px solid rgba(245, 201, 154, .2); border-radius: 50%; transition: width .3s, height .3s, border-color .3s; }
 .mic-halo-active { width: 84px; height: 84px; border-color: rgba(255, 230, 207, .65); box-shadow: 0 0 18px rgba(255, 106, 26, .2); animation: mic-ring 1.8s ease-out infinite; }
 
-.toast { position: absolute; z-index: 10; bottom: 22px; left: 50%; display: flex; align-items: center; gap: 10px; width: min(580px, calc(100vw - 36px)); padding: 13px 15px; border: 1px solid var(--card-line); border-left: 3px solid #f97316; border-radius: 12px; background: var(--card); color: var(--on-card); box-shadow: var(--card-shadow); font-size: 12px; line-height: 1.5; transform: translateX(-50%); animation: toast-in .25s ease-out; }
+.toast {
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+  position: absolute;
+  z-index: 10;
+  bottom: 22px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(580px, calc(100vw - 36px));
+  padding: 13px 15px;
+  border: 1px solid var(--card-line);
+  border-left: 3px solid #f97316;
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--on-card);
+  box-shadow: var(--card-shadow);
+  font-size: 12px;
+  line-height: 1.5;
+  transform: translateX(-50%);
+  animation: toast-in .25s ease-out;
+}
 .toast-mark { display: grid; place-items: center; flex: 0 0 18px; width: 18px; height: 18px; border: 1px solid rgba(249, 115, 22, .55); border-radius: 50%; color: #f97316; font: 11px var(--mono); }
 .toast > span:nth-child(2) { flex: 1; }
 .toast button { padding: 0 2px; border: 0; background: none; color: var(--on-card-soft); font-size: 20px; cursor: pointer; }
@@ -376,11 +476,13 @@ body::after {
   inset: 0;
   display: flex;
   justify-content: flex-end;
-  background: rgba(7, 4, 2, .62);
-  backdrop-filter: blur(3px);
+  background: var(--scrim);
+  backdrop-filter: blur(10px);
   animation: fade-in .18s ease-out;
 }
 .settings-panel {
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -390,8 +492,7 @@ body::after {
   overflow: hidden;
   border-left: 1px solid var(--card-line);
   border-radius: 14px 0 0 14px;
-  color-scheme: light;
-  background: var(--card);
+  background: var(--card-strong);
   box-shadow: -20px 0 72px rgba(0, 0, 0, .45);
   animation: panel-slide-in .3s cubic-bezier(.2, .75, .25, 1) both;
 }
@@ -403,16 +504,26 @@ body::after {
   padding: 21px 24px 18px;
   border-bottom: 1px solid var(--card-line);
 }
-.settings-eyebrow { margin: 0 0 6px; color: rgba(26, 18, 8, .58); font: 8px var(--mono); letter-spacing: .17em; }
-.settings-panel-header h2 { margin: 0; color: #1a1208; font-size: 21px; font-weight: 600; letter-spacing: -.04em; }
-.settings-close { position: relative; width: 33px; height: 33px; border: 1px solid var(--card-line); border-radius: 50%; background: var(--card-alt); color: var(--on-card); box-shadow: none; transition: border-color .2s ease, color .2s ease; }
+.settings-eyebrow { margin: 0 0 6px; color: var(--on-card-soft); font: 8px var(--mono); letter-spacing: .17em; }
+.settings-panel-header h2 { margin: 0; color: var(--on-card); font-size: 21px; font-weight: 600; letter-spacing: -.04em; }
+.settings-close {
+  position: relative;
+  width: 33px;
+  height: 33px;
+  border: 1px solid var(--card-line);
+  border-radius: 50%;
+  background: var(--card-alt);
+  color: var(--on-card);
+  box-shadow: none;
+  transition: border-color .2s ease, color .2s ease;
+}
 .settings-close span { position: absolute; width: 13px; height: 1px; border-radius: 1px; background: currentColor; transform: rotate(45deg); }
 .settings-close span + span { transform: rotate(-45deg); }
 .settings-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
 .settings-panel-content { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 22px 24px 26px; }
 .settings-field + .settings-field { margin-top: 18px; }
-.field-label { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; color: #1a1208; font-size: 10px; font-weight: 600; }
-.field-label span { color: rgba(26, 18, 8, .5); font: 8px var(--mono); letter-spacing: .1em; }
+.field-label { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; color: var(--on-card); font-size: 10px; font-weight: 600; }
+.field-label span { color: var(--on-card-soft); font: 8px var(--mono); letter-spacing: .1em; }
 .settings-input, .settings-select {
   width: 100%;
   height: 42px;
@@ -421,11 +532,11 @@ body::after {
   border-radius: 7px;
   outline: none;
   background: var(--card-alt);
-  color: #1a1208;
+  color: var(--on-card);
   font: 10px var(--mono);
   transition: border-color .18s ease, box-shadow .18s ease;
 }
-.settings-input::placeholder { color: #8a7a6d; font-family: Inter, 'Avenir Next', sans-serif; font-size: 10px; }
+.settings-input::placeholder { color: var(--faint); font-family: Inter, 'Avenir Next', sans-serif; font-size: 10px; }
 .settings-input:focus, .settings-select:focus { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .18); }
 /* Opening settings flashes a blank field that has no usable default behind it. */
 .settings-input.needs-attention { animation: field-attention 1.2s ease-in-out 1; }
@@ -434,37 +545,37 @@ body::after {
   30%, 70% { border-color: rgba(249, 115, 22, .9); background: rgba(249, 115, 22, .1); box-shadow: 0 0 0 3px rgba(249, 115, 22, .16); }
 }
 .settings-select { cursor: pointer; }
-.settings-select option { background: #ffffff; color: #1a1208; }
-.field-hint { margin: 7px 0 0; color: #54453a; font-size: 9px; line-height: 1.55; }
-.field-hint-error { color: #c2410c; }
+.settings-select option { background: var(--option-bg); color: var(--on-card); }
+.field-hint { margin: 7px 0 0; color: var(--on-card-soft); font-size: 9px; line-height: 1.55; }
+.field-hint-error { color: var(--on-card-strong); }
 .voice-preview { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .kokoro-status + .field-label { margin-top: 14px; }
 .field-help { margin-top: 10px; }
 .field-help summary {
-  color: #92400e;
+  color: var(--on-card-strong);
   font-size: 9px;
   cursor: pointer;
   list-style: none;
   transition: color .18s ease;
 }
 .field-help summary::-webkit-details-marker { display: none; }
-.field-help summary::before { content: '▸ '; color: rgba(26, 18, 8, .5); }
+.field-help summary::before { content: '▸ '; color: var(--on-card-soft); }
 .field-help[open] summary::before { content: '▾ '; }
-.field-help summary:hover { color: #1a1208; }
+.field-help summary:hover { color: var(--on-card); }
 .field-help summary:focus-visible { outline: 2px solid rgba(249, 115, 22, .78); outline-offset: 3px; border-radius: 3px; }
 .field-help-body {
   margin-top: 9px;
   padding: 11px 12px;
   border: 1px solid var(--card-line);
   border-radius: 7px;
-  background: #f3ece7;
+  background: var(--card-alt);
 }
-.field-help-body p { margin: 0; color: #54453a; font-size: 9px; line-height: 1.6; }
-.field-help-body ol { margin: 10px 0 0; padding-left: 16px; color: #54453a; font-size: 9px; line-height: 1.6; }
+.field-help-body p { margin: 0; color: var(--on-card-soft); font-size: 9px; line-height: 1.6; }
+.field-help-body ol { margin: 10px 0 0; padding-left: 16px; color: var(--on-card-soft); font-size: 9px; line-height: 1.6; }
 .field-help-body li + li { margin-top: 8px; }
 .field-help-body li span { display: block; }
 .field-help-body code {
-  color: #1a1208;
+  color: var(--on-card);
   font: 8.5px var(--mono);
   overflow-wrap: anywhere;
 }
@@ -474,11 +585,11 @@ body::after {
   padding: 7px 9px;
   border: 1px solid var(--card-line);
   border-radius: 5px;
-  background: #f3ece7;
-  color: #1a1208;
+  background: var(--card-alt);
+  color: var(--on-card);
   user-select: all;
 }
-.field-help-note { margin-top: 10px !important; color: rgba(26, 18, 8, .55) !important; }
+.field-help-note { margin-top: 10px !important; color: var(--on-card-soft) !important; }
 .standalone-button {
   width: 100%;
   height: 38px;
@@ -502,16 +613,16 @@ body::after {
 .settings-memory .field-label { margin: 0; }
 .memory-list { max-height: 210px; overflow-y: auto; margin: 10px 0 0; padding: 0; list-style: none; }
 .memory-list li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--card-line); }
-.memory-list li > span { flex: 1; min-width: 0; color: #1a1208; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.memory-list li > span { flex: 1; min-width: 0; color: var(--on-card); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .memory-delete { flex: 0 0 auto; min-height: 28px; }
 .memory-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .settings-toggle-row { position: relative; display: flex; align-items: center; gap: 14px; cursor: pointer; }
 .settings-toggle-copy { display: flex; flex: 1; flex-direction: column; gap: 5px; }
-.config-title { color: #1a1208; font-size: 10px; font-weight: 600; }
-.config-detail { overflow: hidden; color: #54453a; font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.config-title { color: var(--on-card); font-size: 10px; font-weight: 600; }
+.config-detail { overflow: hidden; color: var(--on-card-soft); font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .settings-toggle-input { position: absolute; right: 0; width: 42px; height: 24px; margin: 0; opacity: 0; cursor: pointer; }
-.settings-switch { position: relative; display: inline-flex; align-items: center; flex: 0 0 42px; width: 42px; height: 24px; padding: 3px; border: 1px solid var(--card-line); border-radius: 20px; background: #e9e0d9; transition: background .18s ease, border-color .18s ease; }
-.settings-switch i { display: block; width: 16px; height: 16px; border-radius: 50%; background: #8a7a6d; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .18s ease, background .18s ease; }
+.settings-switch { position: relative; display: inline-flex; align-items: center; flex: 0 0 42px; width: 42px; height: 24px; padding: 3px; border: 1px solid var(--card-line); border-radius: 20px; background: var(--card-alt); transition: background .18s ease, border-color .18s ease; }
+.settings-switch i { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--faint); box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .18s ease, background .18s ease; }
 .settings-toggle-input:checked + .settings-switch { border-color: rgba(249, 115, 22, .48); background: rgba(249, 115, 22, .1); }
 .settings-toggle-input:checked + .settings-switch i { background: #ffe4ca; transform: translateX(18px); }
 .settings-toggle-input:focus-visible { outline: none; }
@@ -521,23 +632,40 @@ body::after {
 .test-ollama-button { flex: 0 0 auto; min-height: 32px; padding: 0 11px; border: 1px solid var(--card-line); border-radius: 8px; background: var(--card-alt); color: var(--on-card); font-size: 9px; font-weight: 600; cursor: pointer; transition: background .18s, border-color .18s; }
 .test-ollama-button:hover:not(:disabled) { border-color: rgba(249, 115, 22, .52); background: rgba(249, 115, 22, .1); }
 .test-ollama-button:disabled { opacity: .6; cursor: wait; }
-.test-result { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; color: #54453a; font-size: 9px; line-height: 1.5; }
-.test-result i { flex: 0 0 6px; width: 6px; height: 6px; margin-top: 3px; border-radius: 50%; background: rgba(26, 18, 8, .34); }
-.test-result-success { color: #3d3126; }
-.test-result-success i { background: #1a1208; }
-.test-result-warning { color: #92400e; }
-.test-result-warning i { background: #92400e; }
-.test-result-error { color: #c2410c; }
-.test-result-error i { background: #c2410c; }
+.test-result { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; color: var(--on-card-soft); font-size: 9px; line-height: 1.5; }
+.test-result i { flex: 0 0 6px; width: 6px; height: 6px; margin-top: 3px; border-radius: 50%; background: var(--on-card-soft); }
+.test-result-success { color: var(--on-card); }
+.test-result-success i { background: var(--on-card); }
+.test-result-warning { color: var(--on-card-strong); }
+.test-result-warning i { background: var(--accent); }
+.test-result-error { color: var(--on-card-strong); }
+.test-result-error i { background: var(--accent); }
 .settings-panel-footer { display: flex; flex: 0 0 auto; justify-content: flex-end; align-items: center; gap: 13px; padding: 15px 24px calc(15px + env(safe-area-inset-bottom)); border-top: 1px solid var(--card-line); background: var(--card); }
 .text-button { padding: 8px 10px; border: 0; background: none; color: var(--on-card-soft); font-size: 10px; cursor: pointer; }
 .text-button:hover { color: var(--on-card-strong); }
 /* White on #f97316 would be under 3:1 for a 10px label, so the primary button keeps
    the orange fill but inks it with the same charcoal the cards use. */
-.save-button { height: 37px; padding: 0 14px; border: 1px solid #f97316; border-radius: 8px; background: #f97316; color: #1a1208; font-size: 10px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 18px rgba(249, 115, 22, .26); transition: background .2s ease, box-shadow .2s ease; }
+.save-button { height: 37px; padding: 0 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: #1a0a00; font-size: 10px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 18px rgba(249, 115, 22, .26); transition: background .2s ease, box-shadow .2s ease; }
 .save-button:hover { background: #ea670f; box-shadow: 0 8px 24px rgba(249, 115, 22, .34); }
-.save-button span { margin-left: 6px; color: rgba(26, 18, 8, .62); }
-.response-transcript { width: min(560px, 88vw); max-height: 132px; margin: 20px auto 0; padding: 14px 16px 15px; border: 1px solid var(--card-line); border-left: 3px solid #f97316; border-radius: 14px; background: var(--card); box-shadow: var(--card-shadow); text-align: left; animation: fade-in .24s ease-out; }
+.save-button span {
+  margin-left: 6px;
+  color: rgba(26, 10, 0, .62);
+}
+.response-transcript {
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+  width: min(560px, 88vw);
+  max-height: 132px;
+  margin: 20px auto 0;
+  padding: 14px 16px 15px;
+  border: 1px solid var(--card-line);
+  border-left: 3px solid #f97316;
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+  text-align: left;
+  animation: fade-in .24s ease-out;
+}
 .response-transcript > span { color: var(--on-card-soft); font: 8px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
 .response-transcript p { max-height: 96px; overflow-y: auto; margin: 6px 0 0; color: var(--on-card); font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; }
 
@@ -546,7 +674,19 @@ body::after {
 .app-shell.has-rich-content { height: auto; min-height: 100dvh; grid-template-rows: var(--topbar-height) minmax(min-content, 1fr) auto var(--dock-height); }
 .has-rich-content .main-stage { padding: 16px 0; }
 .rich-content-slot { --rich-height: clamp(144px, 32dvh, 280px); position: relative; z-index: 2; justify-self: center; width: min(780px, 100%); min-width: 0; max-height: var(--rich-height); overflow: hidden; border-radius: 18px; }
-.rich-content-panel { max-height: var(--rich-height); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 16px; border: 1px solid var(--card-line); border-radius: inherit; color-scheme: light; background: var(--card); animation: rich-panel-in .38s ease-out both; }
+.rich-content-panel {
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+  max-height: var(--rich-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 16px;
+  border: 1px solid var(--card-line);
+  border-radius: inherit;
+  background: var(--card);
+  animation: rich-panel-in .38s ease-out both;
+}
 .rich-content-panel.is-closing { pointer-events: none; animation: rich-panel-out .28s ease-out both; }
 .rich-content-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .rich-content-header h2, .rich-image-card h3 { margin: 0; color: var(--on-card); font-size: 13px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
@@ -561,7 +701,7 @@ body::after {
 .rich-link-card:hover, .rich-image-button:hover { border-color: rgba(249, 115, 22, .6); background: rgba(249, 115, 22, .07); }
 .rich-open-icon { flex: 0 0 14px; width: 14px; height: 14px; opacity: .58; }
 .rich-image-card { display: flex; align-items: center; gap: 12px; padding: 12px; }
-.rich-image-placeholder { flex: 0 0 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; height: 76px; border-radius: 8px; background: linear-gradient(145deg, rgba(249, 115, 22, .13), rgba(26, 18, 8, .05)); color: var(--on-card-soft); }
+.rich-image-placeholder { flex: 0 0 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; height: 76px; border-radius: 8px; background: linear-gradient(145deg, rgba(249, 115, 22, .13), transparent); color: var(--on-card-soft); }
 .rich-image-placeholder svg { width: 58px; height: 40px; opacity: .55; }
 .rich-image-placeholder span { color: var(--on-card-soft); font: 8px var(--mono); }
 .rich-image-button { display: inline-flex; align-items: center; gap: 8px; margin-top: 9px; padding: 6px 9px; border: 1px solid var(--card-line); border-radius: 6px; color: var(--on-card-strong); font-size: 10px; text-decoration: none; }
@@ -577,7 +717,26 @@ body::after {
 .app-shell.has-browse-panel.browse-closing { width: 100%; }
 .has-browse-panel .tagline { max-width: 100%; font-size: clamp(26px, 2.8vw, 42px); }
 .has-browse-panel .toast, .has-browse-panel .response-transcript, .has-browse-panel .active-voice-label { max-width: calc(100% - 24px); }
-.browse-panel { position: fixed; z-index: 8; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: 55%; max-width: 600px; padding-bottom: 20px; overflow: hidden; border-left: 1px solid rgba(26, 18, 8, .16); border-radius: 12px 0 0 12px; color-scheme: light; background: var(--card); box-shadow: -18px 0 48px rgba(0, 0, 0, .38); animation: browse-in .3s ease both; }
+.browse-panel {
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+  position: fixed;
+  z-index: 8;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: 55%;
+  max-width: 600px;
+  padding-bottom: 20px;
+  overflow: hidden;
+  border-left: 1px solid var(--card-line);
+  border-radius: 12px 0 0 12px;
+  background: var(--card);
+  box-shadow: -18px 0 48px rgba(0, 0, 0, .38);
+  animation: browse-in .3s ease both;
+}
 /* Once a drag has taken the sheet over, its inline transform is the position: the
    entry keyframes must stop filling, or they would outrank it. Only the fill is
    dropped, never the name, so releasing the sheet cannot restart the slide-in. */
@@ -598,8 +757,8 @@ body::after {
 .browse-nav-button:hover:not(:disabled) { border-color: #f97316; background: rgba(249, 115, 22, .1); color: #f97316; }
 .browse-nav-button:disabled { opacity: .34; cursor: default; }
 .browse-address { flex: 1; min-width: 0; }
-.browse-address-input { width: 100%; height: 32px; padding: 0 14px; border: 1px solid var(--card-line); border-radius: 999px; background: var(--card-alt); color: #1a1208; font: 10px var(--mono); outline: none; }
-.browse-address-input::placeholder { color: #8a7a6d; font-family: Inter, 'Avenir Next', sans-serif; font-size: 10px; }
+.browse-address-input { width: 100%; height: 32px; padding: 0 14px; border: 1px solid var(--card-line); border-radius: 999px; background: var(--card-alt); color: var(--on-card); font: 10px var(--mono); outline: none; }
+.browse-address-input::placeholder { color: var(--faint); font-family: Inter, 'Avenir Next', sans-serif; font-size: 10px; }
 .browse-address-input:focus { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .2); }
 .browse-address-input.is-refused { border-color: rgba(249, 115, 22, .78); box-shadow: 0 0 0 3px rgba(249, 115, 22, .14); }
 .browse-frame { flex: 1; display: block; width: 100%; min-height: 0; border: 0; background: #fff; }
@@ -616,7 +775,7 @@ body::after {
   .browse-panel.is-closing { animation-name: browse-down; }
   /* Bottom sheet: a grabber that drags down to dismiss, and snaps back if let go early. */
   .browse-handle { display: block; flex: 0 0 20px; width: 100%; margin: 0; padding: 0; border: 0; background: none; cursor: grab; touch-action: none; }
-  .browse-handle::before { content: ''; display: block; width: 42px; height: 4px; margin: 8px auto 0; border-radius: 999px; background: rgba(26, 18, 8, .24); }
+  .browse-handle::before { content: ''; display: block; width: 42px; height: 4px; margin: 8px auto 0; border-radius: 999px; background: var(--card-line); }
   .browse-handle:active { cursor: grabbing; }
   @keyframes browse-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
   @keyframes browse-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
@@ -629,9 +788,40 @@ body::after {
   34% { border-radius: 56% 44% 46% 54% / 44% 56% 50% 50%; }
   67% { border-radius: 48% 52% 56% 44% / 56% 48% 44% 58%; }
 }
-@keyframes blobMove {
-  from { transform: translate3d(0, 0, 0) scale(1); opacity: var(--blob-o, .6); }
-  to { transform: translate3d(var(--blob-x, 8%), var(--blob-y, 6%), 0) scale(var(--blob-s, 1.15)); opacity: calc(var(--blob-o, .6) * .72); }
+@keyframes blob-1 {
+  0% { transform: translate3d(0, 0, 0) scale(1); opacity: .52; }
+  25% { transform: translate3d(15vw, 5vh, 0) scale(1.16); opacity: .74; }
+  50% { transform: translate3d(24vw, 24vh, 0) scale(1.04); opacity: .8; }
+  75% { transform: translate3d(7vw, 31vh, 0) scale(.9); opacity: .58; }
+  100% { transform: translate3d(0, 0, 0) scale(1); opacity: .52; }
+}
+@keyframes blob-2 {
+  0% { transform: translate3d(0, 0, 0) scale(1.06); opacity: .7; }
+  25% { transform: translate3d(-13vw, -18vh, 0) scale(.92); opacity: .5; }
+  50% { transform: translate3d(-26vw, -6vh, 0) scale(1.14); opacity: .78; }
+  75% { transform: translate3d(-9vw, 12vh, 0) scale(1); opacity: .6; }
+  100% { transform: translate3d(0, 0, 0) scale(1.06); opacity: .7; }
+}
+@keyframes blob-3 {
+  0% { transform: translate3d(0, 0, 0) scale(1); opacity: .62; }
+  25% { transform: translate3d(10vw, -14vh, 0) scale(1.1); opacity: .8; }
+  50% { transform: translate3d(28vw, 6vh, 0) scale(.96); opacity: .56; }
+  75% { transform: translate3d(16vw, 22vh, 0) scale(1.12); opacity: .72; }
+  100% { transform: translate3d(0, 0, 0) scale(1); opacity: .62; }
+}
+@keyframes blob-4 {
+  0% { transform: translate3d(0, 0, 0) scale(.94); opacity: .5; }
+  25% { transform: translate3d(18vw, -22vh, 0) scale(1.12); opacity: .76; }
+  50% { transform: translate3d(4vw, -34vh, 0) scale(1.02); opacity: .6; }
+  75% { transform: translate3d(-14vw, -12vh, 0) scale(1.18); opacity: .8; }
+  100% { transform: translate3d(0, 0, 0) scale(.94); opacity: .5; }
+}
+@keyframes blob-5 {
+  0% { transform: translate3d(0, 0, 0) scale(1); opacity: .22; }
+  20% { transform: translate3d(-22vw, 16vh, 0) scale(1.3); opacity: .4; }
+  45% { transform: translate3d(-8vw, 44vh, 0) scale(.86); opacity: .28; }
+  70% { transform: translate3d(16vw, 26vh, 0) scale(1.22); opacity: .36; }
+  100% { transform: translate3d(0, 0, 0) scale(1); opacity: .22; }
 }
 @keyframes orb-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
 @keyframes orb-sway { 0%, 100% { transform: translateX(-3px); } 50% { transform: translateX(3px); } }

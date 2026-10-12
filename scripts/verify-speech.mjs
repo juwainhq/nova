@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createAppHarness, createAudioDouble, createClock, createRecognitionDouble } from './speech-test-fixtures.mjs';
+import { createAppHarness, createAudioDouble, createClock, createRecognitionDouble, createStorageDouble } from './speech-test-fixtures.mjs';
 import { verifyMemory } from './memory-checks.mjs';
 import { verifyVoices } from './voice-checks.mjs';
 import { verifyPersonality } from './personality-checks.mjs';
@@ -736,7 +736,7 @@ const sheetCss = await readFile(resolve(root, 'src/index.css'), 'utf8');
 check('warm-up: the line gets its own 24px box and clips, so nothing overlaps it', /\.kokoro-warmup \{[^}]*--warmup-height: 24px;[^}]*min-height: var\(--warmup-height\);[^}]*overflow: hidden/.test(sheetCss)
   && !/\.kokoro-warmup \{[^}]*height: 0[;}]/.test(sheetCss));
 check('standby: the icon dims, lights for the wake phrase and names itself on hover', /\.wake-indicator \{[^}]*opacity: \.42;[^}]*transition: opacity 400ms ease-in-out/.test(sheetCss)
-  && /\.wake-indicator:hover, \.wake-indicator\.is-alert \{ opacity: 1; color: #ff9a5a; \}/.test(sheetCss)
+  && /\.wake-indicator:hover, \.wake-indicator\.is-alert \{ opacity: 1; color: var\(--accent-glow\); \}/.test(sheetCss)
   && /\.wake-indicator:hover \.wake-hint \{ opacity: 1; \}/.test(sheetCss));
 
 const alertUi = await createAppHarness();
@@ -782,6 +782,33 @@ await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);
 await verifyNames(check);
+
+// The theme toggle is App state, so its contract is behavioural, not just textual.
+const darkUi = await createAppHarness();
+darkUi.clock.tick();
+await darkUi.settle();
+check('theme: the app opens dark and offers the sun', /\btheme-dark\b/.test(darkUi.tree.props.className)
+  && darkUi.find('theme-toggle').props['aria-label'] === 'Switch to light theme'
+  && darkUi.find('theme-toggle').props['aria-pressed'] === false);
+darkUi.find('theme-toggle').props.onClick();
+darkUi.flush();
+check('theme: one click repaints the shell light and writes the choice to nova_theme', /\btheme-light\b/.test(darkUi.tree.props.className)
+  && darkUi.find('theme-toggle').props['aria-label'] === 'Switch to dark theme'
+  && darkUi.find('theme-toggle').props['aria-pressed'] === true
+  && darkUi.storage.writes.some((write) => write.key === 'nova_theme' && write.value === 'light'));
+const remembered = await createAppHarness({ storage: createStorageDouble({ nova_theme: 'light' }) });
+remembered.clock.tick();
+await remembered.settle();
+check('theme: a remembered light mode is on the shell before anything is clicked', /\btheme-light\b/.test(remembered.tree.props.className)
+  && !remembered.storage.writes.some((write) => write.key === 'nova_theme'));
+const lockedStore = createStorageDouble();
+lockedStore.readError = true;
+lockedStore.writeError = true;
+const blocked = await createAppHarness({ storage: lockedStore });
+blocked.clock.tick();
+await blocked.settle();
+check('theme: a browser that will not share storage still paints dark mode, uncaught nowhere', /\btheme-dark\b/.test(blocked.tree.props.className)
+  && blocked.storage.writeError === true);
 
 const failed = problems.length;
 for (const { label, ok, detail } of checks) {
