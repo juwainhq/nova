@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import RobotAvatar from './RobotAvatar.jsx';
 import RichResponsePanel from './RichResponsePanel.jsx';
 import {
-  RICH_FADE_MS, RICH_VISIBLE_MS, hasRichResponse, imageSearchQuery, richResponse,
+  RICH_FADE_MS, RICH_VISIBLE_MS, hasRichResponse, richResponse,
 } from './rich-response.js';
+import {
+  IMAGE_FOUND_TEXT, WEB_SEARCH_BLOCKED_TEXT, WEB_SEARCH_TEXT, findImages, imageRequestQuery,
+  openSearchTab, searchCard, webSearchQuery,
+} from './web-browse.js';
 import { APP_NAME } from './brand.js';
 import {
   OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT,
@@ -871,7 +875,12 @@ function App() {
 
     const currentMemory = refreshMemories(false);
     const intent = parseMemoryIntent(prompt);
-    const imageQuery = intent ? null : imageSearchQuery(prompt);
+    const imageQuery = intent ? null : imageRequestQuery(prompt);
+    const searchQuery = intent || imageQuery ? null : webSearchQuery(prompt);
+    // Open the tab before any await so the browser is most likely to allow it.
+    const searchOpened = searchQuery ? openSearchTab(searchQuery, window) : false;
+    // Pictures load while NOVA speaks; the search never rejects.
+    const picturesFound = imageQuery ? findImages(imageQuery, { fetch: (...args) => fetch(...args), signal: controller.signal }) : null;
 
     let speech = null;
     let stream = null;
@@ -906,9 +915,8 @@ function App() {
           }
         }
       }
-      if (imageQuery) {
-        // A search link, not a claim that an image was fetched or generated.
-        answer = `Here’s a Google Images search for “${imageQuery}”. Tap View Images below to take a look.`;
+      if (imageQuery || searchQuery) {
+        answer = imageQuery ? IMAGE_FOUND_TEXT : searchOpened ? WEB_SEARCH_TEXT : WEB_SEARCH_BLOCKED_TEXT;
         conversationRef.current = [
           ...conversationRef.current,
           { role: 'user', content: prompt },
@@ -961,7 +969,13 @@ function App() {
       const speechCompleted = await (stream ? (speech ?? speakRef.current?.(stream)) : speakRef.current?.(answer));
       if (!controller.signal.aborted) {
         celebrate();
-        if (speechCompleted) showRichResponse(richResponse(answer, imageQuery), richVersion);
+        if (speechCompleted) {
+          const pictures = picturesFound ? await picturesFound : [];
+          if (controller.signal.aborted) return;
+          if (searchQuery) {
+            if (!searchOpened) showRichResponse(searchCard(searchQuery), richVersion);
+          } else showRichResponse(richResponse(answer, imageQuery, pictures), richVersion);
+        }
       }
     } catch (error) {
       // A reply that fails or is canceled mid-stream stops speaking right away.

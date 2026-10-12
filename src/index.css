@@ -482,6 +482,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 106, 26
 .rich-image-placeholder svg { width: 58px; height: 40px; opacity: .55; }
 .rich-image-placeholder span { color: var(--muted); font: 8px var(--mono); }
 .rich-image-button { display: inline-flex; align-items: center; gap: 8px; margin-top: 9px; padding: 6px 9px; border: 1px solid rgba(245, 201, 154, .24); border-radius: 6px; color: var(--cream); font-size: 10px; text-decoration: none; }
+.rich-image-gallery { grid-column: 1 / -1; min-width: 0; }
+.rich-image-gallery header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rich-image-gallery h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.rich-image-gallery header a { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; text-decoration: none; }
+.rich-image-gallery header a:hover { color: var(--cream); }
+.rich-image-results { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.rich-image-result { position: relative; display: block; height: clamp(64px, calc(var(--rich-height) - 112px), 168px); overflow: hidden; border: 1px solid rgba(245, 201, 154, .13); border-radius: 10px; background: rgba(245, 201, 154, .05); }
+.rich-image-result img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .25s ease-out; }
+.rich-image-result:hover img, .rich-image-result:focus-visible img { transform: scale(1.04); }
+.rich-image-result span { position: absolute; left: 6px; bottom: 6px; padding: 2px 6px; border-radius: 6px; background: rgba(20, 12, 7, .72); color: var(--muted); font: 8px var(--mono); }
 .rich-items { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .rich-item-card { flex: 1 1 170px; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
 .rich-content-panel:focus-visible, .rich-content-panel a:focus-visible { outline: 2px solid var(--orange); outline-offset: -3px; }

@@ -81,10 +81,16 @@ export function googleImagesLink(query) {
   return url.href;
 }
 
-export function richResponse(text, imageQuery = null) {
+// `pictures` are fetched image candidates (see web-browse.js); without them the
+// image card stays a Google Images placeholder.
+export function richResponse(text, imageQuery = null, pictures = []) {
   const images = [];
   const links = [];
-  if (imageQuery) images.push({ query: imageQuery, href: googleImagesLink(imageQuery) });
+  if (imageQuery) {
+    const image = { query: imageQuery, href: googleImagesLink(imageQuery) };
+    if (Array.isArray(pictures) && pictures.length) image.pictures = pictures.slice(0, 24);
+    images.push(image);
+  }
   const allLinks = responseLinks(text, MAX_RICH_LINKS + 1);
   for (const link of allLinks.slice(0, MAX_RICH_LINKS)) {
     const url = new URL(link.href);

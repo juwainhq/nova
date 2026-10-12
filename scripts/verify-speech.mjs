@@ -16,6 +16,7 @@ import { verifyPersonality } from './personality-checks.mjs';
 import { verifyRich } from './rich-checks.mjs';
 import { verifyKokoro } from './kokoro-checks.mjs';
 import { verifyStreaming } from './streaming-checks.mjs';
+import { verifyWebBrowse } from './web-browse-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -728,6 +729,7 @@ deniedUi.unmount();
 await verifyRich(check);
 await verifyKokoro(check);
 await verifyStreaming(check);
+await verifyWebBrowse(check);
 await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);

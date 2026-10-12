@@ -186,7 +186,7 @@ export async function verifyRich(check) {
 
   const images = await ready({ modelsOffline: true });
   await ask(images, 'show me a picture of cats & dogs');
-  check('rich image requests: spoken answer honestly offers search, not a fetched image', images.utterances[0]?.text.includes('Google Images search for “cats & dogs”') && !props(images));
+  check('rich image requests: spoken answer is the requested found-pictures line, panel waits for speech', images.utterances[0]?.text === "Here's what I found!" && !props(images));
   check('rich image requests: local search does not call chat or write memories/preferences', !images.requests.some((request) => request.url.endsWith('/chat/completions')) && images.storage.writes.length === 0);
   await end(images);
   check('rich image requests: speech completion supplies the encoded Google Images card', content(images)?.images[0].query === 'cats & dogs'
