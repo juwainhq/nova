@@ -234,7 +234,7 @@ export async function verifyWebBrowse(check) {
   // same glass over peach. The ground is five lights on five closed paths, and the choice is
   // remembered under nova_theme. The avatar and the mic are deliberately outside all of it.
   check('theme: the ground is five lights, each blurred and compositor-only',
-    /\.app-shell::before, \.app-shell::after, body::before, body::after, #root::before \{[^}]*filter: blur\(140px\);[^}]*will-change: transform, opacity;[^}]*animation-timing-function: cubic-bezier\(\.45, \.05, \.55, \.95\)/.test(flat)
+    /\.app-shell::before, \.app-shell::after, body::before, body::after, #root::before \{[^}]*opacity: \.74;[^}]*filter: blur\(110px\);[^}]*will-change: transform, opacity;[^}]*animation-timing-function: cubic-bezier\(\.45, \.05, \.55, \.95\)/.test(flat)
     && !/blobMove/.test(css) && !/\.bg-blob/.test(css));
   const blobBodies = [...css.matchAll(/^(?:\.app-shell|body|#root)::(?:before|after) \{([^}]*)\n\}/gm)]
     .map((m) => m[1]).filter((body) => /width: \d+px/.test(body));
@@ -250,25 +250,29 @@ export async function verifyWebBrowse(check) {
       const legs = [...body.matchAll(/transform: ([^;]+);/g)].map((m) => m[1]);
       return legs.length >= 5 && legs[0] === legs[legs.length - 1] && new Set(legs.slice(1, -1)).size >= 3;
     }));
-  check('theme: the lights brighten and dim between .5 and .8 as they travel',
-    [1, 2, 3, 4].every((n) => {
-      const body = (css.match(new RegExp(`@keyframes blob-${n} \\{([^@]*)\\n\\}`)) || [, ''])[1];
-      const steps = [...body.matchAll(/opacity: (\.\d+)/g)].map((m) => +m[1]);
-      return steps.length >= 5 && Math.min(...steps) >= 0.5 && Math.max(...steps) <= 0.8;
-    }));
-  check('theme: the fifth light is a 200px hot spot at 80px of blur, and the fastest',
-    /#root::before \{[^}]*width: 200px;[^}]*filter: blur\(80px\);[^}]*opacity: \.3;[^}]*animation: blob-5 5s/.test(flat)
-    && +((css.match(/@keyframes blob-5 \{[\s\S]*?opacity: (\.\d+)/) || [])[1] ?? 1) <= 0.4);
+  const pathOpacity = (n) => [...(css.match(new RegExp(`@keyframes blob-${n} \\{([^@]*)\\n\\}`)) || [, ''])[1]
+    .matchAll(/opacity: (\.\d+)/g)].map((m) => +m[1]);
+  check('theme: the lights swing between .58 and .86 as they travel, and never sit still',
+    [1, 2, 3, 4].every((n) => { const steps = pathOpacity(n); return steps.length === 5
+      && Math.min(...steps) >= 0.58 && Math.max(...steps) <= 0.86 && Math.max(...steps) - Math.min(...steps) >= 0.2; })
+    && new Set([1, 2, 3, 4].map((n) => pathOpacity(n).join(' '))).size === 4
+    && /opacity: \.74;/.test(ruleBody('.app-shell::before, .app-shell::after, body::before, body::after, #root::before')));
+  check('theme: each light holds a solid core before it fades, so it reads as a light and not a smear',
+    [1, 2, 3, 4, 5].every((n) => new RegExp(`radial-gradient\\(circle, var\\(--blob-${n}\\) 0%, var\\(--blob-${n}\\) \\d{2}%, transparent \\d{2}%\\)`).test(css)));
+  check('theme: the fifth light is a 200px hot spot at 70px of blur, and the fastest',
+    /#root::before \{[^}]*width: 200px;[^}]*filter: blur\(70px\);[^}]*opacity: \.46;[^}]*animation: blob-5 5s/.test(flat)
+    && pathOpacity(5).length === 5 && Math.min(...pathOpacity(5)) >= 0.3 && Math.max(...pathOpacity(5)) <= 0.56
+    && pathOpacity(5)[0] === 0.34);
   check('theme: dark mode puts the specified five lights on #050300',
-    ['--blob-1: #ea580c', '--blob-2: #c2410c', '--blob-3: #7c2d00', '--blob-4: #f97316', '--blob-5: #fed7aa',
+    ['--blob-1: #f97316', '--blob-2: #ea580c', '--blob-3: #c2410c', '--blob-4: #f97316', '--blob-5: #ffedd5',
       '--canvas: #050300', '--ink: #f5f0eb', '--card: rgba(15, 10, 5, .85)', '--card-strong: rgba(10, 7, 3, .92)',
       '--glass: blur(20px)', '--card-line: rgba(249, 115, 22, .2)'].every((token) => css.includes(`${token};`))
     && /body \{[^}]*background: var\(--canvas\)/.test(flat) && !/--ember|0f0d0b/.test(css));
-  check('theme: light mode puts three peaches on #fffbf7 through the same names',
+  check('theme: light mode puts the same five lights, deepened to peach, on #fffbf7',
     lightBlock.startsWith(":root[data-theme='light'], .app-shell.theme-light {")
     && ['--canvas: #fffbf7', '--ink: #1a0a00', '--card: rgba(255, 255, 255, .88)', '--card-strong: rgba(255, 255, 255, .95)',
-      '--on-card: #1a0a00', '--card-line: rgba(249, 115, 22, .3)', '--blob-1: #fff7ed', '--blob-2: #ffedd5',
-      '--blob-3: #fed7aa', '--grain: .02'].every((token) => lightBlock.includes(`${token};`)));
+      '--on-card: #1a0a00', '--card-line: rgba(249, 115, 22, .3)', '--blob-1: #ffedd5', '--blob-2: #fed7aa',
+      '--blob-3: #fdba74', '--blob-4: #ffedd5', '--blob-5: #fed7aa', '--grain: .02'].every((token) => lightBlock.includes(`${token};`)));
   check('theme: every open surface is glass in both modes',
     ['.settings-panel', '.rich-content-panel', '.browse-panel', '.toast', '.response-transcript',
       '.avatar-offline-display', '.icon-button'].every((sel) => /backdrop-filter: var\(--glass\)/.test(ruleBody(sel)))
@@ -314,6 +318,18 @@ export async function verifyWebBrowse(check) {
     /color: var\(--accent-ink\)/.test(ruleBody('.status-word')) && /font-weight: 700/.test(ruleBody('.status-word'))
     && /--accent-ink: #f97316;/.test(css) && /--accent-ink: #c2410c;/.test(lightBlock)
     && statusAt > 0 && statusAt < avatarAt);
+  check('theme: shell type sits on a dark plate, so a brighter ground cannot wash it out',
+    /--text-halo: 0 1px 3px rgba\(5, 3, 0, \.9\), 0 0 18px rgba\(5, 3, 0, \.85\);/.test(css)
+    && /--display-halo: 0 2px 34px rgba\(5, 3, 0, \.6\)/.test(css)
+    && /text-shadow: var\(--display-halo\)/.test(ruleBody('.tagline')) && !/rgba\(255, 231, 207/.test(css)
+    && ['.brand-name', '.status-word', '.wake-indicator', '.wake-hint', '.wake-message', '.active-voice-label',
+      '.kokoro-warmup'].every((sel) => /text-shadow: var\(--text-halo\)/.test(ruleBody(sel)))
+    && /--text-halo: 0 1px 3px rgba\(255, 255, 255, \.95\), 0 0 18px rgba\(255, 255, 255, \.9\);/.test(lightBlock)
+    && /--display-halo: /.test(lightBlock));
+  check('theme: the ground still moves only by transform and opacity, so a tighter blur costs no extra repaint',
+    [1, 2, 3, 4, 5].every((n) => { const body = (css.match(new RegExp(`@keyframes blob-${n} \\{([^@]*)\\n\\}`)) || [, ''])[1];
+      return [...body.matchAll(/([a-z-]+)\s*:/g)].every((m) => ['transform', 'opacity'].includes(m[1])); }));
+
   check('theme: the avatar and the mic keep their own paints, so the orb never re-themes',
     !/--(orange|burnt|cream):/.test(lightBlock)
     && !/var\(--(ink|on-card|card)\b/.test(ruleBody('.avatar-backlight'))
