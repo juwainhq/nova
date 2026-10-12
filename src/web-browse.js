@@ -65,8 +65,68 @@ export function webSearchQuery(text) {
     .replace(/[\s.!?…]+$/u, '')
     .replace(/^[“"']+|[”"']+$/gu, '')
     .trim();
-  if (!query || new RegExp(`^(?:(?:a|an|some|the)\\s+)?(?:${PICTURE}|${VIDEO})\\s+(?:of|for)\\b`, 'i').test(query)) return null;
+  // An unfinished ask ("search for a", "look up pictures of") is not a search either.
+  if (!query || query.length < 2 || /^(?:a|an|the|some|this|that)$/i.test(query)) return null;
+  if (new RegExp(`^(?:(?:a|an|some|the)\\s+)?(?:${PICTURE}|${VIDEO})\\s+(?:of|for)\\b`, 'i').test(query)) return null;
   return query;
+}
+
+// ------------------------------------------------- product, shopping and picture asks
+// The rules above only knew "search for X" / "look up X" / "find info about X", so a
+// shopping ask came back as a spoken guess. Any request that *starts* with one of these
+// actions and leaves a real thing behind is now a live search: "find me a laptop",
+// "buy a keyboard", "where can I get a cheap SSD", "the price of AirPods". The object is
+// what has to be solid: a question word, a possessive, an app feature or nothing at all
+// stays conversation ("find my keys", "show me how to cook rice", "look up").
+// The verb patterns below are regex *sources* interpolated into RegExp templates, so an
+// escape has to survive two layers: inside a template literal `\s` is a plain "s", which
+// silently breaks the pattern. String.raw keeps the backslash, and one literal regex.
+const verb = (stem) => String.raw`(?:${stem}(?:s|es|ed|ing)?)`;
+const ACT = String.raw`(?:${verb('find')}|${verb('look')}\s+(?:for|up)|lookup|${verb('search')}\s+(?:for|up|online|the\s+(?:web|internet))|${verb('google')}|${verb('show')}\s+(?:me|us)|${verb('get')}\s+me|${verb('give')}\s+me|${verb('send')}\s+me)`;
+const SHOPPING = String.raw`(?:${verb('buy')}|${verb('shop')}(?:\s+for)?|${verb('purchase')}|${verb('order')}|compar(?:e|es|ing|ison))`;
+const WHERE_GET = String.raw`where\s+(?:can|could|do|did|should|would|might)\s+(?:i|we|you)\s+(?:${verb('get')}|${verb('buy')}|${verb('find')}|${verb('purchase')}|${verb('order')})`;
+const PRICE_OF = String.raw`(?:${verb('cost')}|prices?\s+(?:of|for)|(?:price |cost )?comparison(?:s)?\s+of)`;
+// A "pictures of …" anywhere is an image request, even without a verb in front of it.
+const PICTURES_OF = new RegExp(`\\b(?:${PICTURE})\\s+of\\s+(.+)$`, 'i');
+// Media words alone are not a thing to shop for, and app nouns belong to the app itself.
+const ONLY_MEDIA = new RegExp(`^(?:${PICTURE}|${VIDEO})(?:\\s+(?:of|for))?$`, 'i');
+const APP_FEATURE = /\b(?:settings?|microphone|\bmic\b|volume|speakers?|transcript|memor(?:y|ies)|reminders?|wake\s+word|api\s+keys?|ollama|\bapp\b)/i;
+
+// "I want to", "let's", "please" and the polite question forms in front of the verb.
+const askLead = (text) => String(text || '').trim()
+  .replace(new RegExp(LEAD, 'i'), '')
+  .replace(/^(?:i\s+(?:want|need|hope)\s+to\s+|i(?:'d|\s+would)\s+like\s+to\s+|we\s+(?:want|need)\s+to\s+|let(?:\s+us|s)\s+|try\s+to\s+|go\s+and\s+)+/i, '')
+  .trim();
+
+const searchSubject = (text) => {
+  const query = subject(text);
+  if (!query || query.length < 2) return null;
+  if (NOT_A_THING.test(query) || ONLY_MEDIA.test(query) || APP_FEATURE.test(query)) return null;
+  if (/^(?:of|for|about|on|to|the|a)$/.test(query)) return null; // "look up", "a picture of"
+  return query;
+};
+
+export function picturesOfQuery(text) {
+  const match = PICTURES_OF.exec(clean(text));
+  return match ? searchSubject(match[1]) : null;
+}
+
+export function shoppingRequestQuery(text) {
+  const request = askLead(clean(text));
+  if (!request) return null;
+  const rules = [
+    [new RegExp(String.raw`^(?:${WHERE_GET})\s+(.+)$`, 'i'), (query) => query],
+    [new RegExp(String.raw`^(?:(?:what|how much)\s+(?:is|are)?\s*)?(?:the\s+)?${PRICE_OF}\s+(?:of|for|to)?\s*(?:the\s+)?(.+)$`, 'i'), (query) => `price of ${query}`],
+    [new RegExp(String.raw`^(?:${SHOPPING})\s+(?:me\s+)?(?:some\s+)?(.+)$`, 'i'), (query) => query],
+    [new RegExp(String.raw`^(?:${ACT})\s+(?:me\s+)?(?:some\s+)?(.+)$`, 'i'), (query) => query],
+  ];
+  for (const [pattern, shape] of rules) {
+    const match = pattern.exec(request);
+    if (!match) continue;
+    const query = searchSubject(shape(match[1]));
+    if (query) return query;
+  }
+  return null;
 }
 
 // "close", "hide", "dismiss" (optionally "the panel/browser/results…") — the whole request.
@@ -77,14 +137,19 @@ export function isCloseCommand(text) {
 }
 
 // Videos first ("show me a video of cats" is not a picture of "a video of cats"),
-// then images, then web search. Anything else is a normal question.
+// then images, then web search, then the broad product/shopping rules.
+// Anything else is a normal question.
 export function browseRequest(text) {
   const video = videoRequestQuery(text);
   if (video) return { kind: 'videos', query: video };
   const image = imageRequestQuery(text);
   if (image) return { kind: 'images', query: image };
   const web = webSearchQuery(text);
-  return web ? { kind: 'web', query: web } : null;
+  if (web) return { kind: 'web', query: web };
+  const pictures = picturesOfQuery(text);
+  if (pictures) return { kind: 'images', query: pictures };
+  const shopping = shoppingRequestQuery(text);
+  return shopping ? { kind: 'web', query: shopping } : null;
 }
 
 export function browseUrl(kind, query) {
@@ -109,6 +174,11 @@ export function browseTargetUrl(text) {
   let url;
   try { url = new URL(candidate); } catch { return null; }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  // The frame runs scripts with its real origin (that is what makes Google usable in
+  // here), so a page of *this* origin must not be loaded: it could read the app's
+  // storage and, since links may now move the page behind NOVA, move it.
+  const here = typeof location === 'object' && location ? location.origin : null;
+  if (here && url.origin === here) return null;
   if (!/^[a-z0-9._-]+$/i.test(url.hostname) || /^\.|\.$/.test(url.hostname)) return null;
   // Without a typed scheme a host needs a dot, so "dogs" and "localhost" stay searches;
   // an explicit http(s):// address is taken as written (localhost dev servers included).

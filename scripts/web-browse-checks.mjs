@@ -9,7 +9,8 @@ import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import {
   BROWSE_FOUND_TEXT, BROWSE_SLIDE_MS, browseGoto, browseInputStop, browseNavRequest,
-  browseRequest, browseTargetUrl, browseUrl, imageRequestQuery, isCloseCommand, pushBrowseHistory,
+  browseRequest, browseTargetUrl, browseUrl, imageRequestQuery, isCloseCommand, picturesOfQuery, pushBrowseHistory,
+  shoppingRequestQuery,
   videoRequestQuery, webSearchQuery,
 } from '../src/web-browse.js';
 import { createAppHarness, createStorageDouble } from './speech-test-fixtures.mjs';
@@ -57,6 +58,54 @@ export async function verifyWebBrowse(check) {
   check('browse intent: videos win over the "show me …" picture rule', imageRequestQuery('show me videos') === null && videoRequestQuery('show me a video of cats') === 'cats');
   check('browse intent: "search for pictures of X" is an image search, not web', webSearchQuery('search for pictures of cats') === null
     && browseRequest('search for pictures of cats')?.kind === 'images');
+  // Product and shopping asks. Before these rules the panel only knew "search for X"
+  // and "look up X", so "find me a laptop" came back as a spoken guess.
+  const products = {
+    'find me a laptop': ['web', 'laptop'], 'show me wireless headphones': ['images', 'wireless headphones'],
+    'look up Nike shoes': ['web', 'Nike shoes'], 'search for a gaming chair': ['web', 'a gaming chair'],
+    'find pictures of cats': ['images', 'cats'], 'buy a keyboard': ['web', 'keyboard'],
+    'shop for a monitor': ['web', 'monitor'], 'what is the price of AirPods': ['web', 'price of AirPods'],
+    'where can I get a cheap SSD': ['web', 'cheap SSD'], 'photos of the moon': ['images', 'moon'],
+    'images of lions': ['images', 'lions'], 'I want to buy a router': ['web', 'router'],
+    'can you find a good hotel': ['web', 'good hotel'], 'find me some running shoes': ['web', 'running shoes'],
+    'look for a gift under 50 dollars': ['web', 'gift under 50 dollars'], 'where can I buy a ps5': ['web', 'ps5'],
+    'show me the latest gaming laptops': ['images', 'latest gaming laptops'],
+  };
+  for (const [request, [kind, query]] of Object.entries(products)) {
+    check(`browse intent: "${request}" → ${kind} "${query}"`, same(browseRequest(request), { kind, query }));
+  }
+  for (const trigger of ['find', 'look for', 'look up', 'show me', 'search for', 'buy', 'shop for', 'price of', 'where can I get', 'images of', 'pictures of', 'photos of']) {
+    const spoken = trigger === 'price of' ? 'what is the price of a drone' : trigger === 'where can I get' ? 'where can I get a drone' : `${trigger} a drone`;
+    const found = browseRequest(spoken);
+    check(`browse intent: "${spoken}" ("${trigger}") opens the panel`, Boolean(found)
+      && (found.kind === 'images' ? found.query.includes('drone') : found.query.includes('drone')));
+  }
+  const shoppingUrl = (request) => { const found = browseRequest(request); return found ? browseUrl(found.kind, found.query) : null; };
+  check('browse intent: shopping opens a plain search, pictures open the image search',
+    shoppingUrl('find me a laptop') === 'https://www.google.com/search?igu=1&q=laptop'
+    && shoppingUrl('buy a keyboard') === browseUrl('web', 'keyboard')
+    && shoppingUrl('find photos of cats') === browseUrl('images', 'cats')
+    && browseUrl('images', 'cats').includes('tbm=isch') && !shoppingUrl('find me a laptop').includes('tbm='));
+  check('browse intent: the framed search keeps the one parameter Google allows framing with',
+    browseUrl('web', 'laptop').includes('igu=1') && !browseUrl('web', 'laptop').includes('igu=0'));
+  const notShopping = ['show me how to cook rice', 'how do I find a good dentist', 'look for my notes', 'find my settings',
+    'I can\u2019t find my keys', 'can you find the microphone', 'show me my memories', 'buy me some time', 'tell me about Paris',
+    'what should I cook tonight', 'images of', 'find', 'buy', 'search for a', 'show me', 'look for nothing', 'photos of'];
+  check('browse intent: shopping rules do not swallow questions, app features or an empty object',
+    notShopping.every((request) => browseRequest(request) === null));
+  // The cost of "any message containing find": an abstract object is indistinguishable
+  // from a product, so it is searched. The second line did this before these rules existed.
+  check('browse intent: an abstract ask is searched too, which is what a broad rule costs',
+    browseRequest('find me a reason to keep going')?.kind === 'web' && browseRequest('search for a gift for my wife')?.kind === 'web');
+  check('browse intent: a picture of a thing is still images, not a product search',
+    browseRequest('find me pictures of a laptop')?.kind === 'images' && browseRequest('pictures of laptops')?.kind === 'images');
+  check('browse intent: an image ask with no verb is caught by the broad rule', picturesOfQuery('I love photos of old trains') === 'old trains'
+    && picturesOfQuery('what is a photo') === null && shoppingRequestQuery('look up') === null && shoppingRequestQuery('buy') === null);
+  // "of" is what makes a media word an image request: "photos from the museum" is not.
+  check('browse intent: a media word without "of" is not a picture request',
+    picturesOfQuery('photos from the museum') === null && picturesOfQuery('photosynthesis explained') === null
+    && picturesOfQuery('image library setup') === null);
+
   for (const command of ['close', 'Close.', 'hide', 'close the panel', 'hide the results', 'close it please', 'okay close', 'close browser', 'close the browser', 'dismiss the search results']) {
     check(`browse close: "${command}" closes the panel`, isCloseCommand(command));
   }
@@ -102,6 +151,8 @@ export async function verifyWebBrowse(check) {
   }
   check('browse address: a bare word is searched, not treated as a host', browseTargetUrl('dogs') === null
     && browseTargetUrl('localhost:3000') === null && browseTargetUrl('localhost') === null);
+  check('browse address: this app is never loaded inside its own frame',
+    /url\.origin === here/.test(await readFile('src/web-browse.js', 'utf8')));
   for (const blocked of ['javascript:alert(1)', 'data:text/html,<script>1</script>', 'file:///etc/passwd', 'view-source:https://example.com', 'vbscript:msgbox']) {
     check(`browse address: "${blocked.split(':')[0]}:" is never loaded into the frame`, browseTargetUrl(blocked) === null
       && browseInputStop(blocked) === null);
@@ -126,9 +177,15 @@ export async function verifyWebBrowse(check) {
   check('browse panel: an X button closes it', /<button[^>]*class="browse-close"[^>]*aria-label="Close search panel"[^>]*>×<\/button>/.test(html));
   const frame = html.match(/<iframe\b[^>]*>/)?.[0] || '';
   check('browse panel: the iframe shows the Google results URL', frame.includes(`src="${browseUrl('images', 'red car').replace(/&/g, '&amp;')}"`) && frame.includes('class="browse-frame"'));
-  check('browse panel: the iframe is sandboxed so Google cannot navigate NOVA away', frame.includes('sandbox="') && !frame.includes('allow-top-navigation'));
+  const SANDBOX_TOKENS = (frame.match(/sandbox="([^"]*)"/)?.[1] ?? '').split(/\s+/).filter(Boolean);
+  const EXPECTED_SANDBOX = ['allow-scripts', 'allow-same-origin', 'allow-forms', 'allow-popups',
+    'allow-popups-to-escape-sandbox', 'allow-top-navigation-by-user-activation'];
+  check('browse panel: the frame is sandboxed, and only a click inside it may move the page behind NOVA',
+    frame.includes('sandbox="') && SANDBOX_TOKENS.includes('allow-top-navigation-by-user-activation')
+    && !SANDBOX_TOKENS.includes('allow-top-navigation') && !SANDBOX_TOKENS.includes('allow-top-navigation-to-custom-protocols'));
   const css = await readFile('src/index.css', 'utf8');
   const handle = await readFile('src/BrowsePanel.jsx', 'utf8');
+  const panelSources = [handle, await readFile('src/App.jsx', 'utf8'), await readFile('src/web-browse.js', 'utf8')].join('\n');
   check('browse layout: left 45% / right 55% (max 600px), sliding in over 300ms ease', /\.app-shell\.has-browse-panel \{[^}]*width: max\(45%, calc\(100% - 600px\)\)/.test(css)
     && /\.browse-panel \{[^}]*width: 55%; max-width: 600px;[^}]*animation: browse-in \.3s ease both/.test(css) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
     && css.includes('@keyframes browse-in { from { transform: translateX(100%); }'));
@@ -136,8 +193,11 @@ export async function verifyWebBrowse(check) {
   check('browse layout: the frame leaves 60px for the header and 20px at the bottom', /\.browse-header \{ flex: 0 0 60px;/.test(css) && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
   check('browse layout: the panel never scrolls; the iframe fills it with no border', /\.browse-panel \{[^}]*overflow: hidden/.test(css)
     && /\.browse-frame \{[^}]*flex: 1;[^}]*width: 100%;[^}]*border: 0/.test(css));
-  check('browse panel: the sandbox is exactly the agreed allow-list, so Google stays inside its frame',
-    /sandbox="allow-scripts allow-same-origin allow-forms allow-popups"/.test(frame));
+  check('browse panel: the sandbox is exactly the agreed allow-list', SANDBOX_TOKENS.join(' ') === EXPECTED_SANDBOX.join(' '));
+  check('browse panel: a link that opens a window is allowed to, so the target page is not sandboxed',
+    /sandbox=\{SANDBOX\}/.test(handle) && /'allow-scripts allow-same-origin allow-forms allow-popups '/.test(handle)
+    && /'allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation'/.test(handle)
+    && SANDBOX_TOKENS.includes('allow-popups')); // without it, escaping popups are ignored
   check('browse panel: the mobile sheet carries a grabber, decorative so the × stays the keyboard path', html.includes('class="browse-handle"')
     && /<div class="browse-handle" aria-hidden="true"/.test(html));
   check('browse layout: the grabber only exists on the bottom sheet', /\.browse-handle \{ display: none; \}/.test(css)
@@ -162,16 +222,22 @@ export async function verifyWebBrowse(check) {
     && /\.browse-header \{ flex: 0 0 60px;/.test(css));
   check('browse chrome: the frame still fills what is left, bottom gap included', /\.browse-frame \{ flex: 1;[^}]*min-height: 0/.test(css)
     && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
-  const sandboxTokens = (frame.match(/sandbox="([^"]*)"/)?.[1] ?? '').split(/\s+/).filter(Boolean);
+  const sandboxTokens = SANDBOX_TOKENS;
   const KNOWN_SANDBOX = new Set(['allow-downloads', 'allow-forms', 'allow-modals', 'allow-orientation-lock', 'allow-pointer-lock',
     'allow-popups', 'allow-popups-to-escape-sandbox', 'allow-presentation', 'allow-same-origin', 'allow-scripts',
     'allow-storage-access-by-user-activation', 'allow-top-navigation', 'allow-top-navigation-by-user-activation',
     'allow-top-navigation-to-custom-protocols']);
   check('browse iframe: every sandbox token is one browsers know (allow-navigation is not)',
     sandboxTokens.length > 0 && sandboxTokens.every((token) => KNOWN_SANDBOX.has(token)));
-  check('browse iframe: pages the user clicks can load inside the frame, and the panel keeps NOVA',
+  check('browse iframe: pages the user clicked can run, submit and open',
     sandboxTokens.includes('allow-scripts') && sandboxTokens.includes('allow-forms') && sandboxTokens.includes('allow-same-origin')
-    && sandboxTokens.includes('allow-popups') && !sandboxTokens.some((token) => token.startsWith('allow-top-navigation')));
+    && sandboxTokens.includes('allow-popups') && sandboxTokens.includes('allow-popups-to-escape-sandbox'));
+  // A _blank click inside a cross-origin page cannot be retargeted from here: no script
+  // in this app may read or steer that document, so there is nothing to "catch".
+  check('browse panel: nothing pretends to reach inside the framed page',
+    !/\.content(Window|Document)/.test(panelSources));
+  check('browse panel: refresh and the arrows are the in-panel controls, so a lost popup is not fatal',
+    /aria-label="Refresh this page"/.test(handle) && /aria-label="Go back"/.test(handle));
   check('browse iframe: media may autoplay and take fullscreen inside the panel', /allow="autoplay; fullscreen[^"]*"/.test(frame));
   const blockedRules = [...css.matchAll(/^(\.browse[^{\n]*)\s*\{([^}\n]*)\}/gm)]
     .filter(([, , body]) => /pointer-events:\s*none/.test(body)).map(([, selector]) => selector);
@@ -224,6 +290,16 @@ export async function verifyWebBrowse(check) {
   await ask(app, 'what does a red panda look like');
   check('browse App: image requests use Google Images', panel(app)?.props.browse.kind === 'images' && panel(app)?.props.browse.query === 'red panda');
   await end(app);
+  const askedAboutProducts = chats(app);
+  await ask(app, 'find me a laptop');
+  check('browse App: a product ask opens the panel on a live Google search', panel(app)?.props.browse.kind === 'web'
+    && panel(app)?.props.browse.query === 'laptop' && panel(app)?.props.browse.url === 'https://www.google.com/search?igu=1&q=laptop');
+  await end(app);
+  check('browse App: the product ask never reaches the model, and the panel is the answer',
+    chats(app) === askedAboutProducts && (app.utterances.at(-1)?.text || '').includes(BROWSE_FOUND_TEXT));
+  await ask(app, 'where can I get a cheap SSD');
+  check('browse App: a shopping question loads a search, not a price read out loud', panel(app)?.props.browse.url === browseUrl('web', 'cheap SSD')
+    && panel(app)?.props.browse.query === 'cheap SSD' && chats(app) === askedAboutProducts);
 
   const spokenBefore = app.utterances.length;
   await ask(app, 'close');

@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BROWSE_KINDS } from './web-browse.js';
 
+// What the framed page may do. Scripts, forms and same-origin storage are what make a
+// page actually usable in a frame; popups need both escape flags, because a sandboxed
+// popup inherits the sandbox and most sites (Google's /url redirect included) fail there.
+// Top navigation is allowed only on a click inside the frame, and only the click one —
+// the unconditional token is left off so no page can move NOVA on its own schedule.
+const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups '
+  + 'allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation';
+
 // On phones the results sheet is dismissed by dragging its grabber down: a release
 // past a third of the sheet (or a quick flick) closes it, anything shorter rides a
 // CSS transition back. Transitions outrank the panel's slide keyframes, so the
@@ -135,7 +143,7 @@ export default function BrowsePanel({ browse, onClose, onNavigate, onBack, onFor
         className="browse-frame"
         src={browse.url}
         title={onGoogle ? `Google ${kind.toLowerCase()} results for ${browse.query}` : `${browse.query} in the browsing panel`}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        sandbox={SANDBOX}
         allow="autoplay; fullscreen; picture-in-picture"
         referrerPolicy="strict-origin-when-cross-origin"
       />
