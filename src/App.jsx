@@ -1611,6 +1611,10 @@ function App() {
     <div className={`app-shell stage-${stage}${showRichPanel ? ' has-rich-content' : ''}${browse ? ' has-browse-panel' : ''}${browse?.closing ? ' browse-closing' : ''}`}>
       <header className="topbar">
         <div className="brand-name">{APP_NAME}</div>
+        {/* The only way into settings sits in the top-right corner, always visible. */}
+        <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
+          <SettingsIcon />
+        </button>
       </header>
 
       <main className="main-stage">
@@ -1672,12 +1676,6 @@ function App() {
           >
             {canInterrupt ? <StopIcon /> : <MicIcon stopped={stage === 'listening'} />}
             <span className="mic-button-sheen" />
-          </button>
-        </div>
-        {/* Settings lives in the corner with the mic now, quiet until it is needed. */}
-        <div className="dock-corner dock-corner-right">
-          <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
-            <SettingsIcon />
           </button>
         </div>
       </footer>

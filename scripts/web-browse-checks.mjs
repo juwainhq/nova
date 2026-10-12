@@ -189,7 +189,8 @@ export async function verifyWebBrowse(check) {
   check('browse layout: left 45% / right 55% (max 600px), sliding in over 300ms ease', /\.app-shell\.has-browse-panel \{[^}]*width: max\(45%, calc\(100% - 600px\)\)/.test(css)
     && /\.browse-panel \{[^}]*width: 55%; max-width: 600px;[^}]*animation: browse-in \.3s ease both/.test(css) && /\.browse-panel\.is-closing \{[^}]*browse-out \.3s ease/.test(css)
     && css.includes('@keyframes browse-in { from { transform: translateX(100%); }'));
-  check('browse layout: a floating card with a rounded, subtly bordered left edge', /\.browse-panel \{[^}]*border-left: 1px solid rgba\(255, 255, 255, \.08\);[^}]*border-radius: 12px 0 0 12px/.test(css));
+  check('browse layout: a white card with a rounded, hairline-bordered left edge', /\.browse-panel \{[^}]*border-left: 1px solid rgba\(26, 18, 8, \.16\);[^}]*border-radius: 12px 0 0 12px/.test(css)
+    && /\.browse-panel \{[^}]*background: var\(--card\)/.test(css) && /\.browse-header \{[^}]*background: var\(--card-alt\)/.test(css));
   check('browse layout: the frame leaves 60px for the header and 20px at the bottom', /\.browse-header \{ flex: 0 0 60px;/.test(css) && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
   check('browse layout: the panel never scrolls; the iframe fills it with no border', /\.browse-panel \{[^}]*overflow: hidden/.test(css)
     && /\.browse-frame \{[^}]*flex: 1;[^}]*width: 100%;[^}]*border: 0/.test(css));
@@ -217,9 +218,40 @@ export async function verifyWebBrowse(check) {
   check('browse chrome: back, forward and refresh sit on the left of the bar', /class="browse-nav">\s*<button[^>]*class="browse-nav-button"[^>]*aria-label="Go back"[^>]*>←<\/button>[\s\S]*aria-label="Go forward"[^>]*>→<\/button>[\s\S]*aria-label="Refresh this page"[^>]*>↺<\/button>/.test(html.replace(/><\/button>/g, '></button>')));
   check('browse chrome: the arrows start disabled where the trail cannot go', (html.match(/aria-label="Go (?:back|forward)"[^>]*disabled/g) || []).length === 2
     && !/aria-label="Refresh this page"[^>]*disabled/.test(html));
-  check('browse chrome: a dark pill bar, still under the 60px header and above the frame', /\.browse-chrome \{[^}]*flex: 0 0 46px/.test(css)
-    && /\.browse-address-input \{[^}]*border-radius: 999px; background: rgba\(10, 6, 4, \.72\)/.test(css)
+  check('browse chrome: a light pill bar, still under the 60px header and above the frame', /\.browse-chrome \{[^}]*flex: 0 0 46px/.test(css)
+    && /\.browse-address-input \{[^}]*border-radius: 999px; background: var\(--card-alt\)/.test(css)
+    && /\.browse-address-input:focus \{ border-color: #f97316/.test(css)
     && /\.browse-header \{ flex: 0 0 60px;/.test(css));
+
+  const appSource = await readFile('src/App.jsx', 'utf8');
+  // The light theme is a contract of its own: white paper, charcoal ink, orange accent,
+  // a ground that breathes on an 8s cycle, and nothing light-on-light inside a card.
+  check('theme: the ground is an animated ember gradient on an 8s cycle',
+    /\.app-shell::before, \.app-shell::after \{[^}]*animation-duration: 8s;/.test(css)
+    && /\.app-shell::before \{[^}]*linear-gradient\([^)]*#0f0d0b[^}]*var\(--ember\)[^}]*animation-name: bg-veil;/.test(css)
+    && /\.app-shell::after \{[^}]*animation-name: bg-veil-alt;/.test(css)
+    && /@keyframes bg-veil \{[^}]*transform: translate3d\(-11%, -7%, 0\)/.test(css)
+    && /will-change: transform, opacity;/.test(css));
+  check('theme: the three named colours are the palette', /--ember: #7c2d00;/.test(css)
+    && /--ember-hot: #92400e;/.test(css) && /#0f0d0b/.test(css) && /--card: #ffffff;/.test(css)
+    && /--card-alt: #faf7f5;/.test(css) && /--on-card: #1a1208;/.test(css));
+  check('theme: the reply, the toast and the offline notice are white cards with an orange left edge',
+    /\.response-transcript \{[^}]*border-left: 3px solid #f97316;[^}]*border-radius: 14px; background: var\(--card\)/.test(css)
+    && /\.toast \{[^}]*border-left: 3px solid #f97316/.test(css)
+    && /\.avatar-offline-display \{[^}]*border-left: 3px solid #f97316/.test(css)
+    && /\.response-transcript p \{[^}]*color: var\(--on-card\)/.test(css));
+  check('theme: the settings gear is an always-visible 40px white circle with an orange glyph',
+    /\.icon-button \{[^}]*width: 40px;[^}]*height: 40px;[^}]*border-radius: 50%;[^}]*background: var\(--card\);[^}]*color: #f97316;[^}]*box-shadow/.test(css)
+    && !/\.dock-corner/.test(css) && !/\.icon-button \{[^}]*opacity: \./.test(css));
+  const statusAt = appSource.indexOf('status-word status-word-');
+  const avatarAt = appSource.indexOf('className={`avatar-container');
+  check('theme: the status line is bold orange above the avatar',
+    /\.status-word \{[^}]*color: #f97316;[^}]*font-weight: 700/.test(css)
+    && /\.assistant-stage \{[^}]*flex-direction: column/.test(css)
+    && statusAt > 0 && statusAt < avatarAt);
+  const sheetRegion = css.slice(css.indexOf('.settings-panel-backdrop'), css.indexOf('@keyframes browse-out'));
+  check('theme: no sheet keeps light-on-dark ink or cream hairlines', !/color: var\(--(ink|cream|muted)\)/.test(sheetRegion)
+    && !/#f5c99a|rgba\(245, 201, 154/.test(sheetRegion));
   check('browse chrome: the frame still fills what is left, bottom gap included', /\.browse-frame \{ flex: 1;[^}]*min-height: 0/.test(css)
     && /\.browse-panel \{[^}]*padding-bottom: 20px/.test(css));
   const sandboxTokens = SANDBOX_TOKENS;
