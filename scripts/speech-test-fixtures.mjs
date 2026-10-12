@@ -2,7 +2,6 @@
 // and compiled App without claiming to emulate microphone hardware or audio quality.
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
-import { resolve } from 'node:path';
 
 export function createClock() {
   let time = 0;
@@ -192,7 +191,10 @@ function eventTarget() {
 // Minimal hook scheduler: useState/useRef persist, effects clean up on dependency
 // changes, and state updates batch into flush(). JSX is an inspectable tree, not DOM.
 const appBuild = build({
-  entryPoints: [resolve(process.cwd(), 'src/App.jsx')],
+  stdin: {
+    contents: `export { default, SettingsPanel } from './src/App.jsx'; export { default as BotAvatar } from './src/BotAvatar.jsx'; export { default as RobotAvatar } from './src/RobotAvatar.jsx';`,
+    resolveDir: process.cwd(), loader: 'jsx',
+  },
   bundle: true,
   write: false,
   platform: 'node',
@@ -208,6 +210,8 @@ const appBuild = build({
         contents: path === 'react' ? `
           export const useState = (...args) => globalThis.hooks.state(...args);
           export const useRef = (...args) => globalThis.hooks.ref(...args);
+          export const useId = () => globalThis.hooks.id();
+          export const useMemo = (...args) => globalThis.hooks.memo(...args);
           export const useCallback = (...args) => globalThis.hooks.callback(...args);
           export const useEffect = (...args) => globalThis.hooks.effect(...args);
         ` : `
@@ -222,7 +226,7 @@ const appBuild = build({
 });
 
 export async function createAppHarness({ continuous = true, missingRecognition = false, speech = true,
-  storage = createStorageDouble(), panelProps = null, modelsOffline = false, missingSynthesis = false,
+  storage = createStorageDouble(), panelProps = null, botProps = null, orbProps = null, windowOverrides = {}, modelsOffline = false, missingSynthesis = false,
   voices = [{ name: 'Samantha', lang: 'en-US', voiceURI: 'samantha', localService: true }], kokoro = false } = {}) {
   const clock = createClock();
   // Without `kokoro`, there is no Worker, so the App starts on its Web Speech fallback.
@@ -253,6 +257,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
       speak(utterance) { utterances.push(utterance); },
     }),
   });
+  Object.assign(window, windowOverrides);
   if (missingSynthesis) delete window.speechSynthesis;
   if (workerDouble) Object.assign(window, { Worker: workerDouble.Worker, Blob, URL });
   const document = Object.assign(eventTarget(), { hidden: false });
@@ -268,6 +273,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
   let speechThrows = false;
   const same = (a, b) => a?.length === b?.length && a.every((value, i) => Object.is(value, b[i]));
   const hooks = {
+    id() { return `fixture-${cursor++}`; },
     state(initial) {
       const index = cursor++;
       slots[index] ||= { value: typeof initial === 'function' ? initial() : initial };
@@ -277,6 +283,11 @@ export async function createAppHarness({ continuous = true, missingRecognition =
       }];
     },
     ref(initial) { const index = cursor++; return (slots[index] ||= { current: initial }); },
+    memo(fn, deps) {
+      const index = cursor++;
+      if (!same(slots[index]?.deps, deps)) slots[index] = { value: fn(), deps };
+      return slots[index].value;
+    },
     callback(fn, deps) {
       const index = cursor++;
       if (!same(slots[index]?.deps, deps)) slots[index] = { value: fn, deps };
@@ -311,8 +322,8 @@ export async function createAppHarness({ continuous = true, missingRecognition =
   };
   const { outputFiles } = await appBuild;
   runInNewContext(outputFiles[0].text, sandbox);
-  const Component = panelProps ? sandbox.module.exports.SettingsPanel : sandbox.module.exports.default;
-  const props = panelProps ? {
+  const Component = orbProps ? sandbox.module.exports.RobotAvatar : botProps ? sandbox.module.exports.BotAvatar : panelProps ? sandbox.module.exports.SettingsPanel : sandbox.module.exports.default;
+  const props = orbProps ? { ...orbProps } : botProps ? { ...botProps } : panelProps ? {
     settings: { model: 'mistral:7b-instruct-q4_K_M', ollamaUrl: '', voiceKey: '', showTranscript: false },
     voices: [], connection: 'connected', modelAvailable: true, standalone: false,
     onClose() {}, onSave() {}, onConnectionChange() {}, openerRef: { current: null },
@@ -365,6 +376,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     clock, window, document, recognition, audio, utterances, requests, storage, pendingChats, avatarElement, flush, find, nodes,
     findButton: (text) => nodes().find((node) => node.type === 'button' && node.props.children === text),
     updatePanel(next) { Object.assign(props, next); dirty = true; flush(); },
+    updateProps(next) { Object.assign(props, next); dirty = true; flush(); },
     get tree() { return tree; },
     get cancellations() { return cancellations; },
     get voiceReads() { return voiceReads; },

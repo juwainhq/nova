@@ -19,6 +19,11 @@
   --burnt: #cc4400;
   --dark: #050300;
   --accent: #f97316;
+  --accent-rgb: 249, 115, 22;
+  --accent-hover: #ea670f;
+  --switch-thumb: #ffe4ca;
+  --button-ink: #1a0a00;
+  --button-ink-rgb: 26, 10, 0;
   --accent-ink: #f97316;
   --accent-glow: #ff9a5a;
   --card: rgba(15, 10, 5, .85);
@@ -34,7 +39,7 @@
   --text-halo: 0 1px 3px rgba(5, 3, 0, .9), 0 0 18px rgba(5, 3, 0, .85);
   --display-halo: 0 2px 34px rgba(5, 3, 0, .6), 0 1px 4px rgba(5, 3, 0, .55);
   --option-bg: #150e08;
---scrim: rgba(7, 4, 2, .62);
+  --scrim: rgba(7, 4, 2, .62);
   --blob-1: #f97316;
   --blob-2: #ea580c;
   --blob-3: #c2410c;
@@ -88,7 +93,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   isolation: isolate;
   display: grid;
   --topbar-height: 76px;
-  --dock-height: 112px;
+  --dock-height: 152px;
   grid-template-rows: var(--topbar-height) minmax(0, 1fr) var(--dock-height);
   width: 100%;
   height: 100vh;
@@ -266,7 +271,7 @@ body::after {
   margin: 0 0 2px;
   padding: 12px 14px 13px;
   border: 1px solid var(--card-line);
-  border-left: 3px solid #f97316;
+  border-left: 3px solid var(--accent);
   border-radius: 12px;
   background: var(--card);
   box-shadow: var(--card-shadow);
@@ -276,8 +281,8 @@ body::after {
 }
 .avatar-offline-display span:first-child { color: var(--on-card); font: 9px var(--mono); letter-spacing: .13em; }
 .avatar-offline-display span:last-child { color: var(--on-card-soft); font-size: 11px; line-height: 1.4; }
-.avatar-backlight, .listen-ring { position: absolute; top: 50%; left: 50%; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
 .avatar-backlight {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none;
   /* The orb's own path is already an irregular blob; now the light behind it is too, and it
   turns. A slow, uneven radius plus a 34s revolution is the whole trick - only the
   independent `rotate` property moves, so the state poses (which live in `transform`
@@ -332,9 +337,6 @@ body::after {
   animation: orb-squirm 7.2s ease-in-out infinite;
 }
 
-/* One gaze, blink clock and speech-light layer for the pair. Fixed SVG origins
-   avoid bounding-box pivots changing as an ellipse closes or becomes a crescent. */
-.eyes-gaze { transform: translateX(0); transition: transform 400ms ease-in-out; animation: gaze-drift 9.5s ease-in-out infinite; }
 .orb-sheen {
   transform-box: view-box;
   transform-origin: 116px 83px;
@@ -342,60 +344,25 @@ body::after {
      and its rest frame is exactly the attribute value it replaces (.72, unmoved). */
   animation: sheen-drift 9.6s ease-in-out infinite;
 }
-.eyes-blink { transform-box: view-box; animation: eye-blink 4s ease-in-out infinite; }
-.eyes-voice { filter: brightness(1); }
-.robot-eye { transition: opacity 400ms ease-in-out; }
-.eye-scale {
-  transform-box: view-box;
-  transform-origin: 0 0;
-  transform: scale(var(--eye-sx, 1), var(--eye-sy, 1));
-  transition: transform 400ms ease-in-out;
-}
-.eye-iris, .eye-crescent { transition: opacity 400ms ease-in-out; }
-.eye-crescent { opacity: 0; }
-.eye-surface { stop-color: var(--eye-color, #1a1a1a); transition: stop-color 400ms ease-in-out; }
-.eye-shade { stop-color: var(--eye-shadow, #161616); transition: stop-color 400ms ease-in-out; }
-
-/* The visible orb is 222/280 of its SVG box. Extra clearance covers float/jump
-   travel too, and the same formula scales the ring on compact viewports. */
-.listen-ring {
-  z-index: 0;
-  width: calc(var(--avatar-size) * 222 / 280 + 26px);
-  height: calc(var(--avatar-size) * 222 / 280 + 26px);
-  border: 1px solid rgba(255, 106, 26, .45);
-  opacity: 0;
-  box-shadow: 0 0 14px rgba(255, 106, 26, .18);
-  transition: opacity 400ms ease-in-out;
-}
-
 /* LISTENING — identical 115% eyes, slightly lighter charcoal, a forward Y lean. */
-.is-listening { --eye-sx: 1.15; --eye-sy: 1.15; --eye-color: #222; --eye-shadow: #1e1e1e; }
+.is-listening { --eye-color: #222; --eye-shadow: #1e1e1e; }
 .is-listening .avatar-figure { --figure-y: 5deg; }
-.is-listening .listen-ring { animation: listen-pulse 1.5s ease-out infinite; }
 .is-listening .avatar-backlight { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
 
 /* THINKING — both eyes travel together, holding each side for exactly 800ms. */
-.is-thinking .eyes-gaze { animation: eyes-thinking 2.8s ease-in-out infinite; }
 .is-thinking .avatar-figure { --figure-scale: .97; }
 .is-thinking .robot-avatar { animation: orb-sway 3s ease-in-out infinite; }
 
 /* SPEAKING — fast live word beats, not a fabricated blink/brightness loop.
    State poses still transition over 400ms; boundary light is an animation signal. */
-.is-speaking .eyes-voice { filter: brightness(calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .8)); }
 .is-speaking .avatar-figure { --figure-scale: calc(1 + clamp(0, var(--audio-pulse, 0), 1) * .04); }
 .is-speaking .robot-avatar { animation: orb-word-bounce .5s ease-in-out infinite; }
 
-/* HAPPY / WAKE — the same wide crescent pose and one quick double jump. */
-.is-happy, .is-waking { --eye-sx: 1.2; --eye-sy: .4; }
-.is-happy .eyes-blink, .is-waking .eyes-blink { animation: none; }
-.is-happy .eye-iris, .is-waking .eye-iris { opacity: 0; }
-.is-happy .eye-crescent, .is-waking .eye-crescent { opacity: 1; }
+/* HAPPY / WAKE — expression shapes are shared in avatar.css; keep the double jump. */
 .is-happy .avatar-figure, .is-waking .avatar-figure { --figure-scale: 1; --figure-y: 0deg; }
 .is-happy .robot-avatar, .is-waking .robot-avatar { animation: orb-double-bounce .8s ease-in-out both; }
 
 /* OFFLINE — both eyes droop and dim equally; no rotational sad sway. */
-.is-offline { --eye-sy: .9; }
-.is-offline .robot-eye { opacity: .5; }
 .is-offline .avatar-figure { --figure-scale: .95; }
 .is-offline .robot-avatar { animation: orb-sad-sway 4s ease-in-out infinite; }
 .is-offline .avatar-backlight { opacity: .38; }
@@ -486,7 +453,7 @@ body::after {
   width: min(580px, calc(100vw - 36px));
   padding: 13px 15px;
   border: 1px solid var(--card-line);
-  border-left: 3px solid #f97316;
+  border-left: 3px solid var(--accent);
   border-radius: 12px;
   background: var(--card);
   color: var(--on-card);
@@ -496,7 +463,7 @@ body::after {
   transform: translateX(-50%);
   animation: toast-in .25s ease-out;
 }
-.toast-mark { display: grid; place-items: center; flex: 0 0 18px; width: 18px; height: 18px; border: 1px solid rgba(249, 115, 22, .55); border-radius: 50%; color: #f97316; font: 11px var(--mono); }
+.toast-mark { display: grid; place-items: center; flex: 0 0 18px; width: 18px; height: 18px; border: 1px solid rgba(var(--accent-rgb), .55); border-radius: 50%; color: var(--accent); font: 11px var(--mono); }
 .toast > span:nth-child(2) { flex: 1; }
 .toast button { padding: 0 2px; border: 0; background: none; color: var(--on-card-soft); font-size: 20px; cursor: pointer; }
 .toast button:hover { color: var(--on-card); }
@@ -568,12 +535,12 @@ body::after {
   transition: border-color .18s ease, box-shadow .18s ease;
 }
 .settings-input::placeholder { color: var(--faint); font-family: Inter, 'Avenir Next', sans-serif; font-size: 10px; }
-.settings-input:focus, .settings-select:focus { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .18); }
+.settings-input:focus, .settings-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18); }
 /* Opening settings flashes a blank field that has no usable default behind it. */
 .settings-input.needs-attention { animation: field-attention 1.2s ease-in-out 1; }
 @keyframes field-attention {
   0%, 100% { border-color: var(--card-line); background: var(--card-alt); box-shadow: none; }
-  30%, 70% { border-color: rgba(249, 115, 22, .9); background: rgba(249, 115, 22, .1); box-shadow: 0 0 0 3px rgba(249, 115, 22, .16); }
+  30%, 70% { border-color: rgba(var(--accent-rgb), .9); background: rgba(var(--accent-rgb), .1); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .16); }
 }
 .settings-select { cursor: pointer; }
 .settings-select option { background: var(--option-bg); color: var(--on-card); }
@@ -593,7 +560,7 @@ body::after {
 .field-help summary::before { content: '▸ '; color: var(--on-card-soft); }
 .field-help[open] summary::before { content: '▾ '; }
 .field-help summary:hover { color: var(--on-card); }
-.field-help summary:focus-visible { outline: 2px solid rgba(249, 115, 22, .78); outline-offset: 3px; border-radius: 3px; }
+.field-help summary:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .78); outline-offset: 3px; border-radius: 3px; }
 .field-help-body {
   margin-top: 9px;
   padding: 11px 12px;
@@ -634,11 +601,11 @@ body::after {
   transition: background .18s ease, border-color .18s ease, color .18s ease;
 }
 .standalone-button:hover:not(:disabled) {
-  border-color: #f97316;
-  background: rgba(249, 115, 22, .09);
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), .09);
   color: var(--on-card);
 }
-.standalone-button:focus-visible { outline: 2px solid rgba(249, 115, 22, .78); outline-offset: 3px; }
+.standalone-button:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .78); outline-offset: 3px; }
 .standalone-button:disabled { opacity: .62; cursor: wait; }
 .settings-divider { height: 1px; margin: 20px 0; background: var(--card-line); }
 .settings-memory .field-label { margin: 0; }
@@ -654,14 +621,14 @@ body::after {
 .settings-toggle-input { position: absolute; right: 0; width: 42px; height: 24px; margin: 0; opacity: 0; cursor: pointer; }
 .settings-switch { position: relative; display: inline-flex; align-items: center; flex: 0 0 42px; width: 42px; height: 24px; padding: 3px; border: 1px solid var(--card-line); border-radius: 20px; background: var(--card-alt); transition: background .18s ease, border-color .18s ease; }
 .settings-switch i { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--faint); box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .18s ease, background .18s ease; }
-.settings-toggle-input:checked + .settings-switch { border-color: rgba(249, 115, 22, .48); background: rgba(249, 115, 22, .1); }
-.settings-toggle-input:checked + .settings-switch i { background: #ffe4ca; transform: translateX(18px); }
+.settings-toggle-input:checked + .settings-switch { border-color: rgba(var(--accent-rgb), .48); background: rgba(var(--accent-rgb), .1); }
+.settings-toggle-input:checked + .settings-switch i { background: var(--switch-thumb); transform: translateX(18px); }
 .settings-toggle-input:focus-visible { outline: none; }
-.settings-toggle-input:focus-visible + .settings-switch { outline: 2px solid rgba(249, 115, 22, .78); outline-offset: 3px; }
+.settings-toggle-input:focus-visible + .settings-switch { outline: 2px solid rgba(var(--accent-rgb), .78); outline-offset: 3px; }
 .settings-test-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings-test-heading > div { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .test-ollama-button { flex: 0 0 auto; min-height: 32px; padding: 0 11px; border: 1px solid var(--card-line); border-radius: 8px; background: var(--card-alt); color: var(--on-card); font-size: 9px; font-weight: 600; cursor: pointer; transition: background .18s, border-color .18s; }
-.test-ollama-button:hover:not(:disabled) { border-color: rgba(249, 115, 22, .52); background: rgba(249, 115, 22, .1); }
+.test-ollama-button:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), .52); background: rgba(var(--accent-rgb), .1); }
 .test-ollama-button:disabled { opacity: .6; cursor: wait; }
 .test-result { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; color: var(--on-card-soft); font-size: 9px; line-height: 1.5; }
 .test-result i { flex: 0 0 6px; width: 6px; height: 6px; margin-top: 3px; border-radius: 50%; background: var(--on-card-soft); }
@@ -674,13 +641,12 @@ body::after {
 .settings-panel-footer { display: flex; flex: 0 0 auto; justify-content: flex-end; align-items: center; gap: 13px; padding: 15px 24px calc(15px + env(safe-area-inset-bottom)); border-top: 1px solid var(--card-line); background: var(--card); }
 .text-button { padding: 8px 10px; border: 0; background: none; color: var(--on-card-soft); font-size: 10px; cursor: pointer; }
 .text-button:hover { color: var(--on-card-strong); }
-/* White on #f97316 would be under 3:1 for a 10px label, so the primary button keeps
-   the orange fill but inks it with the same charcoal the cards use. */
-.save-button { height: 37px; padding: 0 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: #1a0a00; font-size: 10px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 18px rgba(249, 115, 22, .26); transition: background .2s ease, box-shadow .2s ease; }
-.save-button:hover { background: #ea670f; box-shadow: 0 8px 24px rgba(249, 115, 22, .34); }
+/* Dark ink keeps the small primary-button label readable on either accent fill. */
+.save-button { height: 37px; padding: 0 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: var(--button-ink); font-size: 10px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 18px rgba(var(--accent-rgb), .26); transition: background .2s ease, box-shadow .2s ease; }
+.save-button:hover { background: var(--accent-hover); box-shadow: 0 8px 24px rgba(var(--accent-rgb), .34); }
 .save-button span {
   margin-left: 6px;
-  color: rgba(26, 10, 0, .62);
+  color: rgba(var(--button-ink-rgb), .62);
 }
 .response-transcript {
   backdrop-filter: var(--glass);
@@ -690,7 +656,7 @@ body::after {
   margin: 20px auto 0;
   padding: 14px 16px 15px;
   border: 1px solid var(--card-line);
-  border-left: 3px solid #f97316;
+  border-left: 3px solid var(--accent);
   border-radius: 14px;
   background: var(--card);
   box-shadow: var(--card-shadow);
@@ -729,16 +695,16 @@ body::after {
 .rich-link-card span, .rich-image-card > div { min-width: 0; }
 .rich-link-card strong { font-size: 12px; font-weight: 500; }
 .rich-link-card small { display: block; margin-top: 5px; color: var(--on-card-soft); font: 9px/1.4 var(--mono); }
-.rich-link-card:hover, .rich-image-button:hover { border-color: rgba(249, 115, 22, .6); background: rgba(249, 115, 22, .07); }
+.rich-link-card:hover, .rich-image-button:hover { border-color: rgba(var(--accent-rgb), .6); background: rgba(var(--accent-rgb), .07); }
 .rich-open-icon { flex: 0 0 14px; width: 14px; height: 14px; opacity: .58; }
 .rich-image-card { display: flex; align-items: center; gap: 12px; padding: 12px; }
-.rich-image-placeholder { flex: 0 0 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; height: 76px; border-radius: 8px; background: linear-gradient(145deg, rgba(249, 115, 22, .13), transparent); color: var(--on-card-soft); }
+.rich-image-placeholder { flex: 0 0 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; height: 76px; border-radius: 8px; background: linear-gradient(145deg, rgba(var(--accent-rgb), .13), transparent); color: var(--on-card-soft); }
 .rich-image-placeholder svg { width: 58px; height: 40px; opacity: .55; }
 .rich-image-placeholder span { color: var(--on-card-soft); font: 8px var(--mono); }
 .rich-image-button { display: inline-flex; align-items: center; gap: 8px; margin-top: 9px; padding: 6px 9px; border: 1px solid var(--card-line); border-radius: 6px; color: var(--on-card-strong); font-size: 10px; text-decoration: none; }
 .rich-items { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .rich-item-card { flex: 1 1 170px; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
-.rich-content-panel:focus-visible, .rich-content-panel a:focus-visible { outline: 2px solid #f97316; outline-offset: -3px; }
+.rich-content-panel:focus-visible, .rich-content-panel a:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 @keyframes rich-panel-in { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rich-panel-out { from { opacity: 1; } to { opacity: 0; } }
 
@@ -777,21 +743,21 @@ body::after {
 .browse-header { flex: 0 0 60px; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 10px 0 18px; border-bottom: 1px solid var(--card-line); background: var(--card-alt); }
 .browse-kind { flex-shrink: 0; padding: 3px 8px; border: 1px solid var(--card-line); border-radius: 999px; color: var(--on-card-soft); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .browse-query { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: var(--on-card); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.browse-close { flex-shrink: 0; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: #f97316; font-size: 24px; line-height: 1; cursor: pointer; transition: background .2s; }
-.browse-close:hover { background: rgba(249, 115, 22, .1); }
+.browse-close { flex-shrink: 0; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: var(--accent); font-size: 24px; line-height: 1; cursor: pointer; transition: background .2s; }
+.browse-close:hover { background: rgba(var(--accent-rgb), .1); }
 /* The browser chrome: back / forward / refresh beside a dark pill address bar.
    It sits under the 60px header, so the header keeps its size and the frame keeps
    its 20px bottom gap. */
 .browse-chrome { z-index: 1; flex: 0 0 46px; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 12px; border-bottom: 1px solid var(--card-line); background: var(--card); }
 .browse-nav { display: flex; flex: 0 0 auto; gap: 6px; }
 .browse-nav-button { width: 30px; height: 30px; padding: 0; border: 1px solid var(--card-line); border-radius: 50%; background: var(--card-alt); color: var(--on-card); font: 14px/1 var(--mono); cursor: pointer; transition: background .18s ease, border-color .18s ease, color .18s ease; }
-.browse-nav-button:hover:not(:disabled) { border-color: #f97316; background: rgba(249, 115, 22, .1); color: #f97316; }
+.browse-nav-button:hover:not(:disabled) { border-color: var(--accent); background: rgba(var(--accent-rgb), .1); color: var(--accent); }
 .browse-nav-button:disabled { opacity: .34; cursor: default; }
 .browse-address { flex: 1; min-width: 0; }
 .browse-address-input { width: 100%; height: 32px; padding: 0 14px; border: 1px solid var(--card-line); border-radius: 999px; background: var(--card-alt); color: var(--on-card); font: 10px var(--mono); outline: none; }
 .browse-address-input::placeholder { color: var(--faint); font-family: Inter, 'Avenir Next', sans-serif; font-size: 10px; }
-.browse-address-input:focus { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, .2); }
-.browse-address-input.is-refused { border-color: rgba(249, 115, 22, .78); box-shadow: 0 0 0 3px rgba(249, 115, 22, .14); }
+.browse-address-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .2); }
+.browse-address-input.is-refused { border-color: rgba(var(--accent-rgb), .78); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .14); }
 .browse-frame { flex: 1; display: block; width: 100%; min-height: 0; border: 0; background: #fff; }
 @keyframes browse-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @keyframes browse-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
@@ -912,7 +878,6 @@ body::after {
   14.285714%, 42.857143% { transform: translateX(calc(-1 * var(--eye-shift))); }
   57.142857%, 85.714286% { transform: translateX(var(--eye-shift)); }
 }
-@keyframes listen-pulse { 0% { opacity: .45; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); } }
 @keyframes mic-ring { 0% { opacity: .68; transform: scale(.94); } 85%, 100% { opacity: 0; transform: scale(1.22); } }
 @keyframes mic-active { 0%, 100% { box-shadow: 0 0 0 5px rgba(255, 106, 26, .1), 0 0 27px rgba(255, 106, 26, .31), inset 0 1px 0 rgba(255, 255, 255, .84); } 50% { box-shadow: 0 0 0 7px rgba(255, 106, 26, .15), 0 0 39px rgba(255, 106, 26, .44), inset 0 1px 0 rgba(255, 255, 255, .9); } }
 @keyframes dot-breathe { 0%, 100% { opacity: .65; transform: scale(.88); } 50% { opacity: 1; transform: scale(1.15); } }
@@ -921,7 +886,7 @@ body::after {
 @keyframes panel-slide-in { from { opacity: .82; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
 
 @media (max-height: 720px) {
-  .app-shell { --topbar-height: 64px; --dock-height: 98px; }
+  .app-shell { --topbar-height: 64px; --dock-height: 146px; }
   .avatar-container { --avatar-size: 164px; height: 168px; }
   .tagline { margin-top: 18px; }
   .status-word { margin-bottom: 15px; }
@@ -929,7 +894,7 @@ body::after {
 }
 
 @media (max-width: 700px) {
-  .app-shell { --topbar-height: 64px; --dock-height: 100px; padding: 0 22px 8px; }
+  .app-shell { --topbar-height: 64px; --dock-height: 148px; padding: 0 22px 8px; }
   .brand-name { font-size: 17px; }
   .icon-button { width: 38px; height: 38px; }
   .assistant-stage { padding-bottom: 0; }
@@ -954,7 +919,7 @@ body::after {
 }
 
 @media (max-height: 560px) {
-  .app-shell { --topbar-height: 52px; --dock-height: 76px; padding-bottom: 4px; }
+  .app-shell { --topbar-height: 52px; --dock-height: 128px; padding-bottom: 4px; }
   .avatar-container { --avatar-size: 116px; height: 124px; }
   .tagline { margin-top: 10px; font-size: clamp(24px, 5vh, 34px); }
   .kokoro-warmup { --warmup-height: 16px; margin-top: 1px; font-size: 7px; line-height: 1.1; }
@@ -967,7 +932,7 @@ body::after {
 }
 
 @media (max-height: 420px) {
-  .app-shell { --topbar-height: 44px; --dock-height: 66px; padding-bottom: 2px; }
+  .app-shell { --topbar-height: 44px; --dock-height: 124px; padding-bottom: 2px; }
   .avatar-container { --avatar-size: 100px; height: 100px; }
   .tagline { margin-top: 7px; font-size: clamp(22px, 5vh, 29px); }
   .kokoro-warmup { --warmup-height: 12px; margin-top: 0; line-height: 1; }
@@ -982,11 +947,9 @@ body::after {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .brand-name, .avatar-container { animation: none !important; opacity: 1; filter: none; transform: none; }
-  .robot-avatar, .eyes-gaze, .eyes-blink { animation: none !important; transform: none; }
+  .robot-avatar { animation: none !important; transform: none; }
   .orb-bloom, .blob-shape, .orb-sheen { animation: none !important; transform: none; }
   .avatar-backlight, .orb-sheen { rotate: 0deg; }
   .avatar-backlight { animation: none !important; }
   .avatar-figure { --figure-scale: 1 !important; --figure-y: 0deg !important; }
-  .eyes-voice { filter: none !important; }
-  .listen-ring { animation: none !important; opacity: 0; }
 }

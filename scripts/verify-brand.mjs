@@ -28,6 +28,7 @@ const OLD_NAME = 'ARIA';
 const SOURCE_FILES = [
   'index.dev.html', 'vite.config.js', 'package.json',
   'src/App.jsx', 'src/RichResponsePanel.jsx', 'src/rich-response.js', 'src/personality.js', 'src/RobotAvatar.jsx', 'src/speech.js', 'src/memory.js', 'src/index.css', 'src/brand.js', 'src/kokoro.js', 'src/speech-stream.js',
+  'src/BotAvatar.jsx', 'src/AvatarFace.jsx', 'src/bot-shape.js', 'src/avatar-expressions.js', 'src/useAvatarExpression.js', 'scripts/avatar-expression-checks.mjs', 'src/AvatarSwitcher.jsx', 'src/avatar.js', 'src/avatar.css', 'scripts/avatar-switch-checks.mjs',
   'scripts/build-standalone.mjs', 'scripts/verify-standalone.mjs',
   'scripts/verify-avatar.mjs', 'scripts/verify-speech.mjs', 'scripts/voice-checks.mjs', 'scripts/personality-checks.mjs', 'scripts/rich-checks.mjs', 'scripts/kokoro-checks.mjs', 'scripts/streaming-checks.mjs', 'scripts/sync-pages.mjs',
 ];

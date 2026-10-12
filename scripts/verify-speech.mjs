@@ -19,6 +19,8 @@ import { verifyStreaming } from './streaming-checks.mjs';
 import { verifyWebBrowse } from './web-browse-checks.mjs';
 import { verifyInterrupt } from './interrupt-checks.mjs';
 import { verifyNames } from './name-checks.mjs';
+import { verifyAvatarSwitch } from './avatar-switch-checks.mjs';
+import { verifyAvatarExpressions } from './avatar-expression-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -782,6 +784,8 @@ await verifyPersonality(check);
 await verifyVoices(check);
 await verifyMemory(check, renderPanel);
 await verifyNames(check);
+await verifyAvatarSwitch(check);
+await verifyAvatarExpressions(check);
 
 // The theme toggle is App state, so its contract is behavioural, not just textual.
 const darkUi = await createAppHarness();
