@@ -1,7 +1,7 @@
 /* Backend status badge: the first item in the bottom control column. Local and Gemini use
    the active avatar's theme color (orange for Orb, blue for Bot); offline stays red. */
-.app-shell.avatar-orb { --chip-rgb: 249, 115, 22; --chip-ink: #fb923c; --chip-dot: #f97316; }
-.app-shell.avatar-bot { --chip-rgb: 59, 130, 246; --chip-ink: #93c5fd; --chip-dot: #3b82f6; }
+.app-shell.avatar-orb { --chip-rgb: 249, 115, 22; --chip-ink: #fb923c; --chip-dot: #f97316; --chip-gemini-ink: #f97316; }
+.app-shell.avatar-bot { --chip-rgb: 59, 130, 246; --chip-ink: #93c5fd; --chip-dot: #3b82f6; --chip-gemini-ink: #3b82f6; }
 
 .backend-chip {
   display: inline-flex;
@@ -32,9 +32,17 @@
 
 .backend-chip-gemini,
 .backend-chip-local {
-  color: var(--chip-ink, #fb923c);
   background: rgba(var(--chip-rgb, 249, 115, 22), 0.15);
   border-color: rgba(var(--chip-rgb, 249, 115, 22), 0.4);
+}
+
+/* GEMINI writing takes the avatar's own theme color: orange for Orb, blue for Bot. */
+.backend-chip-gemini {
+  color: var(--chip-gemini-ink, #f97316);
+}
+
+.backend-chip-local {
+  color: var(--chip-ink, #fb923c);
 }
 
 .backend-chip-offline {
