@@ -3,15 +3,99 @@
 export const BACKEND_STORAGE_KEY = 'nova_backend';
 export const GEMINI_KEY_STORAGE = 'nova_gemini_key';
 export const DEFAULT_BACKEND = 'ollama';
-// Tried in order when a model answers 404. The first one that works is remembered for the session.
-export const GEMINI_MODELS = Object.freeze(['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']);
+// Tried in order. The first model that answers HTTP 200 is used for the rest of the session.
+export const GEMINI_MODELS = Object.freeze([
+  'gemini-2.5-flash-preview-05-20',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash-latest',
+  'gemini-1.5-flash',
+]);
 export const GEMINI_MODEL = GEMINI_MODELS[0];
+// The probe's pick lives in localStorage; the working model for this session lives in sessionStorage.
+export const GEMINI_MODEL_STORAGE = 'nova_gemini_model';
 
 export const GEMINI_GENERATION = Object.freeze({ temperature: 0.7, maxOutputTokens: 300 });
-let preferredModelIndex = 0;
+
+// Used only when browser storage is blocked, so the session choice still sticks in memory.
+let memoryModel = null;
+
+function browserStorage(kind) {
+  try {
+    return globalThis[kind] || null;
+  } catch {
+    return null;
+  }
+}
+
+export function readSessionGeminiModel() {
+  try {
+    return browserStorage('sessionStorage')?.getItem(GEMINI_MODEL_STORAGE) || memoryModel;
+  } catch {
+    return memoryModel;
+  }
+}
+
+function writeSessionGeminiModel(model) {
+  memoryModel = model;
+  try {
+    browserStorage('sessionStorage')?.setItem(GEMINI_MODEL_STORAGE, model);
+  } catch {
+    // Storage is blocked: the in-memory choice above still applies.
+  }
+}
+
+export function readStoredGeminiModel() {
+  try {
+    return browserStorage('localStorage')?.getItem(GEMINI_MODEL_STORAGE) || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredGeminiModel(model) {
+  try {
+    browserStorage('localStorage')?.setItem(GEMINI_MODEL_STORAGE, model);
+  } catch {
+    // Storage is blocked: the probe will run again next time the key is saved.
+  }
+}
+
+// The model the badge shows: the one proven to work this session, else the probe's pick.
+export function activeGeminiModel() {
+  return readSessionGeminiModel() || readStoredGeminiModel();
+}
+
+// "gemini-2.0-flash" is shown as "2.0-flash" in the badge.
+export function geminiModelLabel(model) {
+  return String(model || '').replace(/^gemini-/, '');
+}
 
 export function resetGeminiModelMemory() {
-  preferredModelIndex = 0;
+  memoryModel = null;
+  try {
+    browserStorage('sessionStorage')?.removeItem(GEMINI_MODEL_STORAGE);
+  } catch {
+    // Nothing to clear when storage is blocked.
+  }
+}
+
+
+// Lists the models this key can use and keeps the first flash model from GEMINI_MODELS that is
+// available. Runs once when the key is saved. Returns null and logs when the list can't be read.
+export async function probeGeminiModel(apiKey, signal) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`;
+  const response = await fetch(url, { signal });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    console.error('[Gemini] model list failed', { status: response.status, message: payload?.error?.message });
+    return null;
+  }
+  const available = new Set((payload?.models || []).map((model) => String(model?.name || '').replace(/^models\//, '')));
+  const best = GEMINI_MODELS.find((name) => name.includes('flash') && available.has(name)) || null;
+  if (best) writeStoredGeminiModel(best);
+  return best;
 }
 
 export function normalizeBackend(value) {
@@ -34,12 +118,13 @@ export function geminiRequestBody(systemText, turns) {
   };
 }
 
-// Sends one turn, trying each model in order on 404. Resolves with { answer, finishReason, model }.
-// Throws { unavailable: true } when every model returns 404, so the caller can fall back to Local.
+// Tries the session's model first, then the probe's pick, then the list in order. The first 200
+// wins. Resolves with { answer, finishReason, model }. Throws { unavailable: true } when no model
+// answers, so the caller can show the message and fall back to Local.
 export async function requestGeminiReply(apiKey, systemText, turns, signal) {
   const body = JSON.stringify(geminiRequestBody(systemText, turns));
-  for (let index = preferredModelIndex; index < GEMINI_MODELS.length; index += 1) {
-    const model = GEMINI_MODELS[index];
+  const order = [...new Set([readSessionGeminiModel(), readStoredGeminiModel(), ...GEMINI_MODELS].filter(Boolean))];
+  for (const model of order) {
     let response;
     try {
       response = await fetch(geminiEndpoint(apiKey, model), {
@@ -53,19 +138,20 @@ export async function requestGeminiReply(apiKey, systemText, turns, signal) {
       throw error;
     }
     const payload = await response.json().catch(() => null);
-    if (response.status === 404) {
-      console.error('[Gemini] model not found, trying the next one', { model, message: payload?.error?.message });
-      continue;
+    if (response.ok) {
+      const reply = readGeminiText(payload);
+      writeSessionGeminiModel(model);
+      return { ...reply, model };
     }
-    if (!response.ok) {
-      console.error('[Gemini] request failed', { model, status: response.status, apiStatus: payload?.error?.status, message: payload?.error?.message });
-      throw geminiError(payload, response.status);
-    }
-    const reply = readGeminiText(payload);
-    preferredModelIndex = index;
-    return { ...reply, model };
+    console.error('[Gemini] model did not answer with 200', {
+      model, status: response.status, apiStatus: payload?.error?.status, message: payload?.error?.message,
+    });
+    // A rejected key fails for every model, so stop instead of trying the rest.
+    const keyRejected = response.status === 401 || response.status === 403
+      || (response.status === 400 && /api key/i.test(payload?.error?.message || ''));
+    if (keyRejected) break;
   }
-  console.error('[Gemini] every model returned 404', { models: GEMINI_MODELS });
+  console.error('[Gemini] no model answered with 200', { models: order });
   const error = new Error(GEMINI_REPLY_ERRORS.unavailable);
   error.unavailable = true;
   throw error;
@@ -73,7 +159,7 @@ export async function requestGeminiReply(apiKey, systemText, turns, signal) {
 
 export const GEMINI_REPLY_ERRORS = {
   noKey: 'Add your Gemini API key in Settings → AI tab',
-  unavailable: 'Gemini unavailable — switching to Local',
+  unavailable: 'Gemini unavailable — check your API key in Settings',
   noReply: "Gemini didn't send a reply this time. Let's try again.",
   blocked: "Gemini wasn't able to answer that one. Could we try a different question?",
 };

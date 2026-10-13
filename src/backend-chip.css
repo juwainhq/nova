@@ -8,7 +8,9 @@
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  height: 22px;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 22px;
   margin: 0 auto 16px;
   padding: 3px 10px;
   border: 1px solid transparent;
@@ -19,6 +21,21 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.backend-chip-row {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Active Gemini model, shown small under the GEMINI label. */
+.backend-chip-model {
+  font-size: 8px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  opacity: 0.6;
 }
 
 .backend-chip-dot {

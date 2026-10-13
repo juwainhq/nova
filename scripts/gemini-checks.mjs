@@ -2,7 +2,7 @@
 // memory and personality suites. Ollama stays the default; Gemini is opt-in via nova_backend.
 import {
   BACKEND_STORAGE_KEY, GEMINI_KEY_STORAGE, GEMINI_MODEL, friendlyGeminiError, geminiEndpoint, geminiError,
-  geminiRequestBody, normalizeBackend, readGeminiText, requestGeminiReply, resetGeminiModelMemory, GEMINI_MODELS,
+  geminiRequestBody, normalizeBackend, readGeminiText, requestGeminiReply, resetGeminiModelMemory, GEMINI_MODELS, probeGeminiModel,
 } from '../src/gemini.js';
 import { MEMORY_KEY } from '../src/memory.js';
 import { createAppHarness, createStorageDouble } from './speech-test-fixtures.mjs';
@@ -18,7 +18,7 @@ export async function verifyGemini(check, renderPanel) {
   check('the default backend is Ollama and unknown values fall back to it',
     normalizeBackend(null) === 'ollama' && normalizeBackend('') === 'ollama' && normalizeBackend('nope') === 'ollama' && normalizeBackend('gemini') === 'gemini');
   check('the Gemini endpoint is the v1beta generateContent REST URL with the key',
-    geminiEndpoint(` ${KEY} `) === `${GEMINI_HOST}v1beta/models/${GEMINI_MODEL}:generateContent?key=${KEY}` && GEMINI_MODEL === 'gemini-2.0-flash');
+    geminiEndpoint(` ${KEY} `) === `${GEMINI_HOST}v1beta/models/${GEMINI_MODEL}:generateContent?key=${KEY}` && GEMINI_MODEL === 'gemini-2.5-flash-preview-05-20');
 
   const body = geminiRequestBody('You are NOVA.\n\nThings the user has told you to remember:\n- my dog is Max', [
     { role: 'user', content: 'Hi' }, { role: 'assistant', content: 'Hello!' }, { role: 'user', content: 'Who am I?' },
@@ -29,9 +29,11 @@ export async function verifyGemini(check, renderPanel) {
     ]) && JSON.stringify(body.system_instruction) === JSON.stringify({ parts: [{ text: 'You are NOVA.\n\nThings the user has told you to remember:\n- my dog is Max' }] }));
   check('request body uses temperature 0.7 and maxOutputTokens 300', JSON.stringify(body.generationConfig) === JSON.stringify({ temperature: 0.7, maxOutputTokens: 300 })
     && !('messages' in body) && !('systemInstruction' in body));
-  check('the Gemini model chain is 2.0-flash, then 1.5-flash, then 1.5-flash-8b', JSON.stringify(GEMINI_MODELS) === JSON.stringify(['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']));
+  check('the Gemini model list is tried in the agreed priority order', JSON.stringify(GEMINI_MODELS) === JSON.stringify([
+    'gemini-2.5-flash-preview-05-20', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash-latest', 'gemini-1.5-flash',
+  ]));
 
-  // Model fallback with a stubbed fetch. Each case resets the session memory first.
+  // Model selection with a stubbed fetch. Each case resets the session memory first.
   const realFetch = globalThis.fetch;
   const modelCalls = [];
   const stubFetch = (respond) => {
@@ -44,31 +46,42 @@ export async function verifyGemini(check, renderPanel) {
   };
   const turns = [{ role: 'user', content: 'Hi' }];
   const notFound = { status: 404, body: { error: { message: 'model not found' } } };
-  const replyFrom1 = { status: 200, body: { candidates: [{ content: { parts: [{ text: 'Hello there' }] }, finishReason: 'STOP' }] } };
+  const reply200 = { status: 200, body: { candidates: [{ content: { parts: [{ text: 'Hello there' }] }, finishReason: 'STOP' }] } };
   try {
     resetGeminiModelMemory();
-    stubFetch((model) => (model === 'gemini-1.5-flash' ? replyFrom1 : notFound));
+    stubFetch((model) => (model === 'gemini-2.0-flash' ? reply200 : notFound));
     const first = await requestGeminiReply(KEY, 'sys', turns);
-    check('a 404 moves on to the next Gemini model and reads its reply',
-      first.answer === 'Hello there' && first.model === 'gemini-1.5-flash' && JSON.stringify(modelCalls) === JSON.stringify(['gemini-2.0-flash', 'gemini-1.5-flash']));
+    check('the first model that answers 200 is used, after trying the ones before it in order',
+      first.answer === 'Hello there' && first.model === 'gemini-2.0-flash'
+      && JSON.stringify(modelCalls) === JSON.stringify(['gemini-2.5-flash-preview-05-20', 'gemini-2.5-flash', 'gemini-2.0-flash']));
     modelCalls.length = 0;
     await requestGeminiReply(KEY, 'sys', turns);
-    check('the model that worked is remembered for the rest of the session', JSON.stringify(modelCalls) === JSON.stringify(['gemini-1.5-flash']));
+    check('the working model is used for the rest of the session', JSON.stringify(modelCalls) === JSON.stringify(['gemini-2.0-flash']));
 
     resetGeminiModelMemory();
     modelCalls.length = 0;
     stubFetch(() => notFound);
     let unavailable = null;
     try { await requestGeminiReply(KEY, 'sys', turns); } catch (error) { unavailable = error; }
-    check('when every model returns 404 the request reports unavailable after trying all three',
-      unavailable?.unavailable === true && JSON.stringify(modelCalls) === JSON.stringify(GEMINI_MODELS));
+    check('when no model answers 200 the request reports unavailable after trying the whole list',
+      unavailable?.unavailable === true && unavailable.message === 'Gemini unavailable — check your API key in Settings'
+      && JSON.stringify(modelCalls) === JSON.stringify(GEMINI_MODELS));
 
     resetGeminiModelMemory();
     modelCalls.length = 0;
     stubFetch(() => ({ status: 403, body: { error: { message: 'denied' } } }));
     let denied = null;
     try { await requestGeminiReply(KEY, 'sys', turns); } catch (error) { denied = error; }
-    check('a non-404 error is reported at once without trying other models', denied?.status === 403 && !denied.unavailable && modelCalls.length === 1);
+    check('a rejected key stops at once and still reports unavailable', denied?.unavailable === true && modelCalls.length === 1);
+
+    // The probe reads the model list and keeps the first flash model from the priority list.
+    globalThis.fetch = async (url) => {
+      const listed = String(url).includes('/v1beta/models?key=');
+      return new Response(JSON.stringify(listed ? { models: [{ name: 'models/gemini-2.0-flash' }, { name: 'models/gemini-2.5-flash' }] } : {}),
+        { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const probed = await probeGeminiModel(KEY);
+    check('the model probe picks the first available flash model from the priority list', probed === 'gemini-2.5-flash');
   } finally {
     globalThis.fetch = realFetch;
     resetGeminiModelMemory();
@@ -131,7 +144,7 @@ export async function verifyGemini(check, renderPanel) {
     && request.options.method === 'POST');
   check('the system instruction carries NOVA’s prompt and the saved memories', sent?.system_instruction?.parts?.[0]?.text.includes('You are NOVA')
     && sent.system_instruction.parts[0].text.endsWith('Things the user has told you to remember:\n- my dog is Max'));
-  check('the status chip says GEMINI while Gemini is active', text(ui.find('backend-chip')) === 'GEMINI');
+  check('the status chip says GEMINI while Gemini is active', text(ui.find('backend-chip-row')) === 'GEMINI');
   check('the question is the last user turn', sent?.contents?.at(-1)?.role === 'user' && sent.contents.at(-1).parts[0].text === 'what is my dog called');
   check('the Gemini reply is spoken and shown', first?.text === 'Your dog is Max.' && ui.utterances.length > 0);
   check('no Ollama chat or model-list request is made in Gemini mode', !ui.requests.some((r) => r.url.endsWith('/chat/completions') || r.url.endsWith('/models')));
@@ -145,9 +158,9 @@ export async function verifyGemini(check, renderPanel) {
   const countBefore = geminiPosts().length;
   ui.fetchOverride = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'API key not valid. Please pass a valid API key.' } }) });
   await ask('can you hear me');
-  check('the status chip turns OFFLINE after a failed Gemini request', text(ui.find('backend-chip')) === 'OFFLINE');
-  check('an invalid key shows a friendly Settings hint without raw API text', geminiPosts().length === countBefore + 1
-    && toast(ui).includes("Gemini doesn't accept that API key") && !toast(ui).includes('pass a valid'));
+  check('the status chip turns OFFLINE after a failed Gemini request', text(ui.find('backend-chip-row')) === 'OFFLINE');
+  check('an invalid key makes one Gemini request, then falls back to Local without raw API text', geminiPosts().length === countBefore + 1
+    && ui.requests.some((r) => r.url.endsWith('/chat/completions')) && !toast(ui).includes('pass a valid'));
 
   // Switching backends at runtime: Ollama is still the default when nothing is chosen.
   const ollamaDefault = await createAppHarness({ storage: createStorageDouble({ 'nova.transcript.visible': 'true' }), modelsOffline: false });

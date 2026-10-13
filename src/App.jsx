@@ -46,7 +46,7 @@ import {
 import { createSpeechStream, textSpeechStream } from './speech-stream.js';
 import {
   BACKEND_STORAGE_KEY, DEFAULT_BACKEND, GEMINI_KEY_STORAGE, GEMINI_REPLY_ERRORS, friendlyGeminiError,
-  normalizeBackend, requestGeminiReply,
+  activeGeminiModel, geminiModelLabel, normalizeBackend, probeGeminiModel, requestGeminiReply, resetGeminiModelMemory,
 } from './gemini.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
@@ -798,6 +798,8 @@ function App() {
   const [connection, setConnection] = useState('checking');
   // Set when a Gemini reply fails, cleared by the next successful one. Drives the status chip.
   const [geminiFailed, setGeminiFailed] = useState(false);
+  // The Gemini model that is answering (shown under the GEMINI badge).
+  const [geminiModel, setGeminiModel] = useState(() => activeGeminiModel());
   const [modelAvailable, setModelAvailable] = useState(null);
   const [settings, setSettings] = useState(() => ({
     model: readSetting('nova.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
@@ -1243,6 +1245,7 @@ function App() {
           if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
           if (controller.signal.aborted) return;
           setGeminiFailed(false);
+          setGeminiModel(reply.model);
           // Gemini's generateContent returns the whole reply at once, so it is spoken as one stream.
           const replyStream = createSpeechStream();
           stream = replyStream;
@@ -1818,6 +1821,14 @@ function App() {
       return;
     }
     stopVoiceTest();
+    // A newly saved key starts the model choice again and looks up the best available model once.
+    if (updatedSettings.geminiKey && updatedSettings.geminiKey !== settings.geminiKey) {
+      resetGeminiModelMemory();
+      setGeminiModel(null);
+      probeGeminiModel(updatedSettings.geminiKey)
+        .then((model) => { if (model) setGeminiModel(model); })
+        .catch((error) => console.error('[Gemini] model probe failed', error));
+    }
     setSettings(updatedSettings);
     setSettingsOpen(false);
     notify("All set! Your settings are saved.");
@@ -1902,8 +1913,11 @@ function App() {
             : backendChip === 'local' ? 'Replies come from Ollama on this computer (change in Settings)'
               : 'The chosen AI backend is not reachable right now'}
         >
-          <span className="backend-chip-dot" aria-hidden="true" />
-          {BACKEND_CHIP_LABELS[backendChip]}
+          <span className="backend-chip-row">
+            <span className="backend-chip-dot" aria-hidden="true" />
+            {BACKEND_CHIP_LABELS[backendChip]}
+          </span>
+          {backendChip === 'gemini' && geminiModel && <small className="backend-chip-model">{geminiModelLabel(geminiModel)}</small>}
         </span>
         <AvatarSwitcher avatar={avatar} onChange={selectAvatar} />
         <div className="mic-control-wrap">
