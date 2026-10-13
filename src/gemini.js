@@ -90,15 +90,27 @@ export function resetGeminiModelMemory() {
 
 // Lists the models this key can use and keeps the first flash model from GEMINI_MODELS that is
 // available. Runs once when the key is saved. Returns null and logs when the list can't be read.
-export async function probeGeminiModel(apiKey, signal) {
+// Names of the models this key can use, from the models list endpoint.
+export async function listGeminiModelNames(apiKey, signal) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`;
   const response = await fetch(url, { signal });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     console.error('[Gemini] model list failed', { status: response.status, message: payload?.error?.message });
+    throw geminiError(payload, response.status);
+  }
+  return new Set((payload?.models || []).map((model) => String(model?.name || '').replace(/^models\//, '')));
+}
+
+// Lookup run once when the key is saved: keeps the first flash model from GEMINI_MODELS that the key
+// can use. Returns null when the list can't be read.
+export async function probeGeminiModel(apiKey, signal) {
+  let available;
+  try {
+    available = await listGeminiModelNames(apiKey, signal);
+  } catch {
     return null;
   }
-  const available = new Set((payload?.models || []).map((model) => String(model?.name || '').replace(/^models\//, '')));
   const best = GEMINI_MODELS.find((name) => name.includes('flash') && available.has(name)) || null;
   if (best) writeStoredGeminiModel(best);
   return best;
@@ -132,7 +144,18 @@ export function geminiRequestBody(systemText, turns) {
 // answers, so the caller can show the message and fall back to Local.
 export async function requestGeminiReply(apiKey, systemText, turns, signal) {
   const body = JSON.stringify(geminiRequestBody(systemText, turns));
-  const order = [...new Set([readSessionGeminiModel(), readStoredGeminiModel(), ...GEMINI_MODELS].filter(Boolean))];
+  let order = [...new Set([readSessionGeminiModel(), readStoredGeminiModel(), ...GEMINI_MODELS].filter(Boolean))];
+  if (!readSessionGeminiModel()) {
+    // Ask only models the key can use. Each unavailable model otherwise costs a slow 404 round trip.
+    try {
+      const listed = await listGeminiModelNames(apiKey, signal);
+      const usable = order.filter((name) => listed.has(name));
+      if (usable.length) order = usable;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      console.error('[Gemini] model list unavailable, trying the models in order', error);
+    }
+  }
   for (const model of order) {
     let response;
     try {

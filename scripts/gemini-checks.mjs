@@ -40,8 +40,12 @@ export async function verifyGemini(check, renderPanel) {
   // Model selection with a stubbed fetch. Each case resets the session memory first.
   const realFetch = globalThis.fetch;
   const modelCalls = [];
+  let listedNames = GEMINI_MODELS;
   const stubFetch = (respond) => {
     globalThis.fetch = async (url) => {
+      if (!String(url).includes(':generateContent')) {
+        return new Response(JSON.stringify({ models: listedNames.map((name) => ({ name: `models/${name}` })) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       const model = String(url).match(/models\/([^:]+):/)[1];
       modelCalls.push(model);
       const { status, body: payload } = respond(model);
@@ -61,6 +65,14 @@ export async function verifyGemini(check, renderPanel) {
     modelCalls.length = 0;
     await requestGeminiReply(KEY, 'sys', turns);
     check('the working model is used for the rest of the session', JSON.stringify(modelCalls) === JSON.stringify(['gemini-2.5-flash']));
+
+    resetGeminiModelMemory();
+    modelCalls.length = 0;
+    listedNames = ['gemini-2.5-flash'];
+    stubFetch((model) => (model === 'gemini-2.5-flash' ? reply200 : notFound));
+    await requestGeminiReply(KEY, 'sys', turns);
+    listedNames = GEMINI_MODELS;
+    check('the first message only asks models the key can list, so a single request is made', JSON.stringify(modelCalls) === JSON.stringify(['gemini-2.5-flash']));
 
     resetGeminiModelMemory();
     modelCalls.length = 0;
@@ -124,7 +136,7 @@ export async function verifyGemini(check, renderPanel) {
   const ui = await createAppHarness({ storage, modelsOffline: true });
   ui.clock.tick();
   await ui.settle();
-  const geminiPosts = () => ui.requests.filter((request) => request.url.startsWith(GEMINI_HOST));
+  const geminiPosts = () => ui.requests.filter((request) => request.url.startsWith(GEMINI_HOST) && request.url.includes(':generateContent'));
   let geminiAnswer = 'Your dog is Max.';
   ui.fetchOverride = async (url) => {
     if (!url.startsWith(GEMINI_HOST)) throw new Error(`unexpected request to ${url}`);
