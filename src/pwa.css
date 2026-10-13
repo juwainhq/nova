@@ -25,16 +25,13 @@
   }
   .app-shell:not(.has-browse-panel) .avatar-offline-display { max-width: 100%; padding: 10px 12px; }
   .app-shell:not(.has-browse-panel) .response-transcript { width: 100%; max-width: 480px; }
-  .app-shell:not(.has-browse-panel) .control-dock { gap: 24px; padding-bottom: 32px; }
+  .app-shell:not(.has-browse-panel) .control-dock { gap: 0; padding-bottom: 32px; }
   .app-shell:not(.has-browse-panel) .mic-control-wrap { width: 64px; height: 64px; flex-shrink: 0; }
   .app-shell:not(.has-browse-panel) .mic-button { width: 52px; height: 52px; }
   .app-shell:not(.has-browse-panel) .mic-halo { width: 62px; height: 62px; }
-  .app-shell:not(.has-browse-panel) .avatar-switcher { padding: 8px 16px; }
-  .app-shell:not(.has-browse-panel) .avatar-choice { width: 34px; height: 34px; padding: 4px; }
-  .app-shell:not(.has-browse-panel) .avatar-choice svg { width: 23px; height: 26px; }
-  /* Tooltips sit beside the compact picker, not over the microphone. */
-  .app-shell:not(.has-browse-panel) .avatar-choice-name { bottom: 50%; left: calc(100% + 10px); transform: translateY(50%); }
-  .app-shell:not(.has-browse-panel) .avatar-choice[data-avatar-choice='orb'] .avatar-choice-name { right: calc(100% + 10px); left: auto; }
+  .app-shell:not(.has-browse-panel) .avatar-switcher { padding: 8px 16px 22px; }
+  .app-shell:not(.has-browse-panel) .avatar-choice { width: 36px; height: 36px; padding: 0; }
+  .app-shell:not(.has-browse-panel) .avatar-choice svg { width: 22px; height: 25px; }
   .settings-panel { max-width: 100%; }
   .settings-panel-header, .settings-panel-content, .settings-panel-footer { padding-right: 28px; padding-left: 28px; }
   .settings-toggle-copy { min-width: 0; }

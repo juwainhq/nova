@@ -1859,6 +1859,17 @@ function App() {
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
+        <span
+          className={`backend-chip backend-chip-${backendChip}`}
+          role="status"
+          title={backendChip === 'gemini' ? 'Replies come from Google Gemini (change in Settings)'
+            : backendChip === 'local' ? 'Replies come from Ollama on this computer (change in Settings)'
+              : 'The chosen AI backend is not reachable right now'}
+        >
+          <span className="backend-chip-dot" aria-hidden="true" />
+          {BACKEND_CHIP_LABELS[backendChip]}
+        </span>
+        <AvatarSwitcher avatar={avatar} onChange={selectAvatar} />
         <div className="mic-control-wrap">
           <div className={`mic-halo ${stage === 'listening' ? 'mic-halo-active' : ''}`} />
           <button
@@ -1875,17 +1886,6 @@ function App() {
             <span className="mic-button-sheen" />
           </button>
         </div>
-        <span
-          className={`backend-chip backend-chip-${backendChip}`}
-          role="status"
-          title={backendChip === 'gemini' ? 'Replies come from Google Gemini (change in Settings)'
-            : backendChip === 'local' ? 'Replies come from Ollama on this computer (change in Settings)'
-              : 'The chosen AI backend is not reachable right now'}
-        >
-          <span className="backend-chip-dot" aria-hidden="true" />
-          {BACKEND_CHIP_LABELS[backendChip]}
-        </span>
-        <AvatarSwitcher avatar={avatar} onChange={selectAvatar} />
       </footer>
 
       {browse && <BrowsePanel browse={browse} onClose={closeBrowse} onNavigate={goBrowse} onBack={() => stepBrowse(-1)} onForward={() => stepBrowse(1)} onRefresh={refreshBrowse} />}

@@ -226,8 +226,8 @@ check('entry: the file:// build explicitly disables registration', singleBuilder
 check('sidebar: portrait sizing is separate from short/browse layouts', sidebar.includes('@media (max-width: 440px) and (min-height: 580px)')
   && sidebar.includes('.app-shell:not(.has-browse-panel)') && sidebar.includes('--dock-height: 256px;'));
 check('sidebar: reserves room for mic, avatar picker and permission text', sidebar.includes('.mic-control-wrap { width: 64px; height: 64px; flex-shrink: 0; }')
-  && sidebar.includes('.control-dock { gap: 24px; padding-bottom: 32px; }') && sidebar.includes('.avatar-choice { width: 34px; height: 34px;'));
-check('sidebar: narrow picker tooltips do not sit over the microphone', sidebar.includes('.avatar-choice-name { bottom: 50%; left: calc(100% + 10px); transform: translateY(50%); }'));
+  && sidebar.includes('.control-dock { gap: 0; padding-bottom: 32px; }') && sidebar.includes('.avatar-choice { width: 36px; height: 36px;'));
+check('sidebar: picker names sit under their circles, never beside the microphone', !sidebar.includes('.avatar-choice-name { bottom: 50%'));
 check('sidebar: standalone preserves a normal native resizable window', sidebar.includes('@media (display-mode: standalone)') && !sidebar.includes('app-region: drag'));
 
 for (const { name, ok } of results) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`);

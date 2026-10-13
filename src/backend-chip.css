@@ -1,45 +1,48 @@
-/* Backend status chip: bottom center, above the avatar switcher. Fixed colors by design. */
+/* Backend status badge: the first item in the bottom control column. Local and Gemini use
+   the active avatar's theme color (orange for Orb, blue for Bot); offline stays red. */
+.app-shell.avatar-orb { --chip-rgb: 249, 115, 22; --chip-ink: #fb923c; --chip-dot: #f97316; }
+.app-shell.avatar-bot { --chip-rgb: 59, 130, 246; --chip-ink: #93c5fd; --chip-dot: #3b82f6; }
+
 .backend-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
   box-sizing: border-box;
-  height: 24px;
-  margin: 0 auto 12px;
-  padding: 4px 12px;
+  height: 22px;
+  margin: 0 auto 16px;
+  padding: 3px 10px;
   border: 1px solid transparent;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
 .backend-chip-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
   flex: none;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--chip-dot, #f97316);
 }
 
-.backend-chip-gemini {
-  color: #93c5fd;
-  background: rgba(66, 133, 244, 0.15);
-  border-color: rgba(66, 133, 244, 0.4);
-}
-
+.backend-chip-gemini,
 .backend-chip-local {
-  color: #fb923c;
-  background: rgba(249, 115, 22, 0.15);
-  border-color: rgba(249, 115, 22, 0.4);
+  color: var(--chip-ink, #fb923c);
+  background: rgba(var(--chip-rgb, 249, 115, 22), 0.15);
+  border-color: rgba(var(--chip-rgb, 249, 115, 22), 0.4);
 }
 
 .backend-chip-offline {
   color: #fca5a5;
   background: rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.4);
+}
+
+.backend-chip-offline .backend-chip-dot {
+  background: currentColor;
 }

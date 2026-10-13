@@ -1224,16 +1224,16 @@ body::after {
 @keyframes avatar-wave { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
 
 /* The switcher occupies dock space below the microphone, never an overlay. */
-.control-dock { flex-direction: column; gap: 24px; padding-bottom: 32px; }
+.control-dock { flex-direction: column; align-items: center; gap: 0; padding-bottom: 32px; }
 .control-dock .wake-message { padding-right: 0; padding-left: 0; }
 .avatar-switcher {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  margin-bottom: 24px;
-  padding: 8px 16px;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 8px 16px 22px;
   border: 1px solid var(--card-line);
   border-radius: 999px;
   background: var(--card);
@@ -1244,33 +1244,33 @@ body::after {
   position: relative;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
-  padding: 5px;
-  border: 1px solid transparent;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, .2);
   border-radius: 50%;
   background: transparent;
   cursor: pointer;
-  transition: border-color .15s ease, background .15s ease;
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
 }
-.avatar-choice svg { width: 25px; height: 28px; opacity: .55; transition: opacity .15s ease; }
+.avatar-choice svg { width: 22px; height: 25px; opacity: .55; transition: opacity .15s ease; }
 .avatar-choice:hover svg, .avatar-choice:focus-visible svg, .avatar-choice.is-selected svg { opacity: 1; }
-.avatar-choice.is-selected { border-color: var(--accent); background: rgba(var(--accent-rgb), .13); box-shadow: 0 0 12px rgba(var(--accent-rgb), .12); }
+.avatar-choice.is-selected { border-color: var(--accent); background: rgba(var(--accent-rgb), .13); box-shadow: 0 0 12px rgba(var(--accent-rgb), .12); transform: scale(1.1); }
 .avatar-choice:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 3px; }
-.avatar-choice-name { position: absolute; bottom: calc(100% + 10px); left: 50%; padding: 5px 8px; border: 1px solid var(--card-line); border-radius: 6px; background: var(--card-strong); color: var(--on-card); font: 9px/1.2 var(--mono); transform: translateX(-50%); opacity: 0; pointer-events: none; }
-.avatar-choice:hover .avatar-choice-name, .avatar-choice:focus-visible .avatar-choice-name { opacity: 1; }
+/* Always-visible name under each circle, so the choice reads without hovering. */
+.avatar-choice-name { position: absolute; top: calc(100% + 5px); left: 50%; color: var(--ink); font: 9px/1.2 var(--mono); opacity: .6; transform: translateX(-50%); white-space: nowrap; pointer-events: none; }
 
 /* The taller character and optional offline/transcript cards can scroll within
    the stage on short screens without ever covering the microphone or picker. */
 .app-shell .main-stage { overflow-y: auto; overflow-x: hidden; align-items: safe center; scrollbar-width: thin; }
 @media (max-height: 560px) {
   .app-shell.avatar-bot .status-word, .app-shell.avatar-orb .status-word { margin-bottom: 12px; }
-  .control-dock { gap: 24px; padding-bottom: 32px; }
+  .control-dock { gap: 0; padding-bottom: 32px; }
   .control-dock .mic-control-wrap { height: 56px; flex-shrink: 0; }
   .control-dock .mic-halo { width: 64px; height: 64px; }
-  .avatar-switcher { padding: 8px 16px; }
-  .avatar-choice { width: 34px; height: 34px; padding: 4px; }
-  .avatar-choice svg { width: 23px; height: 26px; }
+  .avatar-switcher { padding: 8px 16px 22px; }
+  .avatar-choice { width: 36px; height: 36px; padding: 0; }
+  .avatar-choice svg { width: 22px; height: 25px; }
 }
 @media (max-height: 420px) {
   .control-dock .mic-control-wrap { height: 52px; }
@@ -1279,7 +1279,7 @@ body::after {
 }
 @media (max-width: 700px) {
   .app-shell.has-browse-panel { --dock-height: 120px; }
-  .has-browse-panel .control-dock { gap: 24px; padding-bottom: 32px; }
+  .has-browse-panel .control-dock { gap: 0; padding-bottom: 32px; }
   .has-browse-panel .mic-control-wrap { height: 52px; }
   .has-browse-panel .mic-button { width: 44px; height: 44px; }
   .has-browse-panel .control-dock .mic-halo { width: 54px; height: 54px; }
