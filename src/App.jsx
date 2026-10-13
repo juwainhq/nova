@@ -44,6 +44,10 @@ import {
   createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
 } from './kokoro.js';
 import { createSpeechStream, textSpeechStream } from './speech-stream.js';
+import {
+  BACKEND_STORAGE_KEY, DEFAULT_BACKEND, GEMINI_KEY_STORAGE, GEMINI_REPLY_ERRORS, friendlyGeminiError,
+  geminiEndpoint, geminiError, geminiRequestBody, normalizeBackend, readGeminiText,
+} from './gemini.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
 // Short replies for a fast first word. NOVA calls Ollama's OpenAI-compatible
@@ -142,6 +146,7 @@ function endpointWarning(value) {
 // needs a value there; a single-file copy has no proxy, so only its endpoint is
 // genuinely required. SettingsPanel flashes exactly these ids when it opens.
 function settingsAttention(draft, standalone) {
+  if (draft.backend === 'gemini') return [];
   return standalone && !String(draft.ollamaUrl || '').trim() ? ['ollama-url'] : [];
 }
 
@@ -467,6 +472,59 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 
         <form className="settings-form" onSubmit={handleSubmit}>
           <div className="settings-panel-content">
+            <fieldset className="settings-field backend-field">
+              <legend className="field-label">AI Backend</legend>
+              <div className="backend-options">
+                <label className={`backend-option${draft.backend !== 'gemini' ? ' is-selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="ai-backend"
+                    value="ollama"
+                    checked={draft.backend !== 'gemini'}
+                    onChange={() => { setDraft((current) => ({ ...current, backend: 'ollama' })); setTestStatus('idle'); setTestMessage(''); }}
+                  />
+                  <span>
+                    <strong>Ollama (Local)</strong>
+                    <small>Your current setup. Chats run on your own Ollama server, http://localhost:11434 by default.</small>
+                  </span>
+                </label>
+                <label className={`backend-option${draft.backend === 'gemini' ? ' is-selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="ai-backend"
+                    value="gemini"
+                    checked={draft.backend === 'gemini'}
+                    onChange={() => setDraft((current) => ({ ...current, backend: 'gemini' }))}
+                  />
+                  <span>
+                    <strong>Gemini (Cloud)</strong>
+                    <small>Google’s Gemini API. Your messages and saved memories are sent to Google.</small>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
+            {draft.backend === 'gemini' && (
+              <div className="settings-field">
+                <label className="field-label" htmlFor="gemini-key">Gemini API key</label>
+                <input
+                  id="gemini-key"
+                  className="settings-input"
+                  type="password"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  placeholder="Paste your key"
+                  value={draft.geminiKey}
+                  onChange={(event) => setDraft((current) => ({ ...current, geminiKey: event.target.value }))}
+                />
+                <p className="field-hint">
+                  Saved only in this browser. Create a key in Google AI Studio. It is sent to Google as part of each request.
+                </p>
+              </div>
+            )}
+
+            {draft.backend !== 'gemini' && (<>
             <div className="settings-field">
               <label className="field-label" htmlFor="ollama-model">Ollama model</label>
               <input
@@ -516,6 +574,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               </p>
               <ConnectionHelp />
             </div>
+            </>)}
 
             <div className="settings-divider" />
 
@@ -650,6 +709,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 
             <div className="settings-divider" />
 
+            {draft.backend !== 'gemini' && (
             <div className="settings-test">
               <div className="settings-test-heading">
                 <div>
@@ -665,6 +725,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 {testMessage || "Let’s check that Ollama and your chosen model are ready."}
               </p>
             </div>
+            )}
 
             <div className="settings-divider" />
 
@@ -711,6 +772,8 @@ function App() {
   const [settings, setSettings] = useState(() => ({
     model: readSetting('nova.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
     ollamaUrl: readSetting('nova.ollama.url', defaultOllamaUrl()),
+    backend: normalizeBackend(readSetting(BACKEND_STORAGE_KEY, DEFAULT_BACKEND)),
+    geminiKey: readSetting(GEMINI_KEY_STORAGE),
     voiceKey: readSetting(TTS_VOICE_KEY),
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
@@ -955,6 +1018,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // Gemini is a cloud service: there is no local server to probe, so it never reads as offline.
+    if (settings.backend === 'gemini') {
+      setConnection('connected');
+      setModelAvailable(true);
+      return undefined;
+    }
     const controller = new AbortController();
     setConnection('checking');
     setModelAvailable(null);
@@ -972,7 +1041,7 @@ function App() {
     };
     checkOllama();
     return () => controller.abort();
-  }, [settings.model, settings.ollamaUrl]);
+  }, [settings.model, settings.ollamaUrl, settings.backend]);
 
   // Memory is independent of the settings draft. Persist first, then publish it;
   // never claim a fact was saved/deleted when localStorage rejected the write.
@@ -1120,6 +1189,34 @@ function App() {
           { role: 'user', content: prompt },
           { role: 'assistant', content: answer },
         ].slice(-6);
+      } else if (!intent && settings.backend === 'gemini') {
+        const conversation = conversationRef.current.slice(-6);
+        const systemText = [SYSTEM_PROMPT, memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n');
+        const turns = [...conversation, { role: 'user', content: prompt }];
+        const key = settings.geminiKey.trim();
+        if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
+        const result = await fetch(geminiEndpoint(key), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify(geminiRequestBody(systemText, turns)),
+        });
+        const payload = await result.json().catch(() => null);
+        if (!result.ok) throw geminiError(payload, result.status);
+        const reply = readGeminiText(payload);
+        if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
+        if (controller.signal.aborted) return;
+        // Gemini's generateContent returns the whole reply at once, so it is spoken as one stream.
+        const replyStream = createSpeechStream();
+        stream = replyStream;
+        replyStream.push(reply.answer);
+        replyStream.end({ cutOff: reply.finishReason === 'MAX_TOKENS' });
+        answer = replyStream.text || reply.answer;
+        conversationRef.current = [
+          ...conversation,
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: answer },
+        ].slice(-6);
       } else if (!intent) {
         const conversation = conversationRef.current.slice(-6);
         const messages = [
@@ -1174,6 +1271,12 @@ function App() {
       if (stream && !stream.ended) stream.cancel();
       if (controller.signal.aborted) return;
       dismissRichResponse(true);
+      // A Gemini failure says nothing about the local Ollama server, so don't probe it.
+      if (settings.backend === 'gemini') {
+        setStage('ready');
+        notify(friendlyGeminiError(error));
+        return;
+      }
       try {
         const models = await fetchOllamaModels(ollamaEndpoint(settings), controller.signal);
         setConnection('connected');
@@ -1650,6 +1753,8 @@ function App() {
     const updatedSettings = {
       model: nextSettings.model.trim() || OLLAMA_MODEL,
       ollamaUrl: trimTrailingSlashes(nextSettings.ollamaUrl || ''),
+      backend: normalizeBackend(nextSettings.backend),
+      geminiKey: (nextSettings.geminiKey || '').trim(),
       voiceKey: (nextSettings.voiceKey || '').trim(),
       kokoroVoice: kokoroVoice(nextSettings.kokoroVoice).id,
       showTranscript: Boolean(nextSettings.showTranscript),
@@ -1657,6 +1762,8 @@ function App() {
     try {
       window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
       window.localStorage.setItem('nova.ollama.url', updatedSettings.ollamaUrl);
+      window.localStorage.setItem(BACKEND_STORAGE_KEY, updatedSettings.backend);
+      window.localStorage.setItem(GEMINI_KEY_STORAGE, updatedSettings.geminiKey);
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem(KOKORO_VOICE_KEY, updatedSettings.kokoroVoice);
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
@@ -1699,6 +1806,12 @@ function App() {
       <main className="main-stage">
         <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
           <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
+          <span
+            className={`backend-pill backend-pill-${settings.backend}`}
+            title={settings.backend === 'gemini' ? 'Replies come from Google Gemini (change in Settings)' : 'Replies come from Ollama on this computer (change in Settings)'}
+          >
+            {settings.backend === 'gemini' ? '⚡ Gemini' : '🖥️ Local'}
+          </span>
           <div
             ref={avatarContainerRef}
             className={`avatar-container${avatar === 'bot' ? ' avatar-container-bot' : ''} ${avatarActivity} ${avatarMood}`}

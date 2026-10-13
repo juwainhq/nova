@@ -21,6 +21,7 @@ import { verifyInterrupt } from './interrupt-checks.mjs';
 import { verifyNames } from './name-checks.mjs';
 import { verifyAvatarSwitch } from './avatar-switch-checks.mjs';
 import { verifyAvatarExpressions } from './avatar-expression-checks.mjs';
+import { verifyGemini } from './gemini-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -164,7 +165,7 @@ check('speaker is reached through a ref, not a stale closure',
 // ------------------------------------------------- the panel, actually rendered
 // Renders the real component, so the selector is inspected as markup rather than as
 // source text.
-async function renderPanel(voices, savedKey, memories = [], memoryError = '') {
+async function renderPanel(voices, savedKey, memories = [], memoryError = '', extra = {}) {
   const result = await build({
     stdin: {
       contents: `
@@ -172,7 +173,7 @@ async function renderPanel(voices, savedKey, memories = [], memoryError = '') {
         import { renderToStaticMarkup } from 'react-dom/server';
         import { SettingsPanel } from './src/App.jsx';
         const voices = ${JSON.stringify(voices)};
-        const settings = { model: 'mistral:7b-instruct-q4_K_M', ollamaUrl: '', voiceKey: ${JSON.stringify(savedKey)}, showTranscript: false };
+        const settings = { model: 'mistral:7b-instruct-q4_K_M', ollamaUrl: '', voiceKey: ${JSON.stringify(savedKey)}, showTranscript: false, backend: 'ollama', geminiKey: '', ...${JSON.stringify(extra)} };
         process.stdout.write(renderToStaticMarkup(createElement(SettingsPanel, {
           settings, voices, memories: ${JSON.stringify(memories)}, memoryError: ${JSON.stringify(memoryError)}, connection: 'connected', modelAvailable: true, standalone: false,
           onClose() {}, onSave() {}, onConnectionChange() {}, openerRef: { current: null },
@@ -786,6 +787,7 @@ await verifyMemory(check, renderPanel);
 await verifyNames(check);
 await verifyAvatarSwitch(check);
 await verifyAvatarExpressions(check);
+await verifyGemini(check, renderPanel);
 
 // The theme toggle is App state, so its contract is behavioural, not just textual.
 const darkUi = await createAppHarness();
