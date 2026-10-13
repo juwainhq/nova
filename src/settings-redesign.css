@@ -1,6 +1,27 @@
 /* Settings redesign: settings trigger, 320px panel, tabs, pill backend choice,
    dark inputs, and the memory chips. Visual only; no behavior changes. */
 
+/* Top-right button colors. The app already sets data-avatar and data-theme on
+   <html>, so these variables follow every avatar or theme switch automatically. */
+:root {
+  --btn-bg: rgba(249, 115, 22, 0.15);
+  --btn-border: rgba(249, 115, 22, 0.35);
+  --btn-icon: #f97316;
+  --btn-hover-bg: rgba(249, 115, 22, 0.28);
+}
+:root[data-avatar='bot'] {
+  --btn-bg: rgba(59, 130, 246, 0.15);
+  --btn-border: rgba(59, 130, 246, 0.35);
+  --btn-icon: #60a5fa;
+  --btn-hover-bg: rgba(59, 130, 246, 0.28);
+}
+:root[data-theme='light'] {
+  --btn-bg: rgba(0, 0, 0, 0.08);
+  --btn-border: rgba(0, 0, 0, 0.15);
+  --btn-icon: #1a1208;
+  --btn-hover-bg: rgba(0, 0, 0, 0.14);
+}
+
 /* Top-right controls: settings and theme toggle share one fixed flex row. */
 .topbar-actions {
   position: fixed;
@@ -20,12 +41,12 @@
 .icon-button.theme-toggle {
   width: 44px;
   height: 44px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--btn-border);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--btn-bg);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
-  color: #fff;
+  color: var(--btn-icon);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -35,8 +56,8 @@
 }
 .icon-button.settings-trigger:hover,
 .icon-button.theme-toggle:hover {
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
+  background: var(--btn-hover-bg);
+  color: var(--btn-icon);
   box-shadow: none;
   transform: scale(1.05);
 }
@@ -44,7 +65,12 @@
 .icon-button.theme-toggle svg {
   width: 20px;
   height: 20px;
-  color: #fff;
+  color: var(--btn-icon);
+  stroke: var(--btn-icon);
+}
+.icon-button.settings-trigger svg *,
+.icon-button.theme-toggle svg * {
+  stroke: var(--btn-icon);
 }
 .icon-button.settings-trigger svg {
   transition: transform 200ms ease;
