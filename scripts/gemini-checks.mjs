@@ -47,7 +47,7 @@ export async function verifyGemini(check, renderPanel) {
   // Settings: the backend choice and the key field render from real component markup.
   const geminiMarkup = await renderPanel([], '', [], '', { backend: 'gemini', geminiKey: KEY });
   check('settings show an AI Backend section with both options', geminiMarkup.includes('AI Backend')
-    && geminiMarkup.includes('Ollama (Local)') && geminiMarkup.includes('Gemini (Cloud)') && /checked=""[^>]*value="gemini"/.test(geminiMarkup));
+    && geminiMarkup.includes('LOCAL') && geminiMarkup.includes('GEMINI') && /checked=""[^>]*value="gemini"/.test(geminiMarkup));
   check('Gemini selected shows the API key field and hides the Ollama fields', geminiMarkup.includes('id="gemini-key"')
     && !geminiMarkup.includes('id="ollama-model"') && !geminiMarkup.includes('Test Ollama'));
   const ollamaMarkup = await renderPanel([], '', [], '', { backend: 'ollama' });

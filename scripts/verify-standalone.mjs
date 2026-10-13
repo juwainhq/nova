@@ -102,7 +102,7 @@ check('bundle carries the brand name', /"NOVA"/.test(html));
 check('voice selector is bound to nova-voice', /nova-voice/.test(html));
 check('includes the browser memory store', script.includes('nova_memories'));
 check('includes remembered facts in the system prompt', script.includes('Things the user has told you to remember:'));
-check('ships the memory settings controls', script.includes('Clear all memory') && script.includes('memory-list'));
+check('ships the memory settings controls', script.includes('Clear all memories') && script.includes('memory-list'));
 check('ships the friendly personality and conditional voice brevity rules', script.includes('a warm, friendly, and genuinely helpful personal AI assistant.')
   && script.includes('You never use sarcasm unless the user is clearly joking first.')
   && script.includes('2-3 sentences max unless the user asks for more detail.'));

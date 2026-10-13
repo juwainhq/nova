@@ -225,19 +225,19 @@ export async function verifyMemory(check, renderPanel) {
   check('settings deletion is immediate, persistent and removes just one fact', same(readMemoryStore(settingsStorage).facts, initialFacts.slice(1))
     && panelUi.nodes().filter((node) => node.props.className?.includes('memory-delete')).length === 2);
   check('deleting a focused memory restores focus to the surviving Memory heading', memoryFocus === 1);
-  panelUi.findButton('Clear all memory').props.onClick();
+  panelUi.findButton('Clear all memories').props.onClick();
   panelUi.flush();
   check('clear all requires explicit confirmation before deleting data', readMemoryStore(settingsStorage).facts.length === 2 && Boolean(panelUi.findButton('Yes, clear all')));
   panelUi.findButton('Keep memories').props.onClick();
   panelUi.flush();
-  check('cancelling clear all preserves facts', readMemoryStore(settingsStorage).facts.length === 2 && Boolean(panelUi.findButton('Clear all memory')));
-  panelUi.findButton('Clear all memory').props.onClick();
+  check('cancelling clear all preserves facts', readMemoryStore(settingsStorage).facts.length === 2 && Boolean(panelUi.findButton('Clear all memories')));
+  panelUi.findButton('Clear all memories').props.onClick();
   panelUi.flush();
   panelUi.findButton('Yes, clear all').props.onClick();
   settingsApp.flush();
   panelUi.flush();
   panelUi.updatePanel(getPanel(settingsApp).props);
-  check('confirmed clear all persists an empty store and disables the empty action', readMemoryStore(settingsStorage).facts.length === 0 && panelUi.findButton('Clear all memory').props.disabled);
+  check('confirmed clear all persists an empty store and disables the empty action', readMemoryStore(settingsStorage).facts.length === 0 && panelUi.findButton('Clear all memories').props.disabled);
   check('clear / cancellation keep keyboard focus inside the settings panel', memoryFocus === 3);
   check('clearing memory does not erase model and voice settings', settingsStorage.getItem('nova.ollama.model') === 'custom-model'
     && settingsStorage.getItem('nova.tts.voice') === 'samantha');
@@ -249,9 +249,9 @@ export async function verifyMemory(check, renderPanel) {
 
   const markup = await renderPanel([], '', initialFacts);
   check('real React markup shows the Memory section, all facts and clear control', markup.includes('id="memory-title"')
-    && initialFacts.every((fact) => markup.includes(fact)) && markup.includes('Clear all memory'));
+    && initialFacts.every((fact) => markup.includes(fact)) && markup.includes('Clear all memories'));
   check('memory delete and clear buttons cannot accidentally submit settings', (markup.match(/class="text-button memory-delete" type="button"/g) || []).length === 3
-    && /type="button"[^>]*>Clear all memory/.test(markup));
+    && /type="button"[^>]*>Clear all memories/.test(markup));
   const safeMarkup = await renderPanel([], '', ['<img src=x onerror=alert(1)>']);
   check('stored memory text is escaped by React rather than interpreted as HTML', safeMarkup.includes('&lt;img') && !safeMarkup.includes('<img src=x'));
   const emptyMarkup = await renderPanel([], '', []);

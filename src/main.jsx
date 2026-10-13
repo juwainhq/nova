@@ -5,6 +5,7 @@ import './index.css';
 import './avatar.css';
 import './pwa.css';
 import './backend-chip.css';
+import './settings-redesign.css';
 import { registerPwa } from './pwa.js';
 
 createRoot(document.getElementById('root')).render(

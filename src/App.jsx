@@ -334,6 +334,12 @@ function hasOllamaModel(models, model) {
 
 // Exported so scripts/verify-speech.mjs can render the panel and inspect the
 // voice selector it produces.
+const SETTINGS_TABS = [
+  { id: 'voice', label: 'Voice' },
+  { id: 'ai', label: 'AI' },
+  { id: 'memory', label: 'Memory' },
+];
+
 export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef,
   memories = [], memoryError = '', onDeleteMemory = () => {}, onClearMemory = () => false,
   onTestVoice = null, onStopVoiceTest = null, voiceTestPlaying = false, voiceTestDisabled = true, speechAvailable = false,
@@ -345,6 +351,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const [downloadStatus, setDownloadStatus] = useState('idle');
   const [downloadMessage, setDownloadMessage] = useState('');
   const [confirmClearMemory, setConfirmClearMemory] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('voice');
   const modelInputRef = useRef(null);
   const panelRef = useRef(null);
   const testControllerRef = useRef(null);
@@ -471,8 +478,27 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
           </button>
         </header>
 
+        <nav className="settings-tabs" role="tablist" aria-label="Settings sections">
+          {SETTINGS_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              id={`settings-tab-${tab.id}`}
+              className="settings-tab"
+              type="button"
+              role="tab"
+              aria-selected={settingsTab === tab.id}
+              aria-controls={`settings-panel-${tab.id}`}
+              tabIndex={settingsTab === tab.id ? 0 : -1}
+              onClick={() => setSettingsTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
         <form className="settings-form" onSubmit={handleSubmit}>
           <div className="settings-panel-content">
+            <div role="tabpanel" id="settings-panel-ai" aria-labelledby="settings-tab-ai" className="settings-tab-panel" hidden={settingsTab !== 'ai'}>
             <fieldset className="settings-field backend-field">
               <legend className="field-label">AI Backend</legend>
               <div className="backend-options">
@@ -485,8 +511,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                     onChange={() => { setDraft((current) => ({ ...current, backend: 'ollama' })); setTestStatus('idle'); setTestMessage(''); }}
                   />
                   <span>
-                    <strong>Ollama (Local)</strong>
-                    <small>Your current setup. Chats run on your own Ollama server, http://localhost:11434 by default.</small>
+                    <strong>LOCAL</strong>
                   </span>
                 </label>
                 <label className={`backend-option${draft.backend === 'gemini' ? ' is-selected' : ''}`}>
@@ -498,8 +523,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                     onChange={() => setDraft((current) => ({ ...current, backend: 'gemini' }))}
                   />
                   <span>
-                    <strong>Gemini (Cloud)</strong>
-                    <small>Google’s Gemini API. Your messages and saved memories are sent to Google.</small>
+                    <strong>GEMINI</strong>
                   </span>
                 </label>
               </div>
@@ -579,6 +603,52 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 
             <div className="settings-divider" />
 
+            {draft.backend !== 'gemini' && (
+            <div className="settings-test">
+              <div className="settings-test-heading">
+                <div>
+                  <span className="config-title">Ollama connection</span>
+                  <span className="config-detail">{connectionLabel}</span>
+                </div>
+                <button className="test-ollama-button" type="button" onClick={testOllama} disabled={testStatus === 'checking'}>
+                  {testStatus === 'checking' ? "Checking..." : 'Test Ollama'}
+                </button>
+              </div>
+              <p className={`test-result test-result-${testStatus}`} role="status" aria-live="polite">
+                <i />
+                {testMessage || "Let’s check that Ollama and your chosen model are ready."}
+              </p>
+            </div>
+            )}
+
+            <div className="settings-divider" />
+
+            <div className="settings-field">
+              <span className="field-label">Offline copy <span>OPTIONAL</span></span>
+              {standalone ? (
+                <p className="field-hint">
+                  You’re already using the single-file copy, so there’s nothing else to download.
+                  If Ollama won’t connect, the connection help above can walk you through its CORS settings.
+                </p>
+              ) : (
+                <>
+                  <button
+                    className="standalone-button"
+                    type="button"
+                    onClick={downloadStandalone}
+                    disabled={downloadStatus === 'working'}
+                  >
+                    {downloadStatus === 'working' ? "Getting it ready..." : `Download ${STANDALONE_FILENAME}`}
+                  </button>
+                  <p className={`field-hint ${downloadStatus === 'error' ? 'field-hint-error' : ''}`} role="status" aria-live="polite">
+                    {downloadMessage
+                      || "Keep a copy on your computer with no build step. Open it in Chrome to connect to Ollama directly."}
+                  </p>
+                </>
+              )}
+            </div>
+            </div>
+            <div role="tabpanel" id="settings-panel-voice" aria-labelledby="settings-tab-voice" className="settings-tab-panel" hidden={settingsTab !== 'voice'}>
             <div className="settings-field">
               <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice (Kokoro AI)</label>
               <select
@@ -672,7 +742,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             </label>
 
             <div className="settings-divider" />
-
+            </div>
+            <div role="tabpanel" id="settings-panel-memory" aria-labelledby="settings-tab-memory" className="settings-tab-panel" hidden={settingsTab !== 'memory'}>
             <section className="settings-memory" aria-labelledby="memory-title">
               <div className="settings-test-heading">
                 <h3 ref={memoryHeadingRef} id="memory-title" className="field-label" tabIndex={-1}>Memory</h3>
@@ -688,7 +759,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   {memories.map((fact) => (
                     <li key={fact}>
                       <span>{fact}</span>
-                      <button className="text-button memory-delete" type="button" aria-label={`Delete memory: ${fact}`} onClick={() => { if (onDeleteMemory(fact)) memoryHeadingRef.current?.focus(); }}>Delete</button>
+                      <button className="text-button memory-delete" type="button" aria-label={`Delete memory: ${fact}`} onClick={() => { if (onDeleteMemory(fact)) memoryHeadingRef.current?.focus(); }}>✕</button>
                     </li>
                   ))}
                 </ul>
@@ -703,56 +774,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                     <button className="text-button" type="button" onClick={() => { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); }}>Keep memories</button>
                   </>
                 ) : (
-                  <button className="test-ollama-button" type="button" disabled={!memories.length && !memoryError} onClick={() => setConfirmClearMemory(true)}>Clear all memory</button>
+                  <button className="test-ollama-button" type="button" disabled={!memories.length && !memoryError} onClick={() => setConfirmClearMemory(true)}>Clear all memories</button>
                 )}
               </div>
             </section>
 
             <div className="settings-divider" />
-
-            {draft.backend !== 'gemini' && (
-            <div className="settings-test">
-              <div className="settings-test-heading">
-                <div>
-                  <span className="config-title">Ollama connection</span>
-                  <span className="config-detail">{connectionLabel}</span>
-                </div>
-                <button className="test-ollama-button" type="button" onClick={testOllama} disabled={testStatus === 'checking'}>
-                  {testStatus === 'checking' ? "Checking..." : 'Test Ollama'}
-                </button>
-              </div>
-              <p className={`test-result test-result-${testStatus}`} role="status" aria-live="polite">
-                <i />
-                {testMessage || "Let’s check that Ollama and your chosen model are ready."}
-              </p>
-            </div>
-            )}
-
-            <div className="settings-divider" />
-
-            <div className="settings-field">
-              <span className="field-label">Offline copy <span>OPTIONAL</span></span>
-              {standalone ? (
-                <p className="field-hint">
-                  You’re already using the single-file copy, so there’s nothing else to download.
-                  If Ollama won’t connect, the connection help above can walk you through its CORS settings.
-                </p>
-              ) : (
-                <>
-                  <button
-                    className="standalone-button"
-                    type="button"
-                    onClick={downloadStandalone}
-                    disabled={downloadStatus === 'working'}
-                  >
-                    {downloadStatus === 'working' ? "Getting it ready..." : `Download ${STANDALONE_FILENAME}`}
-                  </button>
-                  <p className={`field-hint ${downloadStatus === 'error' ? 'field-hint-error' : ''}`} role="status" aria-live="polite">
-                    {downloadMessage
-                      || "Keep a copy on your computer with no build step. Open it in Chrome to connect to Ollama directly."}
-                  </p>
-                </>
-              )}
             </div>
           </div>
 
@@ -1807,7 +1834,7 @@ function App() {
           <button className="icon-button theme-toggle" type="button" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'light'} onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           </button>
-          <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
+          <button ref={settingsTriggerRef} className={`icon-button settings-trigger${settingsOpen ? ' is-open' : ''}`} type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
             <SettingsIcon />
           </button>
         </div>
