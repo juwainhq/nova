@@ -295,7 +295,7 @@ export async function verifyWebBrowse(check) {
     && /pointer-events: none/.test(ruleBody('#root::after')) && /opacity: var\(--grain\)/.test(ruleBody('#root::after'))
     && /--grain: \.03;/.test(css));
   check('theme: the gear and the toggle share the top-right action row',
-    /\.topbar-actions \{ display: flex; align-items: center; gap: 8px; \}/.test(flat)
+    /\.topbar-actions \{ display: flex; align-items: center; gap: 12px; \}/.test(flat)
     && /width: 40px; height: 40px; padding: 0; border: 1px solid var\(--card-line\); border-radius: 50%; background: var\(--card\); backdrop-filter: var\(--glass\)/.test(ruleBody('.icon-button'))
     && !/\.icon-button \{[^}]*opacity: \./.test(flat) && !/\.dock-corner/.test(css)
     && /<div className="topbar-actions">[\s\S]*?theme-toggle[\s\S]*?<\/button>[\s\S]*?settings-trigger[\s\S]*?<\/div>\s*<\/header>/.test(appSource));

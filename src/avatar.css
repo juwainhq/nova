@@ -202,15 +202,16 @@
 @keyframes avatar-wave { from { transform: scaleY(.25); } to { transform: scaleY(1); } }
 
 /* The switcher occupies dock space below the microphone, never an overlay. */
-.control-dock { flex-direction: column; gap: 4px; padding-bottom: 26px; }
+.control-dock { flex-direction: column; gap: 24px; padding-bottom: 32px; }
 .control-dock .wake-message { padding-right: 0; padding-left: 0; }
 .avatar-switcher {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 2px;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 8px 16px;
   border: 1px solid var(--card-line);
   border-radius: 999px;
   background: var(--card);
@@ -242,10 +243,10 @@
 .app-shell .main-stage { overflow-y: auto; overflow-x: hidden; align-items: safe center; scrollbar-width: thin; }
 @media (max-height: 560px) {
   .app-shell.avatar-bot .status-word, .app-shell.avatar-orb .status-word { margin-bottom: 12px; }
-  .control-dock { gap: 4px; padding-bottom: 26px; }
+  .control-dock { gap: 24px; padding-bottom: 32px; }
   .control-dock .mic-control-wrap { height: 56px; flex-shrink: 0; }
   .control-dock .mic-halo { width: 64px; height: 64px; }
-  .avatar-switcher { padding: 1px; }
+  .avatar-switcher { padding: 8px 16px; }
   .avatar-choice { width: 34px; height: 34px; padding: 4px; }
   .avatar-choice svg { width: 23px; height: 26px; }
 }
@@ -256,7 +257,7 @@
 }
 @media (max-width: 700px) {
   .app-shell.has-browse-panel { --dock-height: 120px; }
-  .has-browse-panel .control-dock { gap: 4px; padding-bottom: 26px; }
+  .has-browse-panel .control-dock { gap: 24px; padding-bottom: 32px; }
   .has-browse-panel .mic-control-wrap { height: 52px; }
   .has-browse-panel .mic-button { width: 44px; height: 44px; }
   .has-browse-panel .control-dock .mic-halo { width: 54px; height: 54px; }
