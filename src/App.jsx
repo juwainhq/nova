@@ -1159,9 +1159,8 @@ function App() {
 
     let speech = null;
     let stream = null;
-    // Gemini is the chosen backend unless every Gemini model fails and this turn falls back to Local.
+    // In Gemini mode replies come only from Gemini. Ollama is never used as a fallback.
     const useGemini = settings.backend === 'gemini';
-    let geminiFellBack = false;
     try {
       if (closeRequest) {
         closeBrowse();
@@ -1230,17 +1229,7 @@ function App() {
         const turns = [...conversation, { role: 'user', content: prompt }];
         const key = settings.geminiKey.trim();
         if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
-        let reply = null;
-        try {
-          reply = await requestGeminiReply(key, systemText, turns, controller.signal);
-        } catch (error) {
-          if (controller.signal.aborted) return;
-          if (!error.unavailable) throw error;
-          // Every Gemini model failed: answer this turn from the local Ollama server instead.
-          geminiFellBack = true;
-          setGeminiFailed(true);
-          notify(GEMINI_REPLY_ERRORS.unavailable);
-        }
+        const reply = await requestGeminiReply(key, systemText, turns, controller.signal);
         if (reply) {
           if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
           if (controller.signal.aborted) return;
@@ -1259,7 +1248,7 @@ function App() {
           ].slice(-6);
         }
       }
-      if (!browseQuery && !intent && (!useGemini || geminiFellBack)) {
+      if (!browseQuery && !intent && !useGemini) {
         const conversation = conversationRef.current.slice(-6);
         const messages = [
           {
@@ -1314,7 +1303,7 @@ function App() {
       if (controller.signal.aborted) return;
       dismissRichResponse(true);
       // A Gemini failure says nothing about the local Ollama server, so don't probe it.
-      if (useGemini && !geminiFellBack) {
+      if (useGemini) {
         console.error('[Gemini] reply failed', error);
         setGeminiFailed(true);
         setStage('ready');

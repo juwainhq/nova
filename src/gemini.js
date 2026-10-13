@@ -3,14 +3,20 @@
 export const BACKEND_STORAGE_KEY = 'nova_backend';
 export const GEMINI_KEY_STORAGE = 'nova_gemini_key';
 export const DEFAULT_BACKEND = 'ollama';
-// Tried in order. The first model that answers HTTP 200 is used for the rest of the session.
+// Free text models, tried in this order. The first one that answers HTTP 200 is used for the rest of
+// the session. Pro, Live, TTS, and transcription models are not used for chat.
 export const GEMINI_MODELS = Object.freeze([
-  'gemini-2.5-flash-preview-05-20',
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
   'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-flash-latest',
-  'gemini-1.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemma-4-31b-it',
+  'gemma-4-26b-a4b-it',
 ]);
 export const GEMINI_MODEL = GEMINI_MODELS[0];
 // The probe's pick lives in localStorage; the working model for this session lives in sessionStorage.
@@ -108,9 +114,12 @@ export function geminiEndpoint(apiKey, model = GEMINI_MODEL) {
 
 // NOVA's conversation turns use "assistant"; Gemini calls that role "model".
 export function geminiRequestBody(systemText, turns) {
+  // Gemini expects the conversation to open with a user turn; a trimmed history may start with NOVA.
+  const firstUser = turns.findIndex((turn) => turn.role !== 'assistant');
+  const kept = firstUser > 0 ? turns.slice(firstUser) : turns;
   return {
     system_instruction: { parts: [{ text: systemText }] },
-    contents: turns.map((turn) => ({
+    contents: kept.map((turn) => ({
       role: turn.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: turn.content }],
     })),
@@ -186,6 +195,7 @@ export function readGeminiText(payload) {
 
 export function friendlyGeminiError(error) {
   const detail = String(error?.message || '');
+  if (error?.unavailable) return GEMINI_REPLY_ERRORS.unavailable;
   if (error?.blocked || detail === GEMINI_REPLY_ERRORS.blocked) return GEMINI_REPLY_ERRORS.blocked;
   if (detail === GEMINI_REPLY_ERRORS.noKey) return GEMINI_REPLY_ERRORS.noKey;
   if (error?.status === 400 && /api key/i.test(detail)) return "Gemini doesn't accept that API key. Check it in Settings.";
