@@ -810,6 +810,8 @@ function App() {
   const avatarContainerRef = useRef(null);
   const conversationRef = useRef([]);
   const memoriesRef = useRef(memoryState.facts);
+  // The last memory NOVA saved this session, so a bare "forget that" has something to point at.
+  const lastSavedMemoryRef = useRef('');
 
   const SpeechRecognition = typeof window !== 'undefined'
     ? (window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -1086,15 +1088,22 @@ function App() {
         } else if (intent.type === 'remember') {
           const result = rememberFact(currentMemory.facts, intent.fact);
           if (result.status === 'error') answer = result.error;
-          else if (result.status === 'unchanged') answer = `I’ve got that in mind already: ${describeMemoryFact(intent.fact)}.`;
-          else {
+          else if (result.status === 'unchanged') {
+            lastSavedMemoryRef.current = intent.fact;
+            answer = `I’ve got that in mind already: ${describeMemoryFact(intent.fact)}.`;
+          } else {
             const saved = commitMemories(result.facts, false);
+            if (saved.ok) lastSavedMemoryRef.current = result.fact;
             answer = saved.ok
               ? `Got it! ${result.status === 'updated' ? 'I’ll remember the update' : 'I’ll keep that in mind'}: ${describeMemoryFact(result.fact)}.`
               : saved.error;
           }
         } else if (intent.type === 'forget') {
-          const result = forgetFact(currentMemory.facts, intent.query);
+          // "forget that" with no subject means the memory saved most recently, if it still exists.
+          const last = lastSavedMemoryRef.current;
+          const subject = !intent.query && last && currentMemory.facts.includes(last) ? last : intent.query;
+          const result = forgetFact(currentMemory.facts, subject);
+          if (result.status === 'removed') lastSavedMemoryRef.current = '';
           if (result.status === 'error') answer = result.error;
           else if (result.status === 'missing') answer = `I couldn’t find a saved memory about “${result.query}”. We can take a look together in Settings.`;
           else if (result.status === 'ambiguous') answer = `I found a few memories about “${result.query}”. Which one would you like me to forget?`;
@@ -1116,7 +1125,7 @@ function App() {
         const messages = [
           {
             role: 'system',
-            content: `${SYSTEM_PROMPT}\n\n${memoryPrompt(currentMemory.facts)}`,
+            content: [SYSTEM_PROMPT, memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n'),
           },
           ...conversation,
           { role: 'user', content: prompt },

@@ -122,7 +122,7 @@ How this works:
 
 ## Persistent memory
 
-NOVA saves user-provided facts across reloads and browser sessions in local storage under **`nova.memory`** (a JSON array of fact strings). Use the wake word or the mic button:
+NOVA saves user-provided facts across reloads and browser sessions in local storage under **`nova_memories`** (a JSON array of fact strings), and every chat request includes them in the system prompt. Use the wake word or the mic button:
 
 | Say | Result |
 | --- | --- |

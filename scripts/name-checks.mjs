@@ -109,7 +109,7 @@ export async function verifyNames(check) {
   check('name memory: a misheard introduction is saved as the real name',
     readMemoryStore(saved).facts.includes('my name is Juwain') && !readMemoryStore(saved).facts.join(' ').includes('join hug'));
   check('name memory: the profile is one JSON object under the memory key',
-    JSON.parse(saved.getItem(MEMORY_KEY)).facts.includes('my name is Juwain'));
+    JSON.parse(saved.getItem(MEMORY_KEY)).includes('my name is Juwain'));
   await finish(first);
   first.unmount();
 
@@ -194,5 +194,5 @@ export async function verifyNames(check) {
   writeMemoryStore(['my name is Juwain', 'I like gaming'], store);
   const stored = JSON.parse(store.getItem(MEMORY_KEY));
   check('name memory: the stored shape is readable data, and the name comes back out of it',
-    Array.isArray(stored.facts) && stored.facts.length === 2 && memoryName(stored.facts) === 'Juwain');
+    Array.isArray(stored) && stored.length === 2 && memoryName(stored) === 'Juwain');
 }

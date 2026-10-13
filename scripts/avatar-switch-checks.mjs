@@ -40,7 +40,7 @@ export async function verifyAvatarSwitch(check) {
   ]) check(`Bot expression: ${stage}/${mood} draws ${expected}`, avatarExpression(stage, mood) === expected);
 
   const store = createStorageDouble({
-    [MEMORY_KEY]: JSON.stringify({ facts: ['my favorite color is orange'] }),
+    [MEMORY_KEY]: JSON.stringify(['my favorite color is orange']),
     'nova.ollama.model': 'custom-model', 'nova.ollama.url': 'https://models.example/v1',
     'nova.tts.voice': 'samantha', 'nova.kokoro.voice': 'bf_emma', 'nova.transcript.visible': 'true',
   });
