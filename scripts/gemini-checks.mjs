@@ -2,7 +2,7 @@
 // memory and personality suites. Ollama stays the default; Gemini is opt-in via nova_backend.
 import {
   BACKEND_STORAGE_KEY, GEMINI_KEY_STORAGE, GEMINI_MODEL, friendlyGeminiError, geminiEndpoint, geminiError,
-  geminiRequestBody, normalizeBackend, readGeminiText,
+  geminiRequestBody, normalizeBackend, readGeminiText, requestGeminiReply, resetGeminiModelMemory, GEMINI_MODELS,
 } from '../src/gemini.js';
 import { MEMORY_KEY } from '../src/memory.js';
 import { createAppHarness, createStorageDouble } from './speech-test-fixtures.mjs';
@@ -23,11 +23,56 @@ export async function verifyGemini(check, renderPanel) {
   const body = geminiRequestBody('You are NOVA.\n\nThings the user has told you to remember:\n- my dog is Max', [
     { role: 'user', content: 'Hi' }, { role: 'assistant', content: 'Hello!' }, { role: 'user', content: 'Who am I?' },
   ]);
-  check('request body uses contents with user/model roles and a systemInstruction',
+  check('request body uses contents with user/model roles and a system_instruction',
     JSON.stringify(body.contents) === JSON.stringify([
       { role: 'user', parts: [{ text: 'Hi' }] }, { role: 'model', parts: [{ text: 'Hello!' }] }, { role: 'user', parts: [{ text: 'Who am I?' }] },
-    ]) && JSON.stringify(body.systemInstruction) === JSON.stringify({ parts: [{ text: 'You are NOVA.\n\nThings the user has told you to remember:\n- my dog is Max' }] }));
-  check('request body caps reply length like the Ollama path', body.generationConfig.maxOutputTokens === 80 && !('messages' in body));
+    ]) && JSON.stringify(body.system_instruction) === JSON.stringify({ parts: [{ text: 'You are NOVA.\n\nThings the user has told you to remember:\n- my dog is Max' }] }));
+  check('request body uses temperature 0.7 and maxOutputTokens 300', JSON.stringify(body.generationConfig) === JSON.stringify({ temperature: 0.7, maxOutputTokens: 300 })
+    && !('messages' in body) && !('systemInstruction' in body));
+  check('the Gemini model chain is 2.0-flash, then 1.5-flash, then 1.5-flash-8b', JSON.stringify(GEMINI_MODELS) === JSON.stringify(['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']));
+
+  // Model fallback with a stubbed fetch. Each case resets the session memory first.
+  const realFetch = globalThis.fetch;
+  const modelCalls = [];
+  const stubFetch = (respond) => {
+    globalThis.fetch = async (url) => {
+      const model = String(url).match(/models\/([^:]+):/)[1];
+      modelCalls.push(model);
+      const { status, body: payload } = respond(model);
+      return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+    };
+  };
+  const turns = [{ role: 'user', content: 'Hi' }];
+  const notFound = { status: 404, body: { error: { message: 'model not found' } } };
+  const replyFrom1 = { status: 200, body: { candidates: [{ content: { parts: [{ text: 'Hello there' }] }, finishReason: 'STOP' }] } };
+  try {
+    resetGeminiModelMemory();
+    stubFetch((model) => (model === 'gemini-1.5-flash' ? replyFrom1 : notFound));
+    const first = await requestGeminiReply(KEY, 'sys', turns);
+    check('a 404 moves on to the next Gemini model and reads its reply',
+      first.answer === 'Hello there' && first.model === 'gemini-1.5-flash' && JSON.stringify(modelCalls) === JSON.stringify(['gemini-2.0-flash', 'gemini-1.5-flash']));
+    modelCalls.length = 0;
+    await requestGeminiReply(KEY, 'sys', turns);
+    check('the model that worked is remembered for the rest of the session', JSON.stringify(modelCalls) === JSON.stringify(['gemini-1.5-flash']));
+
+    resetGeminiModelMemory();
+    modelCalls.length = 0;
+    stubFetch(() => notFound);
+    let unavailable = null;
+    try { await requestGeminiReply(KEY, 'sys', turns); } catch (error) { unavailable = error; }
+    check('when every model returns 404 the request reports unavailable after trying all three',
+      unavailable?.unavailable === true && JSON.stringify(modelCalls) === JSON.stringify(GEMINI_MODELS));
+
+    resetGeminiModelMemory();
+    modelCalls.length = 0;
+    stubFetch(() => ({ status: 403, body: { error: { message: 'denied' } } }));
+    let denied = null;
+    try { await requestGeminiReply(KEY, 'sys', turns); } catch (error) { denied = error; }
+    check('a non-404 error is reported at once without trying other models', denied?.status === 403 && !denied.unavailable && modelCalls.length === 1);
+  } finally {
+    globalThis.fetch = realFetch;
+    resetGeminiModelMemory();
+  }
 
   check('a Gemini reply is read from candidates and keeps its finish reason', JSON.stringify(readGeminiText({
     candidates: [{ content: { parts: [{ text: 'Hello ' }, { text: 'there.' }] }, finishReason: 'STOP' }],
@@ -84,8 +129,8 @@ export async function verifyGemini(check, renderPanel) {
   const sent = request ? JSON.parse(request.options.body) : null;
   check('a Gemini chat sends the key-bearing REST request to generateContent', request?.url === geminiEndpoint(KEY)
     && request.options.method === 'POST');
-  check('the system instruction carries NOVA’s prompt and the saved memories', sent?.systemInstruction?.parts?.[0]?.text.includes('You are NOVA')
-    && sent.systemInstruction.parts[0].text.endsWith('Things the user has told you to remember:\n- my dog is Max'));
+  check('the system instruction carries NOVA’s prompt and the saved memories', sent?.system_instruction?.parts?.[0]?.text.includes('You are NOVA')
+    && sent.system_instruction.parts[0].text.endsWith('Things the user has told you to remember:\n- my dog is Max'));
   check('the status chip says GEMINI while Gemini is active', text(ui.find('backend-chip')) === 'GEMINI');
   check('the question is the last user turn', sent?.contents?.at(-1)?.role === 'user' && sent.contents.at(-1).parts[0].text === 'what is my dog called');
   check('the Gemini reply is spoken and shown', first?.text === 'Your dog is Max.' && ui.utterances.length > 0);

@@ -46,7 +46,7 @@ import {
 import { createSpeechStream, textSpeechStream } from './speech-stream.js';
 import {
   BACKEND_STORAGE_KEY, DEFAULT_BACKEND, GEMINI_KEY_STORAGE, GEMINI_REPLY_ERRORS, friendlyGeminiError,
-  geminiEndpoint, geminiError, geminiRequestBody, normalizeBackend, readGeminiText,
+  normalizeBackend, requestGeminiReply,
 } from './gemini.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
@@ -1157,6 +1157,9 @@ function App() {
 
     let speech = null;
     let stream = null;
+    // Gemini is the chosen backend unless every Gemini model fails and this turn falls back to Local.
+    const useGemini = settings.backend === 'gemini';
+    let geminiFellBack = false;
     try {
       if (closeRequest) {
         closeBrowse();
@@ -1219,36 +1222,41 @@ function App() {
           { role: 'user', content: prompt },
           { role: 'assistant', content: answer },
         ].slice(-6);
-      } else if (!intent && settings.backend === 'gemini') {
+      } else if (!intent && useGemini) {
         const conversation = conversationRef.current.slice(-6);
         const systemText = [SYSTEM_PROMPT, memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n');
         const turns = [...conversation, { role: 'user', content: prompt }];
         const key = settings.geminiKey.trim();
         if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
-        const result = await fetch(geminiEndpoint(key), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify(geminiRequestBody(systemText, turns)),
-        });
-        const payload = await result.json().catch(() => null);
-        if (!result.ok) throw geminiError(payload, result.status);
-        const reply = readGeminiText(payload);
-        if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
-        if (controller.signal.aborted) return;
-        setGeminiFailed(false);
-        // Gemini's generateContent returns the whole reply at once, so it is spoken as one stream.
-        const replyStream = createSpeechStream();
-        stream = replyStream;
-        replyStream.push(reply.answer);
-        replyStream.end({ cutOff: reply.finishReason === 'MAX_TOKENS' });
-        answer = replyStream.text || reply.answer;
-        conversationRef.current = [
-          ...conversation,
-          { role: 'user', content: prompt },
-          { role: 'assistant', content: answer },
-        ].slice(-6);
-      } else if (!intent) {
+        let reply = null;
+        try {
+          reply = await requestGeminiReply(key, systemText, turns, controller.signal);
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          if (!error.unavailable) throw error;
+          // Every Gemini model failed: answer this turn from the local Ollama server instead.
+          geminiFellBack = true;
+          setGeminiFailed(true);
+          notify(GEMINI_REPLY_ERRORS.unavailable);
+        }
+        if (reply) {
+          if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
+          if (controller.signal.aborted) return;
+          setGeminiFailed(false);
+          // Gemini's generateContent returns the whole reply at once, so it is spoken as one stream.
+          const replyStream = createSpeechStream();
+          stream = replyStream;
+          replyStream.push(reply.answer);
+          replyStream.end({ cutOff: reply.finishReason === 'MAX_TOKENS' });
+          answer = replyStream.text || reply.answer;
+          conversationRef.current = [
+            ...conversation,
+            { role: 'user', content: prompt },
+            { role: 'assistant', content: answer },
+          ].slice(-6);
+        }
+      }
+      if (!browseQuery && !intent && (!useGemini || geminiFellBack)) {
         const conversation = conversationRef.current.slice(-6);
         const messages = [
           {
@@ -1303,7 +1311,8 @@ function App() {
       if (controller.signal.aborted) return;
       dismissRichResponse(true);
       // A Gemini failure says nothing about the local Ollama server, so don't probe it.
-      if (settings.backend === 'gemini') {
+      if (useGemini && !geminiFellBack) {
+        console.error('[Gemini] reply failed', error);
         setGeminiFailed(true);
         setStage('ready');
         notify(friendlyGeminiError(error));

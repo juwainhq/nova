@@ -3,33 +3,77 @@
 export const BACKEND_STORAGE_KEY = 'nova_backend';
 export const GEMINI_KEY_STORAGE = 'nova_gemini_key';
 export const DEFAULT_BACKEND = 'ollama';
-export const GEMINI_MODEL = 'gemini-2.0-flash';
+// Tried in order when a model answers 404. The first one that works is remembered for the session.
+export const GEMINI_MODELS = Object.freeze(['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']);
+export const GEMINI_MODEL = GEMINI_MODELS[0];
 
-// Same short, voice-friendly reply length and sampling as the Ollama path.
-export const GEMINI_SAMPLING = Object.freeze({ maxOutputTokens: 80, temperature: 0.7, topP: 0.9 });
+export const GEMINI_GENERATION = Object.freeze({ temperature: 0.7, maxOutputTokens: 300 });
+let preferredModelIndex = 0;
+
+export function resetGeminiModelMemory() {
+  preferredModelIndex = 0;
+}
 
 export function normalizeBackend(value) {
   return value === 'gemini' ? 'gemini' : DEFAULT_BACKEND;
 }
 
-export function geminiEndpoint(apiKey) {
-  return `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+export function geminiEndpoint(apiKey, model = GEMINI_MODEL) {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
 }
 
 // NOVA's conversation turns use "assistant"; Gemini calls that role "model".
 export function geminiRequestBody(systemText, turns) {
   return {
+    system_instruction: { parts: [{ text: systemText }] },
     contents: turns.map((turn) => ({
       role: turn.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: turn.content }],
     })),
-    systemInstruction: { parts: [{ text: systemText }] },
-    generationConfig: { ...GEMINI_SAMPLING },
+    generationConfig: { ...GEMINI_GENERATION },
   };
 }
 
+// Sends one turn, trying each model in order on 404. Resolves with { answer, finishReason, model }.
+// Throws { unavailable: true } when every model returns 404, so the caller can fall back to Local.
+export async function requestGeminiReply(apiKey, systemText, turns, signal) {
+  const body = JSON.stringify(geminiRequestBody(systemText, turns));
+  for (let index = preferredModelIndex; index < GEMINI_MODELS.length; index += 1) {
+    const model = GEMINI_MODELS[index];
+    let response;
+    try {
+      response = await fetch(geminiEndpoint(apiKey, model), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body,
+      });
+    } catch (error) {
+      if (!signal?.aborted) console.error('[Gemini] network error', { model, error });
+      throw error;
+    }
+    const payload = await response.json().catch(() => null);
+    if (response.status === 404) {
+      console.error('[Gemini] model not found, trying the next one', { model, message: payload?.error?.message });
+      continue;
+    }
+    if (!response.ok) {
+      console.error('[Gemini] request failed', { model, status: response.status, apiStatus: payload?.error?.status, message: payload?.error?.message });
+      throw geminiError(payload, response.status);
+    }
+    const reply = readGeminiText(payload);
+    preferredModelIndex = index;
+    return { ...reply, model };
+  }
+  console.error('[Gemini] every model returned 404', { models: GEMINI_MODELS });
+  const error = new Error(GEMINI_REPLY_ERRORS.unavailable);
+  error.unavailable = true;
+  throw error;
+}
+
 export const GEMINI_REPLY_ERRORS = {
-  noKey: 'Add your Gemini API key in Settings, or switch back to Ollama.',
+  noKey: 'Add your Gemini API key in Settings → AI tab',
+  unavailable: 'Gemini unavailable — switching to Local',
   noReply: "Gemini didn't send a reply this time. Let's try again.",
   blocked: "Gemini wasn't able to answer that one. Could we try a different question?",
 };
