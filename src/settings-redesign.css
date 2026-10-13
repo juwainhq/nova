@@ -1,47 +1,60 @@
 /* Settings redesign: settings trigger, 320px panel, tabs, pill backend choice,
    dark inputs, and the memory chips. Visual only; no behavior changes. */
 
-/* Settings trigger: 44px glass circle, 20px from the top-right corner. */
-.icon-button.settings-trigger {
+/* Top-right controls: settings and theme toggle share one fixed flex row. */
+.topbar-actions {
   position: fixed;
   top: 20px;
   right: 20px;
-  z-index: 3;
+  z-index: 50;
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  padding: 0;
+}
+/* Keep the row inside the top bar when the browse sheet shortens it. */
+.has-browse-panel .topbar-actions {
+  top: 2px;
+}
+.icon-button.settings-trigger,
+.icon-button.theme-toggle {
   width: 44px;
   height: 44px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.08);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   box-shadow: none;
+  cursor: pointer;
   transition: all 200ms ease;
 }
-.icon-button.settings-trigger:hover {
-  background: rgba(255, 255, 255, 0.18);
+.icon-button.settings-trigger:hover,
+.icon-button.theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.16);
   color: #fff;
   box-shadow: none;
   transform: scale(1.05);
 }
-.icon-button.settings-trigger svg {
+.icon-button.settings-trigger svg,
+.icon-button.theme-toggle svg {
   width: 20px;
   height: 20px;
+  color: #fff;
+}
+.icon-button.settings-trigger svg {
   transition: transform 200ms ease;
 }
 .icon-button.settings-trigger.is-open {
-  background: rgba(var(--accent-rgb), 0.3);
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.4);
 }
 .icon-button.settings-trigger.is-open svg {
   transform: rotate(45deg);
-}
-/* Keep the trigger inside the top bar when the browse sheet shortens it. */
-.has-browse-panel .icon-button.settings-trigger {
-  top: 2px;
-}
-/* Leave room for the trigger so the theme toggle sits beside it. */
-.topbar-actions {
-  padding-right: 64px;
 }
 
 /* Panel: 320px wide, header and footer share a 20px inset. */
