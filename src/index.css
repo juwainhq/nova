@@ -954,31 +954,7 @@ body::after {
   .avatar-figure { --figure-scale: 1 !important; --figure-y: 0deg !important; }
 }
 
-/* AI backend: a small pill beside the status text, and the Settings choice. The colors
-   come from currentColor, so the pill reads correctly in both the dark and light themes. */
-.backend-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  width: fit-content;
-  margin: -2px auto 14px;
-  padding: 3px 11px;
-  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, currentColor 9%, transparent);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1.4;
-  white-space: nowrap;
-  opacity: 0.9;
-}
-
-.backend-pill-gemini {
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
+/* AI backend: Settings choice. Accents use the avatar palette variable. */
 .backend-field {
   margin: 0;
   padding: 0;

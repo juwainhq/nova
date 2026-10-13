@@ -1,9 +1,9 @@
 /* Generated into dist/sw.js and the published root by build-pwa.mjs.
    Cache only this build's public app shell — never chat, models or browsing. */
-const VERSION = '89688af0a1a3df42a32e';
+const VERSION = '4a650d9ba8858eda1825';
 const SHELL_FILES = [
-  "./assets/index-CevyR8zG.css",
-  "./assets/index-DX1Xa5oS.js",
+  "./assets/index-DjM-EV3d.js",
+  "./assets/index-DyVA147R.css",
   "./icons/nova-192.png",
   "./icons/nova-192.svg",
   "./icons/nova-512.png",

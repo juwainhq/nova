@@ -50,6 +50,7 @@ import {
 } from './gemini.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
+const BACKEND_CHIP_LABELS = { gemini: 'GEMINI', local: 'LOCAL', offline: 'OFFLINE' };
 // Short replies for a fast first word. NOVA calls Ollama's OpenAI-compatible
 // endpoint, which has no `num_predict` field (it would be silently ignored).
 // Ollama maps `max_tokens` onto its native `num_predict` option. Without explicit
@@ -768,6 +769,8 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 function App() {
   const [stage, setStage] = useState('ready');
   const [connection, setConnection] = useState('checking');
+  // Set when a Gemini reply fails, cleared by the next successful one. Drives the status chip.
+  const [geminiFailed, setGeminiFailed] = useState(false);
   const [modelAvailable, setModelAvailable] = useState(null);
   const [settings, setSettings] = useState(() => ({
     model: readSetting('nova.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
@@ -1206,6 +1209,7 @@ function App() {
         const reply = readGeminiText(payload);
         if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
         if (controller.signal.aborted) return;
+        setGeminiFailed(false);
         // Gemini's generateContent returns the whole reply at once, so it is spoken as one stream.
         const replyStream = createSpeechStream();
         stream = replyStream;
@@ -1273,6 +1277,7 @@ function App() {
       dismissRichResponse(true);
       // A Gemini failure says nothing about the local Ollama server, so don't probe it.
       if (settings.backend === 'gemini') {
+        setGeminiFailed(true);
         setStage('ready');
         notify(friendlyGeminiError(error));
         return;
@@ -1741,6 +1746,11 @@ function App() {
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [settingsOpen, stage, dismissRichResponse, canInterrupt]);
 
+  // Which backend replies come from, or OFFLINE when the chosen one can't answer right now.
+  const backendChip = settings.backend === 'gemini'
+    ? (!settings.geminiKey || geminiFailed ? 'offline' : 'gemini')
+    : (connection === 'offline' ? 'offline' : 'local');
+
   const statusText = stage === 'ready' && connection === 'checking'
     ? STATUS_TEXT.starting : STATUS_TEXT[stage];
 
@@ -1806,12 +1816,6 @@ function App() {
       <main className="main-stage">
         <section className="assistant-stage" aria-label={`${APP_NAME} voice assistant`}>
           <p className={`status-word status-word-${stage}`} aria-live="polite" aria-atomic="true">{statusText}</p>
-          <span
-            className={`backend-pill backend-pill-${settings.backend}`}
-            title={settings.backend === 'gemini' ? 'Replies come from Google Gemini (change in Settings)' : 'Replies come from Ollama on this computer (change in Settings)'}
-          >
-            {settings.backend === 'gemini' ? '⚡ Gemini' : '🖥️ Local'}
-          </span>
           <div
             ref={avatarContainerRef}
             className={`avatar-container${avatar === 'bot' ? ' avatar-container-bot' : ''} ${avatarActivity} ${avatarMood}`}
@@ -1871,6 +1875,16 @@ function App() {
             <span className="mic-button-sheen" />
           </button>
         </div>
+        <span
+          className={`backend-chip backend-chip-${backendChip}`}
+          role="status"
+          title={backendChip === 'gemini' ? 'Replies come from Google Gemini (change in Settings)'
+            : backendChip === 'local' ? 'Replies come from Ollama on this computer (change in Settings)'
+              : 'The chosen AI backend is not reachable right now'}
+        >
+          <span className="backend-chip-dot" aria-hidden="true" />
+          {BACKEND_CHIP_LABELS[backendChip]}
+        </span>
         <AvatarSwitcher avatar={avatar} onChange={selectAvatar} />
       </footer>
 

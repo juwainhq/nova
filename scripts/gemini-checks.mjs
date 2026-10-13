@@ -86,7 +86,7 @@ export async function verifyGemini(check, renderPanel) {
     && request.options.method === 'POST');
   check('the system instruction carries NOVA’s prompt and the saved memories', sent?.systemInstruction?.parts?.[0]?.text.includes('You are NOVA')
     && sent.systemInstruction.parts[0].text.endsWith('Things the user has told you to remember:\n- my dog is Max'));
-  check('the status badge says ⚡ Gemini while Gemini is active', text(ui.find('backend-pill')) === '⚡ Gemini');
+  check('the status chip says GEMINI while Gemini is active', text(ui.find('backend-chip')) === 'GEMINI');
   check('the question is the last user turn', sent?.contents?.at(-1)?.role === 'user' && sent.contents.at(-1).parts[0].text === 'what is my dog called');
   check('the Gemini reply is spoken and shown', first?.text === 'Your dog is Max.' && ui.utterances.length > 0);
   check('no Ollama chat or model-list request is made in Gemini mode', !ui.requests.some((r) => r.url.endsWith('/chat/completions') || r.url.endsWith('/models')));
@@ -100,15 +100,21 @@ export async function verifyGemini(check, renderPanel) {
   const countBefore = geminiPosts().length;
   ui.fetchOverride = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'API key not valid. Please pass a valid API key.' } }) });
   await ask('can you hear me');
+  check('the status chip turns OFFLINE after a failed Gemini request', text(ui.find('backend-chip')) === 'OFFLINE');
   check('an invalid key shows a friendly Settings hint without raw API text', geminiPosts().length === countBefore + 1
     && toast(ui).includes("Gemini doesn't accept that API key") && !toast(ui).includes('pass a valid'));
 
   // Switching backends at runtime: Ollama is still the default when nothing is chosen.
-  const ollamaDefault = await createAppHarness({ storage: createStorageDouble({ 'nova.transcript.visible': 'true' }), modelsOffline: true });
+  const ollamaDefault = await createAppHarness({ storage: createStorageDouble({ 'nova.transcript.visible': 'true' }), modelsOffline: false });
   ollamaDefault.clock.tick();
   await ollamaDefault.settle();
   check('a new install still starts on Ollama, with no Gemini requests', !ollamaDefault.requests.some((r) => r.url.startsWith(GEMINI_HOST)));
-  check('the badge says 🖥️ Local by default', text(ollamaDefault.find('backend-pill')) === '🖥️ Local');
+  check('the status chip says LOCAL when Ollama is reachable', text(ollamaDefault.find('backend-chip')) === 'LOCAL');
+  const ollamaDown = await createAppHarness({ storage: createStorageDouble({ 'nova.transcript.visible': 'true' }), modelsOffline: true });
+  ollamaDown.clock.tick();
+  await ollamaDown.settle();
+  check('the status chip says OFFLINE when Ollama is unreachable', text(ollamaDown.find('backend-chip')) === 'OFFLINE');
+  ollamaDown.unmount();
   ollamaDefault.unmount();
   ui.unmount();
 }
