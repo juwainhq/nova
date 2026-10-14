@@ -30,8 +30,12 @@ export async function verifyGemini(check, renderPanel) {
   check('a trimmed history that opens with NOVA starts the request at the user turn', JSON.stringify(geminiRequestBody('s', [
     { role: 'assistant', content: 'Old reply' }, { role: 'user', content: 'Now' },
   ]).contents) === JSON.stringify([{ role: 'user', parts: [{ text: 'Now' }] }]));
-  check('request body uses temperature 0.7 and maxOutputTokens 300', JSON.stringify(body.generationConfig) === JSON.stringify({ temperature: 0.7, maxOutputTokens: 300 })
+  check('Detailed request body uses temperature 0.7 and maxOutputTokens 300', JSON.stringify(geminiRequestBody('s', [{ role: 'user', content: 'Hi' }], 'detailed').generationConfig) === JSON.stringify({ temperature: 0.7, maxOutputTokens: 300 })
     && !('messages' in body) && !('systemInstruction' in body));
+  check('Fast request body uses temperature 0.6 and maxOutputTokens 80 by default', JSON.stringify(body.generationConfig) === JSON.stringify({ temperature: 0.6, maxOutputTokens: 80 })
+    && JSON.stringify(geminiRequestBody('s', [{ role: 'user', content: 'Hi' }]).generationConfig) === JSON.stringify({ temperature: 0.6, maxOutputTokens: 80 }));
+  check('Fast mode uses the streaming endpoint and Detailed the full-reply endpoint',
+    geminiEndpoint(KEY, GEMINI_MODEL, true).includes(':streamGenerateContent?alt=sse&key=') && geminiEndpoint(KEY).includes(':generateContent?key='));
   check('the Gemini model list is tried in the agreed priority order', JSON.stringify(GEMINI_MODELS) === JSON.stringify([
     'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite',
     'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemma-4-31b-it', 'gemma-4-26b-a4b-it',
@@ -43,13 +47,15 @@ export async function verifyGemini(check, renderPanel) {
   let listedNames = GEMINI_MODELS;
   const stubFetch = (respond) => {
     globalThis.fetch = async (url) => {
-      if (!String(url).includes(':generateContent')) {
+      if (!/generatecontent/i.test(String(url))) {
         return new Response(JSON.stringify({ models: listedNames.map((name) => ({ name: `models/${name}` })) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       const model = String(url).match(/models\/([^:]+):/)[1];
       modelCalls.push(model);
       const { status, body: payload } = respond(model);
-      return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+      // Streamed requests get server-sent events, as the real endpoint sends them.
+      const text = String(url).includes('streamGenerateContent') ? `data: ${JSON.stringify(payload)}\n\n` : JSON.stringify(payload);
+      return new Response(text, { status, headers: { 'Content-Type': 'application/json' } });
     };
   };
   const turns = [{ role: 'user', content: 'Hi' }];
@@ -89,6 +95,24 @@ export async function verifyGemini(check, renderPanel) {
     let denied = null;
     try { await requestGeminiReply(KEY, 'sys', turns); } catch (error) { denied = error; }
     check('a rejected key stops at once and still reports unavailable', denied?.unavailable === true && modelCalls.length === 1);
+
+    // Response speed: Fast streams pieces to speech as they arrive; Detailed asks for the whole reply.
+    resetGeminiModelMemory();
+    globalThis.fetch = async () => new Response('data: {"candidates":[{"content":{"parts":[{"text":"Hello "}]}}]}\n\ndata: {"candidates":[{"content":{"parts":[{"text":"there."}]},"finishReason":"STOP"}]}\n\n', { status: 200 });
+    const pieces = [];
+    const streamed = await requestGeminiReply(KEY, 'sys', turns, undefined, { speed: 'fast', onDelta: (piece) => pieces.push(piece) });
+    check('Fast mode hands each streamed piece to speech as it arrives', JSON.stringify(pieces) === JSON.stringify(['Hello ', 'there.'])
+      && streamed.answer === 'Hello there.' && streamed.finishReason === 'STOP');
+    let detailedUrl = '';
+    globalThis.fetch = async (url) => {
+      detailedUrl = String(url);
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Full reply.' }] } }] }), { status: 200 });
+    };
+    const detailedPieces = [];
+    const full = await requestGeminiReply(KEY, 'sys', turns, undefined, { speed: 'detailed', onDelta: (piece) => detailedPieces.push(piece) });
+    check('Detailed mode asks for the full reply in one response, with no streaming', detailedPieces.length === 0
+      && full.answer === 'Full reply.' && !detailedUrl.includes('streamGenerateContent'));
+    resetGeminiModelMemory();
 
     // The probe reads the model list and keeps the first flash model from the priority list.
     globalThis.fetch = async (url) => {
@@ -136,7 +160,7 @@ export async function verifyGemini(check, renderPanel) {
   const ui = await createAppHarness({ storage, modelsOffline: true });
   ui.clock.tick();
   await ui.settle();
-  const geminiPosts = () => ui.requests.filter((request) => request.url.startsWith(GEMINI_HOST) && request.url.includes(':generateContent'));
+  const geminiPosts = () => ui.requests.filter((request) => request.url.startsWith(GEMINI_HOST) && /generatecontent/i.test(request.url));
   let geminiAnswer = 'Your dog is Max.';
   ui.fetchOverride = async (url) => {
     if (!url.startsWith(GEMINI_HOST)) throw new Error(`unexpected request to ${url}`);
@@ -156,7 +180,7 @@ export async function verifyGemini(check, renderPanel) {
   const first = await ask('what is my dog called');
   const request = geminiPosts()[0];
   const sent = request ? JSON.parse(request.options.body) : null;
-  check('a Gemini chat sends the key-bearing REST request to generateContent', request?.url === geminiEndpoint(KEY)
+  check('a Gemini chat sends the key-bearing REST request to generateContent', request?.url === geminiEndpoint(KEY, GEMINI_MODEL, true)
     && request.options.method === 'POST');
   check('the system instruction carries NOVA’s prompt and the saved memories', sent?.system_instruction?.parts?.[0]?.text.includes('You are NOVA')
     && sent.system_instruction.parts[0].text.endsWith('Things the user has told you to remember:\n- my dog is Max'));

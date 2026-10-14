@@ -71,3 +71,16 @@
 .backend-chip-offline .backend-chip-dot {
   background: currentColor;
 }
+
+/* Response speed indicator (bolt for Fast, bubble for Detailed), beside the label. */
+.backend-chip-speed {
+  display: inline-flex;
+  margin-left: 6px;
+  opacity: 0.85;
+}
+
+.backend-chip-speed svg {
+  display: block;
+  width: 10px;
+  height: 10px;
+}

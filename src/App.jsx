@@ -17,6 +17,7 @@ import {
   OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT, NOVA_LANGUAGES, LANGUAGE_RECOGNITION, LANGUAGE_STORAGE_KEY, languagePrompt, normalizeLanguage,
   friendlyOllamaError, ollamaError,
 } from './personality.js';
+import { SPEED_MODES, SPEED_STORAGE_KEY, DEFAULT_SPEED, normalizeSpeed, speedMode } from './speed.js';
 import {
   MEMORY_KEY, describeMemoryFact, forgetFact, memoryName, memoryPrompt, parseMemoryIntent,
   readMemoryStore, rememberFact, writeMemoryStore,
@@ -55,8 +56,8 @@ const BACKEND_CHIP_LABELS = { gemini: 'GEMINI', local: 'LOCAL', offline: 'OFFLIN
 // endpoint, which has no `num_predict` field (it would be silently ignored).
 // Ollama maps `max_tokens` onto its native `num_predict` option. Without explicit
 // values that endpoint also defaults temperature and top_p to 1.0.
-const OLLAMA_NUM_PREDICT = 80;
-const OLLAMA_SAMPLING = Object.freeze({ max_tokens: OLLAMA_NUM_PREDICT, temperature: 0.7, top_p: 0.9 });
+// Reply length and temperature follow the Response speed setting.
+const ollamaSampling = (speed) => ({ max_tokens: speedMode(speed).maxTokens, temperature: speedMode(speed).temperature, top_p: 0.9 });
 
 // Safety net for engines that lose an utterance's end event, never start a queued
 // one, or wedge mid-reply (Chrome's long network-voice bug). Without it NOVA stays
@@ -204,6 +205,20 @@ function MoonIcon() {
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M19.6 13.4A8.2 8.2 0 1 1 10.6 4.4a6.5 6.5 0 0 0 9 9Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+// Response speed indicator next to the backend badge: a lightning bolt for Fast, a bubble for Detailed.
+function SpeedIcon({ mode }) {
+  const label = mode === 'detailed' ? 'Detailed replies' : 'Fast replies';
+  return (
+    <span className="backend-chip-speed" role="img" aria-label={label} title={label}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        {mode === 'detailed'
+          ? <path d="M4 5h16v11H9l-5 4V5Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+          : <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" fill="currentColor" />}
+      </svg>
+    </span>
   );
 }
 
@@ -660,6 +675,23 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 {NOVA_LANGUAGES.map((language) => <option key={language.id} value={language.id}>{language.label}</option>)}
               </select>
             </div>
+            <fieldset className="settings-field backend-field">
+              <legend className="field-label">Response speed</legend>
+              <div className="backend-options">
+                {Object.values(SPEED_MODES).map((mode) => (
+                  <label key={mode.id} className={`backend-option${draft.speed === mode.id ? ' is-selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="response-speed"
+                      value={mode.id}
+                      checked={draft.speed === mode.id}
+                      onChange={() => setDraft((current) => ({ ...current, speed: mode.id }))}
+                    />
+                    <span><strong>{mode.label}</strong></span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <div className="settings-field">
               <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice (Kokoro AI)</label>
               <select
@@ -821,6 +853,7 @@ function App() {
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
     language: normalizeLanguage(readSetting(LANGUAGE_STORAGE_KEY, 'en')),
+    speed: normalizeSpeed(readSetting(SPEED_STORAGE_KEY, DEFAULT_SPEED)),
   }));
   // Read by the speech recognizer at each start, so it always uses the latest saved language.
   const languageRef = useRef(settings.language);
@@ -1243,24 +1276,30 @@ function App() {
         const turns = [...conversation, { role: 'user', content: prompt }];
         const key = settings.geminiKey.trim();
         if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
-        const reply = await requestGeminiReply(key, systemText, turns, controller.signal);
-        if (reply) {
-          if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
-          if (controller.signal.aborted) return;
-          setGeminiFailed(false);
-          setGeminiModel(reply.model);
-          // Gemini's generateContent returns the whole reply at once, so it is spoken as one stream.
-          const replyStream = createSpeechStream();
-          stream = replyStream;
-          replyStream.push(reply.answer);
-          replyStream.end({ cutOff: reply.finishReason === 'MAX_TOKENS' });
-          answer = replyStream.text || reply.answer;
-          conversationRef.current = [
-            ...conversation,
-            { role: 'user', content: prompt },
-            { role: 'assistant', content: answer },
-          ].slice(-6);
-        }
+        const speedSettings = speedMode(settings.speed);
+        // Fast mode speaks each piece of the reply as it arrives. Detailed waits for the full reply.
+        const replyStream = createSpeechStream();
+        stream = replyStream;
+        const startSpeaking = () => {
+          if (!speech && replyStream.pending && !controller.signal.aborted) speech = speakRef.current?.(replyStream) ?? null;
+        };
+        const reply = await requestGeminiReply(key, systemText, turns, controller.signal, {
+          speed: settings.speed,
+          onDelta: speedSettings.earlySpeech ? (delta) => { replyStream.push(delta); startSpeaking(); } : undefined,
+        });
+        if (controller.signal.aborted) { replyStream.cancel(); return; }
+        if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
+        setGeminiFailed(false);
+        setGeminiModel(reply.model);
+        if (!speedSettings.earlySpeech) replyStream.push(reply.answer);
+        replyStream.end({ cutOff: reply.finishReason === 'MAX_TOKENS' });
+        answer = replyStream.text || reply.answer;
+        startSpeaking();
+        conversationRef.current = [
+          ...conversation,
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: answer },
+        ].slice(-6);
       }
       if (!browseQuery && !intent && !useGemini) {
         const conversation = conversationRef.current.slice(-6);
@@ -1276,7 +1315,7 @@ function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
-          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true, ...OLLAMA_SAMPLING }),
+          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true, ...ollamaSampling(settings.speed) }),
         });
         if (!result.ok) {
           const payload = await result.json().catch(() => ({}));
@@ -1290,7 +1329,7 @@ function App() {
         };
         const reply = await readChatCompletionStream(result, {
           onDelta: (delta) => replyStream.push(delta),
-          onChunk: () => { replyStream.flush(); startSpeaking(); },
+          onChunk: () => { replyStream.flush(); if (speedMode(settings.speed).earlySpeech) startSpeaking(); },
         });
         if (controller.signal.aborted) { replyStream.cancel(); return; }
         // At the token limit the last sentence is unfinished: it isn't spoken or kept.
@@ -1795,7 +1834,7 @@ function App() {
     : (connection === 'offline' ? 'offline' : 'local');
 
   const statusText = stage === 'ready' && connection === 'checking'
-    ? STATUS_TEXT.starting : STATUS_TEXT[stage];
+    ? STATUS_TEXT.starting : stage === 'speaking' ? 'Speaking…' : STATUS_TEXT[stage];
 
   const avatarActivity = { listening: 'is-listening', thinking: 'is-thinking', speaking: 'is-speaking' }[stage] || '';
   const avatarMood = stage === 'ready'
@@ -1811,6 +1850,7 @@ function App() {
       voiceKey: (nextSettings.voiceKey || '').trim(),
       kokoroVoice: kokoroVoice(nextSettings.kokoroVoice).id,
       language: normalizeLanguage(nextSettings.language),
+      speed: normalizeSpeed(nextSettings.speed),
       showTranscript: Boolean(nextSettings.showTranscript),
     };
     try {
@@ -1821,6 +1861,7 @@ function App() {
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem(KOKORO_VOICE_KEY, updatedSettings.kokoroVoice);
       window.localStorage.setItem(LANGUAGE_STORAGE_KEY, updatedSettings.language);
+      window.localStorage.setItem(SPEED_STORAGE_KEY, updatedSettings.speed);
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
@@ -1923,6 +1964,7 @@ function App() {
           <span className="backend-chip-row">
             <span className="backend-chip-dot" aria-hidden="true" />
             {BACKEND_CHIP_LABELS[backendChip]}
+            {backendChip !== 'offline' && <SpeedIcon mode={settings.speed} />}
           </span>
           {backendChip === 'gemini' && geminiModel && <small className="backend-chip-model">{geminiModelLabel(geminiModel)}</small>}
         </span>

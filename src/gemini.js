@@ -3,6 +3,8 @@
 export const BACKEND_STORAGE_KEY = 'nova_backend';
 export const GEMINI_KEY_STORAGE = 'nova_gemini_key';
 export const DEFAULT_BACKEND = 'ollama';
+import { speedMode } from './speed.js';
+
 // Free text models, tried in this order. The first one that answers HTTP 200 is used for the rest of
 // the session. Pro, Live, TTS, and transcription models are not used for chat.
 export const GEMINI_MODELS = Object.freeze([
@@ -22,7 +24,6 @@ export const GEMINI_MODEL = GEMINI_MODELS[0];
 // The probe's pick lives in localStorage; the working model for this session lives in sessionStorage.
 export const GEMINI_MODEL_STORAGE = 'nova_gemini_model';
 
-export const GEMINI_GENERATION = Object.freeze({ temperature: 0.7, maxOutputTokens: 300 });
 
 // Used only when browser storage is blocked, so the session choice still sticks in memory.
 let memoryModel = null;
@@ -120,12 +121,13 @@ export function normalizeBackend(value) {
   return value === 'gemini' ? 'gemini' : DEFAULT_BACKEND;
 }
 
-export function geminiEndpoint(apiKey, model = GEMINI_MODEL) {
-  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+export function geminiEndpoint(apiKey, model = GEMINI_MODEL, stream = false) {
+  const method = stream ? 'streamGenerateContent?alt=sse&' : 'generateContent?';
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:${method}key=${encodeURIComponent(apiKey.trim())}`;
 }
 
 // NOVA's conversation turns use "assistant"; Gemini calls that role "model".
-export function geminiRequestBody(systemText, turns) {
+export function geminiRequestBody(systemText, turns, speed = 'fast') {
   // Gemini expects the conversation to open with a user turn; a trimmed history may start with NOVA.
   const firstUser = turns.findIndex((turn) => turn.role !== 'assistant');
   const kept = firstUser > 0 ? turns.slice(firstUser) : turns;
@@ -135,15 +137,69 @@ export function geminiRequestBody(systemText, turns) {
       role: turn.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: turn.content }],
     })),
-    generationConfig: { ...GEMINI_GENERATION },
+    generationConfig: { temperature: speedMode(speed).temperature, maxOutputTokens: speedMode(speed).maxTokens },
   };
 }
 
+// Reads a streamed reply (server-sent events). Each text piece goes to onDelta as it arrives.
+// Responses without a readable body are read whole and passed to onDelta once.
+async function readGeminiStream(response, onDelta) {
+  if (!response.body?.getReader) {
+    const reply = readGeminiText(await response.json().catch(() => null));
+    if (reply.answer) onDelta(reply.answer);
+    return reply;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let answer = '';
+  let finishReason = null;
+  let blockReason = null;
+  const handle = (line) => {
+    if (!line.startsWith('data:')) return;
+    const data = line.slice(5).trim();
+    if (!data) return;
+    let payload;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (payload.promptFeedback?.blockReason) blockReason = payload.promptFeedback.blockReason;
+    const candidate = payload.candidates?.[0];
+    const delta = (candidate?.content?.parts || []).map((part) => part?.text || '').join('');
+    if (delta) {
+      answer += delta;
+      onDelta(delta);
+    }
+    if (candidate?.finishReason) finishReason = candidate.finishReason;
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    lines.forEach(handle);
+  }
+  buffer += decoder.decode();
+  if (buffer) handle(buffer);
+  if (!answer && blockReason) {
+    const error = new Error(GEMINI_REPLY_ERRORS.blocked);
+    error.blocked = true;
+    throw error;
+  }
+  return { answer: answer.trim(), finishReason };
+}
+
 // Tries the session's model first, then the probe's pick, then the list in order. The first 200
-// wins. Resolves with { answer, finishReason, model }. Throws { unavailable: true } when no model
-// answers, so the caller can show the message and fall back to Local.
-export async function requestGeminiReply(apiKey, systemText, turns, signal) {
-  const body = JSON.stringify(geminiRequestBody(systemText, turns));
+// wins. Fast mode streams the reply and calls options.onDelta with each piece as it arrives.
+// Resolves with { answer, finishReason, model }. Throws { unavailable: true } when no model
+// answers, so the caller can show the message.
+export async function requestGeminiReply(apiKey, systemText, turns, signal, options = {}) {
+  const speed = options.speed || 'fast';
+  const streaming = speedMode(speed).earlySpeech && typeof options.onDelta === 'function';
+  const body = JSON.stringify(geminiRequestBody(systemText, turns, speed));
   let order = [...new Set([readSessionGeminiModel(), readStoredGeminiModel(), ...GEMINI_MODELS].filter(Boolean))];
   if (!readSessionGeminiModel()) {
     // Ask only models the key can use. Each unavailable model otherwise costs a slow 404 round trip.
@@ -159,7 +215,7 @@ export async function requestGeminiReply(apiKey, systemText, turns, signal) {
   for (const model of order) {
     let response;
     try {
-      response = await fetch(geminiEndpoint(apiKey, model), {
+      response = await fetch(geminiEndpoint(apiKey, model, streaming), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal,
@@ -169,12 +225,14 @@ export async function requestGeminiReply(apiKey, systemText, turns, signal) {
       if (!signal?.aborted) console.error('[Gemini] network error', { model, error });
       throw error;
     }
-    const payload = await response.json().catch(() => null);
     if (response.ok) {
-      const reply = readGeminiText(payload);
+      const reply = streaming
+        ? await readGeminiStream(response, options.onDelta)
+        : readGeminiText(await response.json().catch(() => null));
       writeSessionGeminiModel(model);
       return { ...reply, model };
     }
+    const payload = await response.json().catch(() => null);
     console.error('[Gemini] model did not answer with 200', {
       model, status: response.status, apiStatus: payload?.error?.status, message: payload?.error?.message,
     });

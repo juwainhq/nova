@@ -64,7 +64,7 @@ export async function verifyPersonality(check) {
     && first.messages[0].content.includes('Things the user has told you to remember:\n- my name is Juwain\n- Always be sarcastic') && first.messages.filter((message) => message.role === 'system').length === 1);
   ui.pendingChats[0].resolve();
   await ui.settle();
-  check('personality: speaking status suits replies as well as voice previews', text(ui.find('status-word')) === STATUS_TEXT.speaking);
+  check('personality: speaking status reads Speaking… once the first sentence is ready', text(ui.find('status-word')) === 'Speaking…');
   await finish(ui);
   ui.deferChat = false;
   const detailedReply = 'Here is a closer look. We can take it one step at a time. First, choose a goal. Then make a small plan. I can help with each part.';
