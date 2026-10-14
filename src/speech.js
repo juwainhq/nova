@@ -111,7 +111,9 @@ export const WAKE_GREET_MS = 700;
 // onWake is called with why: 'question' (the request came in the same breath, so the app must
 // not greet over it), 'wake' (a bare wake phrase, finalized), 'partial' (heard mid-word, and a
 // question may still follow).
-const wakePattern = new RegExp(`\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b[\\s,.!?:;—-]*`, 'i');
+// "এই নোভা" is the Bangla wake phrase. Bengali letters are not word characters, so it ends with a
+// lookahead that rejects a following Bengali letter instead of \\b.
+const wakePattern = new RegExp(`(?:\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b|এই[\\s,]+নোভা(?![\\u0980-\\u09FF]))[\\s,.!?:;—।-]*`, 'i');
 
 // Speech recognition hears the user's own name as ordinary English, so "my name is
 // Juwain" arrives as "join hug" and the fact is saved (or greeted) wrong. Every
@@ -180,6 +182,8 @@ export function createVoiceListener({
   onError = () => {},
   timers = globalThis,
   now = () => Date.now(),
+  // The recognition language is read before each start, so a new Language setting applies next time.
+  language = () => 'en-US',
 }) {
   let recognition;
   let wakeSupported = false;
@@ -246,6 +250,11 @@ export function createVoiceListener({
     try {
       if (wakeSupported) recognition.continuous = true;
       recognition.interimResults = true;
+      try {
+        recognition.lang = language();
+      } catch {
+        // Keep the language already set on the recognizer.
+      }
       recognition.start();
     } catch (error) {
       const failedMode = activeMode;

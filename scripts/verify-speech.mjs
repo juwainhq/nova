@@ -22,6 +22,7 @@ import { verifyNames } from './name-checks.mjs';
 import { verifyAvatarSwitch } from './avatar-switch-checks.mjs';
 import { verifyAvatarExpressions } from './avatar-expression-checks.mjs';
 import { verifyGemini } from './gemini-checks.mjs';
+import { verifyLanguage } from './language-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -788,6 +789,7 @@ await verifyNames(check);
 await verifyAvatarSwitch(check);
 await verifyAvatarExpressions(check);
 await verifyGemini(check, renderPanel);
+verifyLanguage(check);
 
 // The theme toggle is App state, so its contract is behavioural, not just textual.
 const darkUi = await createAppHarness();

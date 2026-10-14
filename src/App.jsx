@@ -14,7 +14,7 @@ import {
 } from './web-browse.js';
 import { APP_NAME } from './brand.js';
 import {
-  OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT,
+  OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT, NOVA_LANGUAGES, LANGUAGE_RECOGNITION, LANGUAGE_STORAGE_KEY, languagePrompt, normalizeLanguage,
   friendlyOllamaError, ollamaError,
 } from './personality.js';
 import {
@@ -650,6 +650,17 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             </div>
             <div role="tabpanel" id="settings-panel-voice" aria-labelledby="settings-tab-voice" className="settings-tab-panel" hidden={settingsTab !== 'voice'}>
             <div className="settings-field">
+              <label className="field-label" htmlFor="nova-language">Language</label>
+              <select
+                id="nova-language"
+                className="settings-select"
+                value={draft.language}
+                onChange={(event) => setDraft((current) => ({ ...current, language: event.target.value }))}
+              >
+                {NOVA_LANGUAGES.map((language) => <option key={language.id} value={language.id}>{language.label}</option>)}
+              </select>
+            </div>
+            <div className="settings-field">
               <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice (Kokoro AI)</label>
               <select
                 id="nova-voice"
@@ -809,7 +820,10 @@ function App() {
     voiceKey: readSetting(TTS_VOICE_KEY),
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
+    language: normalizeLanguage(readSetting(LANGUAGE_STORAGE_KEY, 'en')),
   }));
+  // Read by the speech recognizer at each start, so it always uses the latest saved language.
+  const languageRef = useRef(settings.language);
   const [avatar, setAvatar] = useState(readAvatar);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
@@ -1225,7 +1239,7 @@ function App() {
         ].slice(-6);
       } else if (!intent && useGemini) {
         const conversation = conversationRef.current.slice(-6);
-        const systemText = [SYSTEM_PROMPT, memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n');
+        const systemText = [SYSTEM_PROMPT, languagePrompt(settings.language), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n');
         const turns = [...conversation, { role: 'user', content: prompt }];
         const key = settings.geminiKey.trim();
         if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
@@ -1253,7 +1267,7 @@ function App() {
         const messages = [
           {
             role: 'system',
-            content: [SYSTEM_PROMPT, memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n'),
+            content: [SYSTEM_PROMPT, languagePrompt(settings.language), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n'),
           },
           ...conversation,
           { role: 'user', content: prompt },
@@ -1629,6 +1643,7 @@ function App() {
   useEffect(() => {
     const listener = createVoiceListener({
       Recognition: SpeechRecognition,
+      language: () => LANGUAGE_RECOGNITION[languageRef.current] || 'en-US',
       onStandbyChange: setWakeStandby,
       onSpeechDetected: (mode) => {
         dismissRichResponse();
@@ -1795,6 +1810,7 @@ function App() {
       geminiKey: (nextSettings.geminiKey || '').trim(),
       voiceKey: (nextSettings.voiceKey || '').trim(),
       kokoroVoice: kokoroVoice(nextSettings.kokoroVoice).id,
+      language: normalizeLanguage(nextSettings.language),
       showTranscript: Boolean(nextSettings.showTranscript),
     };
     try {
@@ -1804,6 +1820,7 @@ function App() {
       window.localStorage.setItem(GEMINI_KEY_STORAGE, updatedSettings.geminiKey);
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem(KOKORO_VOICE_KEY, updatedSettings.kokoroVoice);
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, updatedSettings.language);
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
@@ -1818,6 +1835,7 @@ function App() {
         .then((model) => { if (model) setGeminiModel(model); })
         .catch((error) => console.error('[Gemini] model probe failed', error));
     }
+    languageRef.current = updatedSettings.language;
     setSettings(updatedSettings);
     setSettingsOpen(false);
     notify("All set! Your settings are saved.");

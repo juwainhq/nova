@@ -56,3 +56,26 @@ export function friendlyOllamaError(error, model = '') {
   }
   return OLLAMA_REPLY_ERRORS.noStream;
 }
+
+// Language the user speaks. English is the default. Auto-detect replies in the language that was spoken.
+export const LANGUAGE_STORAGE_KEY = 'nova_language';
+export const DEFAULT_LANGUAGE = 'en';
+export const NOVA_LANGUAGES = Object.freeze([
+  { id: 'en', label: 'English' },
+  { id: 'bn', label: 'বাংলা (Bangla)' },
+  { id: 'auto', label: 'Auto-detect' },
+]);
+// Speech recognition language for each selection. Auto-detect asks for both, as specified.
+export const LANGUAGE_RECOGNITION = Object.freeze({ en: 'en-US', bn: 'bn-BD', auto: 'bn-BD,en-US' });
+const BANGLA_PROMPT = `The user speaks Bangla. Always respond in Bangla (Bengali script). Keep responses short and natural, as if speaking conversationally. Do not mix English unless the user does.`;
+const AUTO_PROMPT = `The user may speak Bangla or English. Reply in the same language the user just spoke, using Bengali script for Bangla. Keep responses short and natural, as if speaking conversationally.`;
+
+export function normalizeLanguage(value) {
+  return NOVA_LANGUAGES.some((language) => language.id === value) ? value : DEFAULT_LANGUAGE;
+}
+
+export function languagePrompt(language) {
+  if (language === 'bn') return BANGLA_PROMPT;
+  if (language === 'auto') return AUTO_PROMPT;
+  return '';
+}
