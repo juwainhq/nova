@@ -202,7 +202,7 @@ export async function verifyStreaming(check) {
   await settle(web.ui);
   check('streaming: the reply finishes after its last sentence, with every word spoken in order', atStage(web.ui, 'ready')
     && web.ui.utterances.map((utterance) => utterance.text).join(' ') === 'Sure! Here is the rest. And more.');
-  check('streaming: Web Speech keeps the fallback rate and pitch on every sentence', web.ui.utterances.every((utterance) => utterance.rate === 0.92 && utterance.pitch === 0.88));
+  check('streaming: Web Speech keeps the fallback rate and pitch on every sentence', web.ui.utterances.every((utterance) => utterance.rate === 1 && utterance.pitch === 0.88));
 
   // Token limit: the unfinished last sentence is neither spoken nor kept.
   sse = web.next();

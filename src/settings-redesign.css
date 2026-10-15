@@ -243,3 +243,16 @@
   color: #f87171;
   border-color: rgba(239, 68, 68, 0.5);
 }
+
+/* Browser voice list: a scrollable listbox, not a single-line dropdown. */
+.settings-panel .browser-voice-select[size] {
+  height: auto;
+  padding: 6px;
+}
+.settings-panel .browser-voice-select option {
+  padding: 4px 6px;
+}
+.settings-panel .speech-rate-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}

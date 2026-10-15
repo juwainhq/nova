@@ -532,3 +532,45 @@ export function createWakeChime(AudioContext) {
     },
   };
 }
+
+// Speaking rate for browser voices (Kokoro sets its own pace) and the saved voice name.
+export const SPEECH_RATE_KEY = 'nova_speech_rate';
+export const VOICE_NAME_KEY = 'nova_voice_name';
+export const SPEECH_RATE = Object.freeze({ min: 0.8, max: 1.6, step: 0.1, default: 1 });
+
+export function normalizeSpeechRate(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return SPEECH_RATE.default;
+  const rounded = Math.round(number * 10) / 10;
+  return Math.min(SPEECH_RATE.max, Math.max(SPEECH_RATE.min, rounded));
+}
+
+// Voices recommended for speed and clarity. Any name containing "Online" or "Natural" also counts.
+const RECOMMENDED_VOICE_NAMES = [
+  'Google UK English Female',
+  'Google US English',
+  'Microsoft Aria Online (Natural)',
+  'Microsoft Jenny Online (Natural)',
+];
+export function isFastVoice(voice) {
+  const name = voice?.name || '';
+  return RECOMMENDED_VOICE_NAMES.some((known) => name.includes(known)) || /\b(?:Online|Natural)\b/i.test(name);
+}
+
+export function isBanglaVoice(voice) {
+  return /^bn(?:-|_|$)/i.test(voice?.lang || '');
+}
+
+// Every voice the browser offers, in two speed tiers.
+export function voiceTiers(voices) {
+  const list = (voices || []).filter(Boolean);
+  return { fast: list.filter(isFastVoice), normal: list.filter((voice) => !isFastVoice(voice)) };
+}
+
+// "⚡ Microsoft Aria Online (Natural) · en-US · offline" and "🇧🇩 Bangla · …" for Bangla voices.
+export function voiceListLabel(voice) {
+  const parts = [`${isFastVoice(voice) ? '⚡ ' : ''}${voice.name}`, voice.lang || 'unknown'];
+  if (isBanglaVoice(voice)) parts.push('🇧🇩 Bangla');
+  parts.push(voice.localService ? 'offline' : 'network');
+  return parts.join(' · ');
+}

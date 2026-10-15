@@ -18,3 +18,19 @@ export function verifyLanguage(check) {
   check('a Bengali word that begins with the wake phrase does not wake NOVA', parseWakeWord('এই নোভাকে বলো') === null);
   check('English "hey nova" still wakes NOVA', parseWakeWord('hey nova what time is it')?.question === 'what time is it');
 }
+
+// Voice list and speaking-rate checks.
+import { isFastVoice, normalizeSpeechRate, SPEECH_RATE, voiceListLabel, voiceTiers } from '../src/speech.js';
+
+export function verifyVoiceList(check) {
+  check('speaking rate is limited to 0.8 to 1.6 in 0.1 steps, defaulting to 1.0',
+    normalizeSpeechRate(undefined) === 1 && normalizeSpeechRate('0.5') === 0.8 && normalizeSpeechRate('3') === 1.6
+    && normalizeSpeechRate('1.25') === 1.3 && SPEECH_RATE.step === 0.1);
+  check('recommended and Online/Natural voices are marked fast', isFastVoice({ name: 'Google US English' })
+    && isFastVoice({ name: 'Microsoft Jenny Online (Natural)' }) && !isFastVoice({ name: 'Samantha' }));
+  const voices = [{ name: 'Samantha', lang: 'en-US' }, { name: 'Google US English', lang: 'en-US' }, { name: 'Bengali Hemanta', lang: 'bn-BD', localService: true }];
+  const tiers = voiceTiers(voices);
+  check('the voice list keeps every browser voice, split into Fast and Normal',
+    tiers.fast.length === 1 && tiers.normal.length === 2 && tiers.fast[0].name === 'Google US English');
+  check('Bangla voices are labelled 🇧🇩 Bangla in the list', voiceListLabel(voices[2]).includes('🇧🇩 Bangla') && voiceListLabel(voices[1]).startsWith('⚡ '));
+}

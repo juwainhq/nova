@@ -36,9 +36,15 @@ import {
   describeVoice,
   groupVoices,
   listVoices,
+  normalizeSpeechRate,
   resolveVoice,
+  SPEECH_RATE,
+  SPEECH_RATE_KEY,
+  VOICE_NAME_KEY,
   voiceKey,
+  voiceListLabel,
   voiceOptionLabel,
+  voiceTiers,
 } from './speech.js';
 import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
@@ -460,10 +466,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
     }
   };
 
-  const { natural: naturalVoices, basic: basicVoices } = groupVoices(voices);
+  const { fast: fastVoices, normal: normalVoices } = voiceTiers(voices);
   // An empty key follows the priority list, including voices arriving after load.
   const autoVoice = defaultVoice(voices);
-  const selectedKey = voiceKey(resolveVoice(voices, draft.voiceKey));
+  const speechRate = normalizeSpeechRate(draft.speechRate);
+  // Options are keyed by voice name, the same value that is saved.
+  const selectedKey = resolveVoice(voices, draft.voiceKey)?.name || '';
   const selectedVoice = resolveVoice(voices, selectedKey) || autoVoice;
   // A saved voice can vanish if the user uninstalls it; say so rather than silently
   // switching under them.
@@ -718,6 +726,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 <select
                   id="nova-browser-voice"
                   className="settings-select browser-voice-select"
+                  size={8}
                   value={selectedKey}
                   disabled={!voiceCount}
                   onChange={(event) => {
@@ -727,24 +736,24 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 >
                   <option value="">{voiceCount ? `Automatic — ${autoVoice?.name || 'browser default'}`
                     : speechAvailable ? "Voices are still loading — browser default" : "No voices here yet"}</option>
-                  {naturalVoices.length > 0 && (
-                    <optgroup label="Natural / Online">
-                      {naturalVoices.map((voice) => (
-                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                  {fastVoices.length > 0 && (
+                    <optgroup label="Fast">
+                      {fastVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voice.name}>{voiceListLabel(voice)}</option>
                       ))}
                     </optgroup>
                   )}
-                  {basicVoices.length > 0 && (
-                    <optgroup label="Basic system voices">
-                      {basicVoices.map((voice) => (
-                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                  {normalVoices.length > 0 && (
+                    <optgroup label="Normal">
+                      {normalVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voice.name}>{voiceListLabel(voice)}</option>
                       ))}
                     </optgroup>
                   )}
                 </select>
                 <p className="field-hint" aria-live="polite">
                   {voiceCount
-                    ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Natural / Online voices are at the top; “network” voices need a connection.`
+                    ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Fast voices are listed first, ⚡ marks the recommended ones, and “network” voices need a connection.`
                     : speechAvailable ? "Your voices are still loading. We can use the browser default for now."
                       : "I can’t find a voice to use in this browser."}
                 </p>
@@ -752,10 +761,25 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   {savedVoiceMissing && selectedVoice
                     ? `I can’t find your saved voice here, so I’m using ${describeVoice(selectedVoice)} for now.`
                     : selectedVoice
-                      ? `Your voice: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
-                      : `Browser default · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
+                      ? `Your voice: ${describeVoice(selectedVoice)} · rate ${speechRate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
+                      : `Browser default · rate ${speechRate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
                 </p>
               </>}
+              <div className="settings-field">
+                <label className="field-label" htmlFor="nova-speech-rate">Speaking rate</label>
+                <p className="field-hint" aria-live="polite">Speed: {speechRate.toFixed(1)}×</p>
+                <input
+                  id="nova-speech-rate"
+                  className="speech-rate-slider"
+                  type="range"
+                  min={SPEECH_RATE.min}
+                  max={SPEECH_RATE.max}
+                  step={SPEECH_RATE.step}
+                  value={speechRate}
+                  onChange={(event) => setDraft((current) => ({ ...current, speechRate: normalizeSpeechRate(event.target.value) }))}
+                />
+                <p className="field-hint">Applies to browser voices. Kokoro sets its own pace.</p>
+              </div>
               <div className="voice-preview">
                 <button className="test-ollama-button test-voice-button" type="button" disabled={voiceTestDisabled || voiceTestPlaying} onClick={() => onTestVoice?.(draft.voiceKey, kokoroVoice(draft.kokoroVoice).id)}>Test Voice</button>
                 {voiceTestPlaying && <button className="text-button voice-test-stop" type="button" onClick={onStopVoiceTest}>Stop test</button>}
@@ -849,7 +873,8 @@ function App() {
     ollamaUrl: readSetting('nova.ollama.url', defaultOllamaUrl()),
     backend: normalizeBackend(readSetting(BACKEND_STORAGE_KEY, DEFAULT_BACKEND)),
     geminiKey: readSetting(GEMINI_KEY_STORAGE),
-    voiceKey: readSetting(TTS_VOICE_KEY),
+    voiceKey: readSetting(VOICE_NAME_KEY) || readSetting(TTS_VOICE_KEY),
+    speechRate: normalizeSpeechRate(readSetting(SPEECH_RATE_KEY, String(SPEECH_RATE.default))),
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
     language: normalizeLanguage(readSetting(LANGUAGE_STORAGE_KEY, 'en')),
@@ -857,6 +882,8 @@ function App() {
   }));
   // Read by the speech recognizer at each start, so it always uses the latest saved language.
   const languageRef = useRef(settings.language);
+  // Read by every browser utterance, so the saved rate applies to each reply.
+  const speechRateRef = useRef(settings.speechRate);
   const [avatar, setAvatar] = useState(readAvatar);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
@@ -1441,7 +1468,7 @@ function App() {
           utterance.voice = voice;
           if (voice.lang) utterance.lang = voice.lang;
         }
-        utterance.rate = TTS.rate;
+        utterance.rate = speechRateRef.current;
         utterance.pitch = TTS.pitch;
         utterance.volume = TTS.volume;
         current = utterance;
@@ -1850,6 +1877,7 @@ function App() {
       voiceKey: (nextSettings.voiceKey || '').trim(),
       kokoroVoice: kokoroVoice(nextSettings.kokoroVoice).id,
       language: normalizeLanguage(nextSettings.language),
+      speechRate: normalizeSpeechRate(nextSettings.speechRate),
       speed: normalizeSpeed(nextSettings.speed),
       showTranscript: Boolean(nextSettings.showTranscript),
     };
@@ -1862,6 +1890,8 @@ function App() {
       window.localStorage.setItem(KOKORO_VOICE_KEY, updatedSettings.kokoroVoice);
       window.localStorage.setItem(LANGUAGE_STORAGE_KEY, updatedSettings.language);
       window.localStorage.setItem(SPEED_STORAGE_KEY, updatedSettings.speed);
+      window.localStorage.setItem(VOICE_NAME_KEY, updatedSettings.voiceKey);
+      window.localStorage.setItem(SPEECH_RATE_KEY, String(updatedSettings.speechRate));
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
@@ -1877,6 +1907,7 @@ function App() {
         .catch((error) => console.error('[Gemini] model probe failed', error));
     }
     languageRef.current = updatedSettings.language;
+    speechRateRef.current = updatedSettings.speechRate;
     setSettings(updatedSettings);
     setSettingsOpen(false);
     notify("All set! Your settings are saved.");

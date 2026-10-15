@@ -22,7 +22,7 @@ import { verifyNames } from './name-checks.mjs';
 import { verifyAvatarSwitch } from './avatar-switch-checks.mjs';
 import { verifyAvatarExpressions } from './avatar-expression-checks.mjs';
 import { verifyGemini } from './gemini-checks.mjs';
-import { verifyLanguage } from './language-checks.mjs';
+import { verifyLanguage, verifyVoiceList } from './language-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -150,7 +150,7 @@ check('system prompt carries the brand name', /You are \$\{APP_NAME\}/.test(pers
 check('system prompt asks for a warm personality', /a warm, friendly, and genuinely helpful/.test(personality));
 check('status messages are conversational rather than machine codes', personality.includes('Ready when you are.') && personality.includes('Talking with you.'));
 check('settings written under the old name are adopted', /LEGACY_STORAGE_PREFIX/.test(app));;
-check('app sends the specified parameters', /utterance\.rate = TTS\.rate/.test(app)
+check('app sends the specified parameters', /utterance\.rate = speechRateRef\.current/.test(app)
   && /utterance\.pitch = TTS\.pitch/.test(app)
   && /utterance\.volume = TTS\.volume/.test(app));
 check('voice list comes from getVoices', /getVoices/.test(await readFile(resolve(root, 'src/speech.js'), 'utf8')));
@@ -220,28 +220,28 @@ check('Kokoro selector defaults to af_bella', /selected/.test(kokoroOptions[0]?.
 check('unavailable Kokoro shows the labelled browser fallback selector', /<label[^>]*for="nova-browser-voice"[^>]*>Browser voice \(fallback\)<\/label>/.test(panel)
   && /couldn’t load Kokoro here/.test(panel));
 check('selector lists every voice plus Automatic', options.length === MACHINE.length + 1, `${options.length - 1} of ${MACHINE.length}`);
-check('selector separates Natural/Online from basic system voices', /<optgroup label="Natural \/ Online">/.test(panel) && /<optgroup label="Basic system voices">/.test(panel));
-check('Natural/Online voices appear above basic voices', panel.indexOf('<optgroup label="Natural / Online">') < panel.indexOf('<optgroup label="Basic system voices">'));
+check('selector separates Fast voices from Normal voices', /<optgroup label="Fast">/.test(panel) && /<optgroup label="Normal">/.test(panel));
+check('Fast voices appear above Normal voices', panel.indexOf('<optgroup label="Fast">') < panel.indexOf('<optgroup label="Normal">'));
 check('labels mark which voices work offline', options.some((option) => option.label.includes('· offline')) && options.some((option) => option.label.includes('· network')));
 
-const bestKey = voiceKey(best);
+const bestKey = best.name;
 const selectedOption = options.find((option) => option.value === bestKey);
 check('the natural voice is offered as an option', Boolean(selectedOption), bestKey);
 check('Automatic is selected and names the priority winner', /<option value="" selected/.test(panel) && panel.includes(`Automatic — ${best.name}`));
-check('panel states the speaking parameters', panel.includes(`rate ${TTS.rate}`) && panel.includes(`pitch ${TTS.pitch}`) && panel.includes(`volume ${TTS.volume}`));
+check('panel states the speaking parameters', panel.includes('rate 1') && panel.includes(`pitch ${TTS.pitch}`) && panel.includes(`volume ${TTS.volume}`));
 
-const naturalOptions = panel.match(/<optgroup label="Natural \/ Online">([\s\S]*?)<\/optgroup>/)?.[1] ?? '';
-check('rendered top group contains only Natural/Online voices', [...naturalOptions.matchAll(/<option[^>]*>([^<]*)<\/option>/g)]
-  .every((match) => /natural|online/i.test(match[1])));
+const naturalOptions = panel.match(/<optgroup label="Fast">([\s\S]*?)<\/optgroup>/)?.[1] ?? '';
+check('rendered Fast group contains only Fast voices', [...naturalOptions.matchAll(/<option[^>]*>([^<]*)<\/option>/g)]
+  .every((match) => /⚡|natural|online/i.test(match[1])));
 check('Test Voice is a non-submit button', /<button[^>]*class="[^"]*test-voice-button[^>]*type="button"[^>]*>Test Voice<\/button>/.test(panel));
 check('panel shows the exact sample phrase', panel.includes("Hey, I&#x27;m Nova. Ready when you are."));
 
 // A saved choice must win over the automatic one.
 const savedPanel = await renderPanel(MACHINE, 'Samantha-uri');
-check('a saved voice is selected', /<option value="Samantha-uri"[^>]*selected/.test(savedPanel)
-  || savedPanel.includes('value="Samantha-uri" selected'), 'Samantha-uri');
+check('a saved voice is selected', /<option value="Samantha"[^>]*selected/.test(savedPanel)
+  || savedPanel.includes('value="Samantha" selected'), 'Samantha');
 const legacyVoicePanel = await renderPanel(MACHINE, 'Samantha');
-check('legacy name selections normalize to the dropdown URI', /<option value="Samantha-uri"[^>]*selected/.test(legacyVoicePanel));
+check('legacy name selections normalize to the voice name option', /<option value="Samantha"[^>]*selected/.test(legacyVoicePanel));
 
 // A voice that has since been uninstalled must be reported, not silently swapped.
 const missingPanel = await renderPanel(MACHINE, 'Ghost-uri');
@@ -560,7 +560,7 @@ check('a question enters thinking and disables the mic button', atStage(ui, 'thi
 mic.end();
 await ui.settle();
 const reply = ui.utterances[0];
-check('App speaks the answer with the selected browser voice and parameters', reply?.voice?.name === 'Samantha' && reply.rate === .92 && reply.pitch === .88 && reply.volume === 1);
+check('App speaks the answer with the selected browser voice and parameters', reply?.voice?.name === 'Samantha' && reply.rate === 1 && reply.pitch === .88 && reply.volume === 1);
 check('queued speech stays speaking, not happy or standby', atStage(ui, 'speaking') && !ui.find('wake-indicator') && !ui.find('avatar-container')?.props.className.includes('is-happy'));
 const beforeSpeechEnd = mic.starts.length;
 ui.clock.tick(10000);
@@ -790,6 +790,7 @@ await verifyAvatarSwitch(check);
 await verifyAvatarExpressions(check);
 await verifyGemini(check, renderPanel);
 verifyLanguage(check);
+verifyVoiceList(check);
 
 // The theme toggle is App state, so its contract is behavioural, not just textual.
 const darkUi = await createAppHarness();
