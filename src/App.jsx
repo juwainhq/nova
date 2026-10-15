@@ -815,7 +815,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               <label className="settings-toggle-row" htmlFor="startup-sound">
                 <span className="settings-toggle-copy">
                   <span className="config-title">Startup sound</span>
-                  <span className="config-detail">A warm chime when NOVA wakes up</span>
+                  <span className="config-detail">A warm tone on your first click or tap</span>
                 </span>
                 <input
                   id="startup-sound"
