@@ -9,8 +9,9 @@ export function verifyLanguage(check) {
   check('an unknown or missing saved language falls back to English',
     normalizeLanguage(null) === 'en' && normalizeLanguage('fr') === 'en' && normalizeLanguage('bn') === 'bn');
   check('English adds no extra prompt text', languagePrompt('en') === '');
-  check('Bangla adds the exact Bangla response instruction', languagePrompt('bn') === 'The user speaks Bangla. Always respond in Bangla (Bengali script). Keep responses short and natural, as if speaking conversationally. Do not mix English unless the user does.');
-  check('Auto-detect asks NOVA to reply in the language the user spoke', /same language the user just spoke/.test(languagePrompt('auto')));
+  check('Bangla adds the exact Bangla response instruction', languagePrompt('bn') === 'তুমি NOVA, একটি বাংলা ভয়েস অ্যাসিস্ট্যান্ট। সবসময় বাংলায় উত্তর দাও। উত্তর সংক্ষিপ্ত এবং স্বাভাবিক কথ্য ভাষায় রাখো। ইংরেজি শব্দ এড়িয়ে চলো যতটা সম্ভব।');
+  check('Auto-detect replies in Bangla when the transcript has Bengali characters, otherwise English',
+    languagePrompt('auto', 'আজ কেমন আছো') === languagePrompt('bn') && languagePrompt('auto', 'how are you') === 'The user speaks English. Respond in English.');
   check('recognition language follows the selection: en-US, bn-BD, or both',
     LANGUAGE_RECOGNITION.en === 'en-US' && LANGUAGE_RECOGNITION.bn === 'bn-BD' && LANGUAGE_RECOGNITION.auto === 'bn-BD,en-US');
   check('the Bangla wake phrase এই নোভা starts a request', parseWakeWord('এই নোভা, আজকের আবহাওয়া কেমন?')?.question === 'আজকের আবহাওয়া কেমন?');
@@ -33,4 +34,13 @@ export function verifyVoiceList(check) {
   check('the voice list keeps every browser voice, split into Fast and Normal',
     tiers.fast.length === 1 && tiers.normal.length === 2 && tiers.fast[0].name === 'Google US English');
   check('Bangla voices are labelled 🇧🇩 Bangla in the list', voiceListLabel(voices[2]).includes('🇧🇩 Bangla') && voiceListLabel(voices[1]).startsWith('⚡ '));
+}
+
+// Bangla wake phrases, plus the English name spoken on its own.
+export function verifyBanglaWake(check) {
+  check('wake: হেই নোভা starts a request', parseWakeWord('হেই নোভা, সময় কত?')?.question === 'সময় কত?');
+  check('wake: bare নোভা starts a request', parseWakeWord('নোভা, আজকের খবর বলো')?.question === 'আজকের খবর বলো');
+  check('wake: bare nova starts a request', parseWakeWord('Nova, what time is it')?.question === 'what time is it');
+  check('wake: a Bengali word containing নোভা does not wake NOVA', parseWakeWord('আনোভাবে কাজ করো') === null);
+  check('wake: a longer Bengali word starting with নোভা does not wake NOVA', parseWakeWord('নোভাল কী') === null);
 }

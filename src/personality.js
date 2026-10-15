@@ -67,15 +67,16 @@ export const NOVA_LANGUAGES = Object.freeze([
 ]);
 // Speech recognition language for each selection. Auto-detect asks for both, as specified.
 export const LANGUAGE_RECOGNITION = Object.freeze({ en: 'en-US', bn: 'bn-BD', auto: 'bn-BD,en-US' });
-const BANGLA_PROMPT = `The user speaks Bangla. Always respond in Bangla (Bengali script). Keep responses short and natural, as if speaking conversationally. Do not mix English unless the user does.`;
-const AUTO_PROMPT = `The user may speak Bangla or English. Reply in the same language the user just spoke, using Bengali script for Bangla. Keep responses short and natural, as if speaking conversationally.`;
+const BANGLA_PROMPT = 'তুমি NOVA, একটি বাংলা ভয়েস অ্যাসিস্ট্যান্ট। সবসময় বাংলায় উত্তর দাও। উত্তর সংক্ষিপ্ত এবং স্বাভাবিক কথ্য ভাষায় রাখো। ইংরেজি শব্দ এড়িয়ে চলো যতটা সম্ভব।';
+const ENGLISH_PROMPT = 'The user speaks English. Respond in English.';
 
 export function normalizeLanguage(value) {
   return NOVA_LANGUAGES.some((language) => language.id === value) ? value : DEFAULT_LANGUAGE;
 }
 
-export function languagePrompt(language) {
+// Auto-detect answers in Bangla when the transcript has Bengali characters, otherwise in English.
+export function languagePrompt(language, transcript = '') {
   if (language === 'bn') return BANGLA_PROMPT;
-  if (language === 'auto') return AUTO_PROMPT;
+  if (language === 'auto') return /[\u0980-\u09FF]/.test(transcript) ? BANGLA_PROMPT : ENGLISH_PROMPT;
   return '';
 }

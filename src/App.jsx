@@ -37,6 +37,8 @@ import {
   groupVoices,
   listVoices,
   normalizeSpeechRate,
+  BANGLA_TEXT,
+  isBanglaVoice,
   resolveVoice,
   SPEECH_RATE,
   SPEECH_RATE_KEY,
@@ -1299,7 +1301,7 @@ function App() {
         ].slice(-6);
       } else if (!intent && useGemini) {
         const conversation = conversationRef.current.slice(-6);
-        const systemText = [SYSTEM_PROMPT, languagePrompt(settings.language), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n');
+        const systemText = [SYSTEM_PROMPT, languagePrompt(settings.language, prompt), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n');
         const turns = [...conversation, { role: 'user', content: prompt }];
         const key = settings.geminiKey.trim();
         if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
@@ -1333,7 +1335,7 @@ function App() {
         const messages = [
           {
             role: 'system',
-            content: [SYSTEM_PROMPT, languagePrompt(settings.language), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n'),
+            content: [SYSTEM_PROMPT, languagePrompt(settings.language, prompt), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n'),
           },
           ...conversation,
           { role: 'user', content: prompt },
@@ -1464,9 +1466,12 @@ function App() {
         if (text === null) { finishSpeech(true, true); return; }
 
         const utterance = new SpeechSynthesisUtterance(text);
-        if (voice) {
-          utterance.voice = voice;
-          if (voice.lang) utterance.lang = voice.lang;
+        // Bangla text uses a Bangla voice when one is installed.
+        const banglaVoice = BANGLA_TEXT.test(text) ? voices.find(isBanglaVoice) : null;
+        const utteranceVoice = banglaVoice || voice;
+        if (utteranceVoice) {
+          utterance.voice = utteranceVoice;
+          if (utteranceVoice.lang) utterance.lang = utteranceVoice.lang;
         }
         utterance.rate = speechRateRef.current;
         utterance.pitch = TTS.pitch;
@@ -1632,7 +1637,9 @@ function App() {
     const engine = kokoroRef.current;
     const audio = kokoroAudioRef.current;
     const browserVoice = typeof window.speechSynthesis?.speak === 'function' && typeof SpeechSynthesisUtterance === 'function';
-    if (engine && audio && (engine.state === 'ready' || (engine.state === 'loading' && (preview || !browserVoice)))) {
+    // Kokoro can't read Bangla, so a Bangla reply goes to the browser's Bangla voice.
+    const banglaReply = BANGLA_TEXT.test(typeof input === 'string' ? input : input.text);
+    if (!banglaReply && engine && audio && (engine.state === 'ready' || (engine.state === 'loading' && (preview || !browserVoice)))) {
       return speakKokoro(source, engine, audio, kokoroVoiceId, selectedVoiceKey, preview);
     }
     return speakBrowser(source, selectedVoiceKey, preview);

@@ -22,7 +22,7 @@ import { verifyNames } from './name-checks.mjs';
 import { verifyAvatarSwitch } from './avatar-switch-checks.mjs';
 import { verifyAvatarExpressions } from './avatar-expression-checks.mjs';
 import { verifyGemini } from './gemini-checks.mjs';
-import { verifyLanguage, verifyVoiceList } from './language-checks.mjs';
+import { verifyBanglaWake, verifyLanguage, verifyVoiceList } from './language-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -344,7 +344,7 @@ restart.recognition.end();
 restart.clock.tick(799);
 check('natural standby endings restart with a delay, not a hot loop', restart.recognition.starts.length === 1);
 restart.clock.tick(1);
-restart.recognition.result('nova, not a wake from a previous session');
+restart.recognition.result('something else, not a wake from a previous session');
 check('silence is harmless and a new session clears the partial wake phrase', restart.events.errors.length === 0 && restart.events.wakes === 0 && restart.recognition.starts.length === 2);
 restart.listener.dispose();
 
@@ -791,6 +791,7 @@ await verifyAvatarExpressions(check);
 await verifyGemini(check, renderPanel);
 verifyLanguage(check);
 verifyVoiceList(check);
+verifyBanglaWake(check);
 
 // The theme toggle is App state, so its contract is behavioural, not just textual.
 const darkUi = await createAppHarness();

@@ -111,9 +111,15 @@ export const WAKE_GREET_MS = 700;
 // onWake is called with why: 'question' (the request came in the same breath, so the app must
 // not greet over it), 'wake' (a bare wake phrase, finalized), 'partial' (heard mid-word, and a
 // question may still follow).
-// "এই নোভা" is the Bangla wake phrase. Bengali letters are not word characters, so it ends with a
-// lookahead that rejects a following Bengali letter instead of \\b.
-const wakePattern = new RegExp(`(?:\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b|এই[\\s,]+নোভা(?![\\u0980-\\u09FF]))[\\s,.!?:;—।-]*`, 'i');
+// Bangla wake phrases: "এই নোভা", "হেই নোভা" and "নোভা" on its own. Bengali letters are not word
+// characters, so these use lookarounds instead of \\b. Bare "nova" is also accepted, since Bangla
+// speakers often say the English name.
+const wakePhrases = `\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b|(?:এই|হেই)[\\s,]+নোভা(?![\\u0980-\\u09FF])`;
+const wakePattern = new RegExp(`(?:${wakePhrases}|(?<![\\u0980-\\u09FF])নোভা(?![\\u0980-\\u09FF])|\\b${APP_NAME.toLowerCase()}\\b)[\\s,.!?:;—।-]*`, 'i');
+// Interrupts keep the stricter phrases: a bare name is too likely to be part of a reply NOVA is speaking.
+const interruptWakePattern = new RegExp(`(?:${wakePhrases})[\\s,.!?:;—।-]*`, 'i');
+// Any Bengali character: the reply is Bangla, so it is spoken with a Bangla voice.
+export const BANGLA_TEXT = /[\u0980-\u09FF]/;
 
 // Speech recognition hears the user's own name as ordinary English, so "my name is
 // Juwain" arrives as "join hug" and the fact is saved (or greeted) wrong. Every
@@ -132,8 +138,8 @@ export function correctTranscript(text) {
 
 // Keep the user's question, including its punctuation, but never send the wake
 // phrase or unrelated standby transcripts to Ollama.
-export function parseWakeWord(text) {
-  const match = wakePattern.exec(text || '');
+export function parseWakeWord(text, pattern = wakePattern) {
+  const match = pattern.exec(text || '');
   return match ? { question: text.slice(match.index + match[0].length).trim() } : null;
 }
 
@@ -152,7 +158,7 @@ export function isSameSpeech(left, right) {
 export function parseInterrupt(transcript, { final = false, spoken = '' } = {}) {
   const heard = spokenWords(transcript).trim();
   if (!heard) return null;
-  const wake = parseWakeWord(transcript);
+  const wake = parseWakeWord(transcript, interruptWakePattern);
   const command = wake ? WAKE_WORD : /(?:^|\s)(stop|wait)(?:\s+(?:it|please|nova|now))*$/.exec(heard)?.[1];
   if (!command) return null;
   const alone = heard === WAKE_WORD || /^(?:(?:hey\s+)?nova\s+)?(?:(?:stop|wait)\s*)+(?:\s*(?:it|please|nova|now))*$/.test(heard);
