@@ -49,7 +49,8 @@ import {
   voiceTiers,
 } from './speech.js';
 import { STARTUP_AUDIO_KEY, STARTUP_SOUND_KEY, armStartupSound, readStartupAudio, startupSoundEnabled } from './startup-sound.js';
-import { PLAYLIST_URL_KEY, STARTUP_SONG_KEY, armStartupSong, playlistIdFromUrl, startupSongEnabled } from './startup-song.js';
+import { PLAYLIST_URL_KEY, STARTUP_SONG_KEY, playlistIdFromUrl, startSessionSong, startupSongEnabled } from './startup-song.js';
+import StartupPlayer from './StartupPlayer.jsx';
 import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
   createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
@@ -970,9 +971,10 @@ function App() {
   const [avatar, setAvatar] = useState(readAvatar);
   // The startup sound plays on the first click of a session (see startup-sound.js).
   useEffect(() => { armStartupSound(); }, []);
-  // The startup playlist's embed. Empty until the first session interaction, and empty again after 30 seconds.
-  const [songSource, setSongSource] = useState('');
-  useEffect(() => { armStartupSong(setSongSource); }, []);
+  // The startup playlist card: shown once per session, when a playlist is saved.
+  const [startupListId, setStartupListId] = useState('');
+  useEffect(() => { setStartupListId(startSessionSong()); }, []);
+  const dismissStartupPlayer = useCallback(() => setStartupListId(''), []);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
   useEffect(() => {
@@ -2092,15 +2094,7 @@ function App() {
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
-        <iframe
-          id="startup-player"
-          title="Startup playlist"
-          src={songSource || 'about:blank'}
-          allow="autoplay"
-          tabIndex={-1}
-          aria-hidden="true"
-          style={{ position: 'fixed', width: 0, height: 0, opacity: 0, pointerEvents: 'none', visibility: 'hidden', border: 0 }}
-        />
+        {startupListId && <StartupPlayer listId={startupListId} onDismiss={dismissStartupPlayer} />}
         <span
           className={`backend-chip backend-chip-${backendChip}`}
           role="status"
