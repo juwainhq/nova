@@ -30,11 +30,11 @@ export async function verifyGemini(check, renderPanel) {
   check('a trimmed history that opens with NOVA starts the request at the user turn', JSON.stringify(geminiRequestBody('s', [
     { role: 'assistant', content: 'Old reply' }, { role: 'user', content: 'Now' },
   ]).contents) === JSON.stringify([{ role: 'user', parts: [{ text: 'Now' }] }]));
-  check('Detailed request body uses temperature 0.7 and maxOutputTokens 300', JSON.stringify(geminiRequestBody('s', [{ role: 'user', content: 'Hi' }], 'detailed').generationConfig) === JSON.stringify({ temperature: 0.7, maxOutputTokens: 300 })
+  check('Detailed request body uses temperature 0.7 and maxOutputTokens 150', JSON.stringify(geminiRequestBody('s', [{ role: 'user', content: 'Hi' }], 'detailed').generationConfig) === JSON.stringify({ temperature: 0.7, maxOutputTokens: 150 })
     && !('messages' in body) && !('systemInstruction' in body));
-  check('Fast request body uses temperature 0.6 and maxOutputTokens 80 by default', JSON.stringify(body.generationConfig) === JSON.stringify({ temperature: 0.6, maxOutputTokens: 80 })
-    && JSON.stringify(geminiRequestBody('s', [{ role: 'user', content: 'Hi' }]).generationConfig) === JSON.stringify({ temperature: 0.6, maxOutputTokens: 80 }));
-  check('Fast mode uses the streaming endpoint and Detailed the full-reply endpoint',
+  check('Fast request body uses temperature 0.6 and maxOutputTokens 60 by default', JSON.stringify(body.generationConfig) === JSON.stringify({ temperature: 0.6, maxOutputTokens: 60 })
+    && JSON.stringify(geminiRequestBody('s', [{ role: 'user', content: 'Hi' }]).generationConfig) === JSON.stringify({ temperature: 0.6, maxOutputTokens: 60 }));
+  check('Gemini calls use the streaming endpoint; the non-stream endpoint remains available',
     geminiEndpoint(KEY, GEMINI_MODEL, true).includes(':streamGenerateContent?alt=sse&key=') && geminiEndpoint(KEY).includes(':generateContent?key='));
   check('the Gemini model list is tried in the agreed priority order', JSON.stringify(GEMINI_MODELS) === JSON.stringify([
     'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite',
@@ -96,7 +96,7 @@ export async function verifyGemini(check, renderPanel) {
     try { await requestGeminiReply(KEY, 'sys', turns); } catch (error) { denied = error; }
     check('a rejected key stops at once and still reports unavailable', denied?.unavailable === true && modelCalls.length === 1);
 
-    // Response speed: Fast streams pieces to speech as they arrive; Detailed asks for the whole reply.
+    // Response speed: both modes stream pieces to speech as they arrive.
     resetGeminiModelMemory();
     globalThis.fetch = async () => new Response('data: {"candidates":[{"content":{"parts":[{"text":"Hello "}]}}]}\n\ndata: {"candidates":[{"content":{"parts":[{"text":"there."}]},"finishReason":"STOP"}]}\n\n', { status: 200 });
     const pieces = [];
@@ -106,12 +106,14 @@ export async function verifyGemini(check, renderPanel) {
     let detailedUrl = '';
     globalThis.fetch = async (url) => {
       detailedUrl = String(url);
-      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Full reply.' }] } }] }), { status: 200 });
+      const payload = { candidates: [{ content: { parts: [{ text: 'Full reply.' }] }, finishReason: 'STOP' }] };
+      const body = detailedUrl.includes('streamGenerateContent') ? `data: ${JSON.stringify(payload)}\n\n` : JSON.stringify(payload);
+      return new Response(body, { status: 200 });
     };
     const detailedPieces = [];
     const full = await requestGeminiReply(KEY, 'sys', turns, undefined, { speed: 'detailed', onDelta: (piece) => detailedPieces.push(piece) });
-    check('Detailed mode asks for the full reply in one response, with no streaming', detailedPieces.length === 0
-      && full.answer === 'Full reply.' && !detailedUrl.includes('streamGenerateContent'));
+    check('Detailed mode streams too, handing each piece to speech as it arrives', JSON.stringify(detailedPieces) === JSON.stringify(['Full reply.'])
+      && full.answer === 'Full reply.' && detailedUrl.includes('streamGenerateContent'));
     resetGeminiModelMemory();
 
     // The probe reads the model list and keeps the first flash model from the priority list.

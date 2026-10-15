@@ -176,8 +176,8 @@ export async function verifyStreaming(check) {
   let sse = web.next();
   await ask(web.ui);
   const body = JSON.parse(chats(web.ui)[0]?.options.body || '{}');
-  check('ollama: Fast replies ask for at most 80 tokens (num_predict via max_tokens), temperature 0.6, top_p 0.9',
-    body.max_tokens === 80 && body.temperature === 0.6 && body.top_p === 0.9 && body.stream === true);
+  check('ollama: Fast replies ask for at most 60 tokens (num_predict via max_tokens), temperature 0.6, top_p 0.9',
+    body.max_tokens === 60 && body.temperature === 0.6 && body.top_p === 0.9 && body.stream === true);
   check('ollama: no fields the OpenAI-compatible endpoint would silently ignore', !('num_predict' in body) && !('options' in body));
 
   // Web Speech fallback, streamed.
@@ -214,7 +214,7 @@ export async function verifyStreaming(check) {
   await settle(web.ui);
   web.ui.utterances.at(-1)?.onend?.();
   await settle(web.ui);
-  check('streaming: a reply cut off at 80 tokens drops its unfinished sentence', web.ui.utterances.at(-1)?.text === 'One idea is tea.' && atStage(web.ui, 'ready'));
+  check('streaming: a reply cut off at the token limit drops its unfinished sentence', web.ui.utterances.at(-1)?.text === 'One idea is tea.' && atStage(web.ui, 'ready'));
   sse = web.next();
   await ask(web.ui, 'and another');
   const history = JSON.parse(chats(web.ui).at(-1)?.options.body || '{}').messages || [];

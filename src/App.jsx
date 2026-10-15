@@ -1304,7 +1304,7 @@ function App() {
         const key = settings.geminiKey.trim();
         if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
         const speedSettings = speedMode(settings.speed);
-        // Fast mode speaks each piece of the reply as it arrives. Detailed waits for the full reply.
+        // Each piece of the reply is spoken as it arrives, in both modes.
         const replyStream = createSpeechStream();
         stream = replyStream;
         const startSpeaking = () => {
