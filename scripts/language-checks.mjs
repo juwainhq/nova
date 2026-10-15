@@ -44,3 +44,12 @@ export function verifyBanglaWake(check) {
   check('wake: a Bengali word containing নোভা does not wake NOVA', parseWakeWord('আনোভাবে কাজ করো') === null);
   check('wake: a longer Bengali word starting with নোভা does not wake NOVA', parseWakeWord('নোভাল কী') === null);
 }
+
+// Startup sound settings helpers (playback needs a browser and is checked by hand).
+import { startupSoundEnabled, STARTUP_AUDIO_LIMIT_BYTES, STARTUP_SOUND_KEY, STARTUP_AUDIO_KEY } from '../src/startup-sound.js';
+export function verifyStartupSound(check) {
+  check('startup sound is ON by default and only an explicit false turns it off',
+    startupSoundEnabled(null) && startupSoundEnabled('true') && !startupSoundEnabled('false'));
+  check('startup sound keys match the spec', STARTUP_SOUND_KEY === 'nova_startup_sound' && STARTUP_AUDIO_KEY === 'nova_startup_audio');
+  check('custom startup sound is limited to 1 MB', STARTUP_AUDIO_LIMIT_BYTES === 1024 * 1024);
+}

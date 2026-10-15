@@ -48,6 +48,7 @@ import {
   voiceOptionLabel,
   voiceTiers,
 } from './speech.js';
+import { STARTUP_AUDIO_KEY, STARTUP_SOUND_KEY, armStartupSound, readStartupAudio, startupSoundEnabled } from './startup-sound.js';
 import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
   createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
@@ -375,6 +376,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const [downloadMessage, setDownloadMessage] = useState('');
   const [confirmClearMemory, setConfirmClearMemory] = useState(false);
   const [settingsTab, setSettingsTab] = useState('voice');
+  const [startupAudioError, setStartupAudioError] = useState('');
   const modelInputRef = useRef(null);
   const panelRef = useRef(null);
   const testControllerRef = useRef(null);
@@ -811,6 +813,48 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
             </label>
 
             <div className="settings-divider" />
+
+            <label className="settings-toggle-row" htmlFor="startup-sound">
+              <span className="settings-toggle-copy">
+                <span className="config-title">Startup sound</span>
+                <span className="config-detail">Play a short chime on your first click or tap</span>
+              </span>
+              <input
+                id="startup-sound"
+                className="settings-toggle-input"
+                type="checkbox"
+                checked={draft.startupSound}
+                onChange={(event) => setDraft((current) => ({ ...current, startupSound: event.target.checked }))}
+              />
+              <span className="settings-switch" aria-hidden="true"><i /></span>
+            </label>
+            <div className="startup-audio-field">
+              <label className="field-label" htmlFor="startup-audio-file">Custom startup sound</label>
+              <input
+                id="startup-audio-file"
+                type="file"
+                accept=".mp3,.wav,audio/mpeg,audio/wav"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (!file) return;
+                  const result = await readStartupAudio(file);
+                  if (result.error) setStartupAudioError(result.error);
+                  else {
+                    setStartupAudioError('');
+                    setDraft((current) => ({ ...current, startupAudio: result.dataUrl }));
+                  }
+                }}
+              />
+              <p className="field-hint" aria-live="polite">
+                {startupAudioError || (draft.startupAudio ? 'Your sound will play instead of the chime. Save to keep it.' : 'Optional. Up to 1 MB, .mp3 or .wav. Leave empty to use the chime.')}
+              </p>
+              {draft.startupAudio && (
+                <button className="text-button" type="button" onClick={() => setDraft((current) => ({ ...current, startupAudio: '' }))}>Use the chime</button>
+              )}
+            </div>
+
+            <div className="settings-divider" />
             </div>
             <div role="tabpanel" id="settings-panel-memory" aria-labelledby="settings-tab-memory" className="settings-tab-panel" hidden={settingsTab !== 'memory'}>
             <section className="settings-memory" aria-labelledby="memory-title">
@@ -881,12 +925,16 @@ function App() {
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
     language: normalizeLanguage(readSetting(LANGUAGE_STORAGE_KEY, 'en')),
     speed: normalizeSpeed(readSetting(SPEED_STORAGE_KEY, DEFAULT_SPEED)),
+    startupSound: startupSoundEnabled(readSetting(STARTUP_SOUND_KEY, 'true')),
+    startupAudio: readSetting(STARTUP_AUDIO_KEY),
   }));
   // Read by the speech recognizer at each start, so it always uses the latest saved language.
   const languageRef = useRef(settings.language);
   // Read by every browser utterance, so the saved rate applies to each reply.
   const speechRateRef = useRef(settings.speechRate);
   const [avatar, setAvatar] = useState(readAvatar);
+  // The startup sound plays on the first click of a session (see startup-sound.js).
+  useEffect(() => { armStartupSound(); }, []);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
   useEffect(() => {
@@ -1887,6 +1935,8 @@ function App() {
       speechRate: normalizeSpeechRate(nextSettings.speechRate),
       speed: normalizeSpeed(nextSettings.speed),
       showTranscript: Boolean(nextSettings.showTranscript),
+      startupSound: Boolean(nextSettings.startupSound),
+      startupAudio: nextSettings.startupAudio || '',
     };
     try {
       window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
@@ -1900,6 +1950,9 @@ function App() {
       window.localStorage.setItem(VOICE_NAME_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem(SPEECH_RATE_KEY, String(updatedSettings.speechRate));
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
+      window.localStorage.setItem(STARTUP_SOUND_KEY, String(updatedSettings.startupSound));
+      if (updatedSettings.startupAudio) window.localStorage.setItem(STARTUP_AUDIO_KEY, updatedSettings.startupAudio);
+      else window.localStorage.removeItem(STARTUP_AUDIO_KEY);
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
       return;
