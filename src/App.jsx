@@ -49,6 +49,7 @@ import {
   voiceTiers,
 } from './speech.js';
 import { STARTUP_AUDIO_KEY, STARTUP_SOUND_KEY, armStartupSound, readStartupAudio, startupSoundEnabled } from './startup-sound.js';
+import { PLAYLIST_URL_KEY, STARTUP_SONG_KEY, armStartupSong, playlistIdFromUrl, startupSongEnabled } from './startup-song.js';
 import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
   createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
@@ -854,6 +855,38 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               )}
             </div>
 
+            <div className="startup-audio-field">
+              <label className="field-label" htmlFor="startup-playlist-url">Startup Playlist URL</label>
+              <input
+                id="startup-playlist-url"
+                className="settings-input"
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck="false"
+                placeholder="https://www.youtube.com/playlist?list=…"
+                value={draft.playlistUrl}
+                onChange={(event) => setDraft((current) => ({ ...current, playlistUrl: event.target.value }))}
+              />
+              <p className="field-hint">Plays from a random point for 30 seconds on your first click or tap of each session. Hidden, with no video shown.</p>
+            </div>
+
+            <label className="settings-toggle-row" htmlFor="startup-song">
+              <span className="settings-toggle-copy">
+                <span className="config-title">Play startup song</span>
+                <span className="config-detail">Uses the playlist above</span>
+              </span>
+              <input
+                id="startup-song"
+                className="settings-toggle-input"
+                type="checkbox"
+                checked={draft.startupSong}
+                onChange={(event) => setDraft((current) => ({ ...current, startupSong: event.target.checked }))}
+              />
+              <span className="settings-switch" aria-hidden="true"><i /></span>
+            </label>
+
             <div className="settings-divider" />
             </div>
             <div role="tabpanel" id="settings-panel-memory" aria-labelledby="settings-tab-memory" className="settings-tab-panel" hidden={settingsTab !== 'memory'}>
@@ -927,6 +960,8 @@ function App() {
     speed: normalizeSpeed(readSetting(SPEED_STORAGE_KEY, DEFAULT_SPEED)),
     startupSound: startupSoundEnabled(readSetting(STARTUP_SOUND_KEY, 'true')),
     startupAudio: readSetting(STARTUP_AUDIO_KEY),
+    playlistUrl: readSetting(PLAYLIST_URL_KEY),
+    startupSong: startupSongEnabled(readSetting(STARTUP_SONG_KEY, 'true')),
   }));
   // Read by the speech recognizer at each start, so it always uses the latest saved language.
   const languageRef = useRef(settings.language);
@@ -935,6 +970,9 @@ function App() {
   const [avatar, setAvatar] = useState(readAvatar);
   // The startup sound plays on the first click of a session (see startup-sound.js).
   useEffect(() => { armStartupSound(); }, []);
+  // The startup playlist's embed. Empty until the first session interaction, and empty again after 30 seconds.
+  const [songSource, setSongSource] = useState('');
+  useEffect(() => { armStartupSong(setSongSource); }, []);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
   useEffect(() => {
@@ -1937,7 +1975,13 @@ function App() {
       showTranscript: Boolean(nextSettings.showTranscript),
       startupSound: Boolean(nextSettings.startupSound),
       startupAudio: nextSettings.startupAudio || '',
+      playlistUrl: (nextSettings.playlistUrl || '').trim(),
+      startupSong: Boolean(nextSettings.startupSong),
     };
+    if (updatedSettings.playlistUrl && !playlistIdFromUrl(updatedSettings.playlistUrl)) {
+      notify("That doesn’t look like a YouTube playlist link. It should contain “list=”.");
+      return;
+    }
     try {
       window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
       window.localStorage.setItem('nova.ollama.url', updatedSettings.ollamaUrl);
@@ -1953,6 +1997,9 @@ function App() {
       window.localStorage.setItem(STARTUP_SOUND_KEY, String(updatedSettings.startupSound));
       if (updatedSettings.startupAudio) window.localStorage.setItem(STARTUP_AUDIO_KEY, updatedSettings.startupAudio);
       else window.localStorage.removeItem(STARTUP_AUDIO_KEY);
+      if (updatedSettings.playlistUrl) window.localStorage.setItem(PLAYLIST_URL_KEY, updatedSettings.playlistUrl);
+      else window.localStorage.removeItem(PLAYLIST_URL_KEY);
+      window.localStorage.setItem(STARTUP_SONG_KEY, String(updatedSettings.startupSong));
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
       return;
@@ -2045,6 +2092,15 @@ function App() {
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
+        <iframe
+          id="startup-player"
+          title="Startup playlist"
+          src={songSource || 'about:blank'}
+          allow="autoplay"
+          tabIndex={-1}
+          aria-hidden="true"
+          style={{ position: 'fixed', width: 0, height: 0, opacity: 0, pointerEvents: 'none', visibility: 'hidden', border: 0 }}
+        />
         <span
           className={`backend-chip backend-chip-${backendChip}`}
           role="status"

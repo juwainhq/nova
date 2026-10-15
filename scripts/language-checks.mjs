@@ -53,3 +53,19 @@ export function verifyStartupSound(check) {
   check('startup sound keys match the spec', STARTUP_SOUND_KEY === 'nova_startup_sound' && STARTUP_AUDIO_KEY === 'nova_startup_audio');
   check('custom startup sound is limited to 1 MB', STARTUP_AUDIO_LIMIT_BYTES === 1024 * 1024);
 }
+
+// Startup playlist parsing (the embed itself needs a browser and is checked by hand).
+import { playlistIdFromUrl, songEmbedUrl, SONG_PLAY_MS, SONG_START_MAX_SECONDS } from '../src/startup-song.js';
+export function verifyStartupSong(check) {
+  check('playlist: the list ID is read from a YouTube playlist URL',
+    playlistIdFromUrl('https://www.youtube.com/playlist?list=PLabc123XYZ') === 'PLabc123XYZ'
+    && playlistIdFromUrl('https://youtube.com/watch?v=abcdefghijk&list=PLabc123XYZ&index=2') === 'PLabc123XYZ'
+    && playlistIdFromUrl('https://youtu.be/abcdefghijk?list=PLabc123XYZ') === 'PLabc123XYZ');
+  check('playlist: links without a list ID, other sites and junk are rejected',
+    playlistIdFromUrl('https://www.youtube.com/watch?v=abcdefghijk') === ''
+    && playlistIdFromUrl('https://example.com/playlist?list=PLabc123XYZ') === ''
+    && playlistIdFromUrl('not a url') === '' && playlistIdFromUrl('') === '');
+  check('playlist: the embed uses the spec parameters and a random start within the limit',
+    songEmbedUrl('PLabc123XYZ', 42) === 'https://www.youtube.com/embed/videoseries?list=PLabc123XYZ&autoplay=1&start=42'
+    && SONG_PLAY_MS === 30000 && SONG_START_MAX_SECONDS === 300);
+}
