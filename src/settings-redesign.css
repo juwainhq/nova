@@ -256,3 +256,7 @@
   width: 100%;
   accent-color: var(--accent);
 }
+
+/* Startup sound toggle with its Preview button. */
+.startup-sound-row { display: flex; align-items: center; gap: 12px; }
+.startup-sound-row .settings-toggle-row { flex: 1; }

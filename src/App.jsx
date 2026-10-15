@@ -48,8 +48,7 @@ import {
   voiceOptionLabel,
   voiceTiers,
 } from './speech.js';
-import { PLAYLIST_URL_KEY, STARTUP_SONG_KEY, getPlaylistId, startSessionSong, startupSongEnabled } from './startup-song.js';
-import StartupPlayer from './StartupPlayer.jsx';
+import { STARTUP_SOUND_KEY, armNovaStartup, previewNovaStartup, startupSoundEnabled } from './nova-startup.js';
 import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
   createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
@@ -812,39 +811,26 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               <span className="settings-switch" aria-hidden="true"><i /></span>
             </label>
 
-            <div className="settings-divider" />
-
-            <div className="startup-audio-field">
-              <label className="field-label" htmlFor="startup-playlist-url">Startup Playlist URL</label>
-              <input
-                id="startup-playlist-url"
-                className="settings-input"
-                type="url"
-                inputMode="url"
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck="false"
-                placeholder="https://www.youtube.com/playlist?list=…"
-                value={draft.playlistUrl}
-                onChange={(event) => setDraft((current) => ({ ...current, playlistUrl: event.target.value }))}
-              />
-              <p className="field-hint">Plays from a random point for 30 seconds on your first click or tap of each session. Hidden, with no video shown.</p>
+            <div className="startup-sound-row">
+              <label className="settings-toggle-row" htmlFor="startup-sound">
+                <span className="settings-toggle-copy">
+                  <span className="config-title">Startup sound</span>
+                  <span className="config-detail">A warm chime when NOVA wakes up</span>
+                </span>
+                <input
+                  id="startup-sound"
+                  className="settings-toggle-input"
+                  type="checkbox"
+                  checked={draft.startupSound}
+                  onChange={(event) => setDraft((current) => ({ ...current, startupSound: event.target.checked }))}
+                />
+                <span className="settings-switch" aria-hidden="true"><i /></span>
+              </label>
+              <button className="test-ollama-button test-voice-button" type="button" onClick={() => previewNovaStartup()}>Preview</button>
             </div>
 
-            <label className="settings-toggle-row" htmlFor="startup-song">
-              <span className="settings-toggle-copy">
-                <span className="config-title">Play startup song</span>
-                <span className="config-detail">Uses the playlist above</span>
-              </span>
-              <input
-                id="startup-song"
-                className="settings-toggle-input"
-                type="checkbox"
-                checked={draft.startupSong}
-                onChange={(event) => setDraft((current) => ({ ...current, startupSong: event.target.checked }))}
-              />
-              <span className="settings-switch" aria-hidden="true"><i /></span>
-            </label>
+            <div className="settings-divider" />
+
 
             <div className="settings-divider" />
             </div>
@@ -917,18 +903,15 @@ function App() {
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
     language: normalizeLanguage(readSetting(LANGUAGE_STORAGE_KEY, 'en')),
     speed: normalizeSpeed(readSetting(SPEED_STORAGE_KEY, DEFAULT_SPEED)),
-    playlistUrl: readSetting(PLAYLIST_URL_KEY),
-    startupSong: startupSongEnabled(readSetting(STARTUP_SONG_KEY, 'true')),
+    startupSound: startupSoundEnabled(readSetting(STARTUP_SOUND_KEY, 'true')),
   }));
   // Read by the speech recognizer at each start, so it always uses the latest saved language.
   const languageRef = useRef(settings.language);
   // Read by every browser utterance, so the saved rate applies to each reply.
   const speechRateRef = useRef(settings.speechRate);
   const [avatar, setAvatar] = useState(readAvatar);
-  // The startup playlist card: shown once per session, only when a valid playlist URL is saved.
-  const [startupListId, setStartupListId] = useState(null);
-  useEffect(() => { setStartupListId(startSessionSong()); }, []);
-  const dismissStartupPlayer = useCallback(() => setStartupListId(null), []);
+  // NOVA's startup sound plays on the first click or tap of a session.
+  useEffect(() => { armNovaStartup(); }, []);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
   useEffect(() => {
@@ -1929,13 +1912,8 @@ function App() {
       speechRate: normalizeSpeechRate(nextSettings.speechRate),
       speed: normalizeSpeed(nextSettings.speed),
       showTranscript: Boolean(nextSettings.showTranscript),
-      playlistUrl: (nextSettings.playlistUrl || '').trim(),
-      startupSong: Boolean(nextSettings.startupSong),
+      startupSound: Boolean(nextSettings.startupSound),
     };
-    if (updatedSettings.playlistUrl && !getPlaylistId(updatedSettings.playlistUrl)) {
-      notify("That doesn’t look like a YouTube playlist link. It should contain “list=”.");
-      return;
-    }
     try {
       window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
       window.localStorage.setItem('nova.ollama.url', updatedSettings.ollamaUrl);
@@ -1948,9 +1926,7 @@ function App() {
       window.localStorage.setItem(VOICE_NAME_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem(SPEECH_RATE_KEY, String(updatedSettings.speechRate));
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
-      if (updatedSettings.playlistUrl) window.localStorage.setItem(PLAYLIST_URL_KEY, updatedSettings.playlistUrl);
-      else window.localStorage.removeItem(PLAYLIST_URL_KEY);
-      window.localStorage.setItem(STARTUP_SONG_KEY, String(updatedSettings.startupSong));
+      window.localStorage.setItem(STARTUP_SOUND_KEY, String(updatedSettings.startupSound));
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
       return;
@@ -2043,7 +2019,6 @@ function App() {
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
-        {startupListId && <StartupPlayer onDismiss={dismissStartupPlayer} />}
         <span
           className={`backend-chip backend-chip-${backendChip}`}
           role="status"
