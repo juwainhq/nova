@@ -630,7 +630,7 @@ ui.clock.tick();
 ui.flush();
 check('visible idle tabs resume wake listening', mic.starts.length === beforeHidden + 1 && Boolean(ui.find('wake-indicator')));
 ui.unmount();
-check('App unmount detaches recognition and closes audio', mic.onresult === null && ui.audio.instances[0]?.closes === 1);
+check('App unmount detaches recognition and closes audio', mic.onresult === null && ui.audio.instances.at(-1)?.closes === 1);
 
 // A same-utterance question must bypass the wake face as soon as work begins.
 const inlineUi = await createAppHarness();
