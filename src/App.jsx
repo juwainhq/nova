@@ -48,8 +48,7 @@ import {
   voiceOptionLabel,
   voiceTiers,
 } from './speech.js';
-import { STARTUP_AUDIO_KEY, STARTUP_SOUND_KEY, armStartupSound, readStartupAudio, startupSoundEnabled } from './startup-sound.js';
-import { PLAYLIST_URL_KEY, STARTUP_SONG_KEY, playlistIdFromUrl, startSessionSong, startupSongEnabled } from './startup-song.js';
+import { PLAYLIST_URL_KEY, STARTUP_SONG_KEY, getPlaylistId, startSessionSong, startupSongEnabled } from './startup-song.js';
 import StartupPlayer from './StartupPlayer.jsx';
 import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
@@ -378,7 +377,6 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const [downloadMessage, setDownloadMessage] = useState('');
   const [confirmClearMemory, setConfirmClearMemory] = useState(false);
   const [settingsTab, setSettingsTab] = useState('voice');
-  const [startupAudioError, setStartupAudioError] = useState('');
   const modelInputRef = useRef(null);
   const panelRef = useRef(null);
   const testControllerRef = useRef(null);
@@ -816,46 +814,6 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 
             <div className="settings-divider" />
 
-            <label className="settings-toggle-row" htmlFor="startup-sound">
-              <span className="settings-toggle-copy">
-                <span className="config-title">Startup sound</span>
-                <span className="config-detail">Play a short chime on your first click or tap</span>
-              </span>
-              <input
-                id="startup-sound"
-                className="settings-toggle-input"
-                type="checkbox"
-                checked={draft.startupSound}
-                onChange={(event) => setDraft((current) => ({ ...current, startupSound: event.target.checked }))}
-              />
-              <span className="settings-switch" aria-hidden="true"><i /></span>
-            </label>
-            <div className="startup-audio-field">
-              <label className="field-label" htmlFor="startup-audio-file">Custom startup sound</label>
-              <input
-                id="startup-audio-file"
-                type="file"
-                accept=".mp3,.wav,audio/mpeg,audio/wav"
-                onChange={async (event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = '';
-                  if (!file) return;
-                  const result = await readStartupAudio(file);
-                  if (result.error) setStartupAudioError(result.error);
-                  else {
-                    setStartupAudioError('');
-                    setDraft((current) => ({ ...current, startupAudio: result.dataUrl }));
-                  }
-                }}
-              />
-              <p className="field-hint" aria-live="polite">
-                {startupAudioError || (draft.startupAudio ? 'Your sound will play instead of the chime. Save to keep it.' : 'Optional. Up to 1 MB, .mp3 or .wav. Leave empty to use the chime.')}
-              </p>
-              {draft.startupAudio && (
-                <button className="text-button" type="button" onClick={() => setDraft((current) => ({ ...current, startupAudio: '' }))}>Use the chime</button>
-              )}
-            </div>
-
             <div className="startup-audio-field">
               <label className="field-label" htmlFor="startup-playlist-url">Startup Playlist URL</label>
               <input
@@ -959,8 +917,6 @@ function App() {
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
     language: normalizeLanguage(readSetting(LANGUAGE_STORAGE_KEY, 'en')),
     speed: normalizeSpeed(readSetting(SPEED_STORAGE_KEY, DEFAULT_SPEED)),
-    startupSound: startupSoundEnabled(readSetting(STARTUP_SOUND_KEY, 'true')),
-    startupAudio: readSetting(STARTUP_AUDIO_KEY),
     playlistUrl: readSetting(PLAYLIST_URL_KEY),
     startupSong: startupSongEnabled(readSetting(STARTUP_SONG_KEY, 'true')),
   }));
@@ -969,12 +925,10 @@ function App() {
   // Read by every browser utterance, so the saved rate applies to each reply.
   const speechRateRef = useRef(settings.speechRate);
   const [avatar, setAvatar] = useState(readAvatar);
-  // The startup sound plays on the first click of a session (see startup-sound.js).
-  useEffect(() => { armStartupSound(); }, []);
-  // The startup playlist card: shown once per session, when a playlist is saved.
-  const [startupListId, setStartupListId] = useState('');
+  // The startup playlist card: shown once per session, only when a valid playlist URL is saved.
+  const [startupListId, setStartupListId] = useState(null);
   useEffect(() => { setStartupListId(startSessionSong()); }, []);
-  const dismissStartupPlayer = useCallback(() => setStartupListId(''), []);
+  const dismissStartupPlayer = useCallback(() => setStartupListId(null), []);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
   useEffect(() => {
@@ -1975,12 +1929,10 @@ function App() {
       speechRate: normalizeSpeechRate(nextSettings.speechRate),
       speed: normalizeSpeed(nextSettings.speed),
       showTranscript: Boolean(nextSettings.showTranscript),
-      startupSound: Boolean(nextSettings.startupSound),
-      startupAudio: nextSettings.startupAudio || '',
       playlistUrl: (nextSettings.playlistUrl || '').trim(),
       startupSong: Boolean(nextSettings.startupSong),
     };
-    if (updatedSettings.playlistUrl && !playlistIdFromUrl(updatedSettings.playlistUrl)) {
+    if (updatedSettings.playlistUrl && !getPlaylistId(updatedSettings.playlistUrl)) {
       notify("That doesn’t look like a YouTube playlist link. It should contain “list=”.");
       return;
     }
@@ -1996,9 +1948,6 @@ function App() {
       window.localStorage.setItem(VOICE_NAME_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem(SPEECH_RATE_KEY, String(updatedSettings.speechRate));
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
-      window.localStorage.setItem(STARTUP_SOUND_KEY, String(updatedSettings.startupSound));
-      if (updatedSettings.startupAudio) window.localStorage.setItem(STARTUP_AUDIO_KEY, updatedSettings.startupAudio);
-      else window.localStorage.removeItem(STARTUP_AUDIO_KEY);
       if (updatedSettings.playlistUrl) window.localStorage.setItem(PLAYLIST_URL_KEY, updatedSettings.playlistUrl);
       else window.localStorage.removeItem(PLAYLIST_URL_KEY);
       window.localStorage.setItem(STARTUP_SONG_KEY, String(updatedSettings.startupSong));
@@ -2094,7 +2043,7 @@ function App() {
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
-        {startupListId && <StartupPlayer listId={startupListId} onDismiss={dismissStartupPlayer} />}
+        {startupListId && <StartupPlayer onDismiss={dismissStartupPlayer} />}
         <span
           className={`backend-chip backend-chip-${backendChip}`}
           role="status"

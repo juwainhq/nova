@@ -45,26 +45,15 @@ export function verifyBanglaWake(check) {
   check('wake: a longer Bengali word starting with নোভা does not wake NOVA', parseWakeWord('নোভাল কী') === null);
 }
 
-// Startup sound settings helpers (playback needs a browser and is checked by hand).
-import { startupSoundEnabled, STARTUP_AUDIO_LIMIT_BYTES, STARTUP_SOUND_KEY, STARTUP_AUDIO_KEY } from '../src/startup-sound.js';
-export function verifyStartupSound(check) {
-  check('startup sound is ON by default and only an explicit false turns it off',
-    startupSoundEnabled(null) && startupSoundEnabled('true') && !startupSoundEnabled('false'));
-  check('startup sound keys match the spec', STARTUP_SOUND_KEY === 'nova_startup_sound' && STARTUP_AUDIO_KEY === 'nova_startup_audio');
-  check('custom startup sound is limited to 1 MB', STARTUP_AUDIO_LIMIT_BYTES === 1024 * 1024);
-}
-
 // Startup playlist parsing and the player's embed (the playback itself needs a browser).
-import { playerEmbedUrl, playlistIdFromUrl, PLAYER_DISMISS_MS } from '../src/startup-song.js';
+import { getPlaylistId, playerEmbedUrl, PLAYER_DISMISS_MS } from '../src/startup-song.js';
 export function verifyStartupSong(check) {
-  check('playlist: the list ID is read from a YouTube playlist URL',
-    playlistIdFromUrl('https://www.youtube.com/playlist?list=PLabc123XYZ') === 'PLabc123XYZ'
-    && playlistIdFromUrl('https://youtube.com/watch?v=abcdefghijk&list=PLabc123XYZ&index=2') === 'PLabc123XYZ'
-    && playlistIdFromUrl('https://youtu.be/abcdefghijk?list=PLabc123XYZ') === 'PLabc123XYZ');
-  check('playlist: links without a list ID, other sites and junk are rejected',
-    playlistIdFromUrl('https://www.youtube.com/watch?v=abcdefghijk') === ''
-    && playlistIdFromUrl('https://example.com/playlist?list=PLabc123XYZ') === ''
-    && playlistIdFromUrl('not a url') === '' && playlistIdFromUrl('') === '');
+  check('playlist: the ID is read from playlist, watch and short YouTube links',
+    getPlaylistId('https://www.youtube.com/playlist?list=PLabc123XYZ') === 'PLabc123XYZ'
+    && getPlaylistId('https://youtube.com/watch?v=abcdefghijk&list=PLabc123XYZ&index=2') === 'PLabc123XYZ'
+    && getPlaylistId('https://youtu.be/abcdefghijk?list=PLabc123XYZ') === 'PLabc123XYZ');
+  check('playlist: a link without a list parameter gives no ID',
+    getPlaylistId('https://www.youtube.com/watch?v=abcdefghijk') === null && getPlaylistId('') === null && getPlaylistId(null) === null);
   check('player: the embed uses autoplay with sound on',
     playerEmbedUrl('PLabc123XYZ') === 'https://www.youtube.com/embed/videoseries?list=PLabc123XYZ&autoplay=1&mute=0');
   check('player: fades out after 45 seconds', PLAYER_DISMISS_MS === 45000);

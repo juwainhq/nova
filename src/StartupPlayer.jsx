@@ -1,20 +1,37 @@
 import { useEffect, useState } from 'react';
-import { PLAYER_DISMISS_MS, PLAYER_FADE_MS, playerEmbedUrl } from './startup-song.js';
+import { NO_PLAYLIST_MESSAGE, PLAYER_DISMISS_MS, PLAYER_FADE_MS, PLAYLIST_URL_KEY, getPlaylistId, playerEmbedUrl } from './startup-song.js';
 
 // The startup music card. Browsers only allow sound after a direct tap, so the card waits for
 // one: a tap anywhere on the page, or the play button, starts the playlist. The YouTube iframe
 // is 1px and nearly transparent. Closing the card or its 45-second timer removes the iframe,
 // which stops playback, and the card fades out.
-export default function StartupPlayer({ listId, onDismiss }) {
+export default function StartupPlayer({ onDismiss }) {
   const [playing, setPlaying] = useState(false);
   const [closed, setClosed] = useState(false);
+  const [pid, setPid] = useState('');
+  const [error, setError] = useState('');
+
+  // Builds the embed from the saved playlist URL. Without a playlist, nothing plays.
+  const startPlayback = () => {
+    let saved = '';
+    try { saved = window.localStorage.getItem(PLAYLIST_URL_KEY) || ''; } catch { /* Blocked storage: no playlist. */ }
+    const id = getPlaylistId(saved);
+    if (!id) {
+      setError(NO_PLAYLIST_MESSAGE);
+      return;
+    }
+    console.log('Playlist ID:', id);
+    setError('');
+    setPid(id);
+    setPlaying(true);
+  };
 
   // Any tap outside the card starts the playlist. A tap inside the card is left to its buttons.
   useEffect(() => {
     if (playing || closed) return undefined;
     const onPointer = (event) => {
       if (event.target instanceof Element && event.target.closest('.startup-player')) return;
-      setPlaying(true);
+      startPlayback();
     };
     window.addEventListener('pointerdown', onPointer);
     return () => window.removeEventListener('pointerdown', onPointer);
@@ -46,8 +63,9 @@ export default function StartupPlayer({ listId, onDismiss }) {
           ⏸ Playing...
         </button>
       ) : (
-        <button className="startup-player-play" type="button" onClick={() => setPlaying(true)}>▶ Tap to play</button>
+        <button className="startup-player-play" type="button" onClick={startPlayback}>▶ Tap to play</button>
       )}
+      {error && <p className="startup-player-error" role="alert">{error}</p>}
       <div className="startup-player-foot">
         <span className="startup-player-line" aria-hidden="true" />
         <p className="startup-player-note">Auto-closes in 45s</p>
@@ -57,7 +75,7 @@ export default function StartupPlayer({ listId, onDismiss }) {
           title="Startup playlist"
           width="1"
           height="1"
-          src={playerEmbedUrl(listId)}
+          src={playerEmbedUrl(pid)}
           allow="autoplay; encrypted-media"
           style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0.01 }}
         />

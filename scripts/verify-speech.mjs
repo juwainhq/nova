@@ -22,7 +22,7 @@ import { verifyNames } from './name-checks.mjs';
 import { verifyAvatarSwitch } from './avatar-switch-checks.mjs';
 import { verifyAvatarExpressions } from './avatar-expression-checks.mjs';
 import { verifyGemini } from './gemini-checks.mjs';
-import { verifyBanglaWake, verifyLanguage, verifyStartupSong, verifyStartupSound, verifyVoiceList } from './language-checks.mjs';
+import { verifyBanglaWake, verifyLanguage, verifyStartupSong, verifyVoiceList } from './language-checks.mjs';
 
 const run = promisify(execFile);
 const root = process.cwd();
@@ -792,7 +792,6 @@ await verifyGemini(check, renderPanel);
 verifyLanguage(check);
 verifyVoiceList(check);
 verifyBanglaWake(check);
-verifyStartupSound(check);
 verifyStartupSong(check);
 
 // The theme toggle is App state, so its contract is behavioural, not just textual.
