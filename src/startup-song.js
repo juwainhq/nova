@@ -5,7 +5,7 @@ export const PLAYLIST_URL_KEY = 'nova_playlist_url';
 export const STARTUP_SONG_KEY = 'nova_startup_song';
 export const INTRO_PLAYED_KEY = 'nova_played_intro';
 export const PLAYER_DISMISS_MS = 45000;
-export const PLAYER_FADE_MS = 400;
+export const PLAYER_FADE_MS = 1000;
 
 export function startupSongEnabled(value) {
   return value !== 'false';
@@ -27,8 +27,8 @@ export function playlistIdFromUrl(text) {
   return /^[A-Za-z0-9_-]{6,}$/.test(id) ? id : '';
 }
 
-export function playerEmbedUrl(listId, muted) {
-  return `https://www.youtube.com/embed/videoseries?list=${encodeURIComponent(listId)}&autoplay=1&mute=${muted ? 1 : 0}&controls=0`;
+export function playerEmbedUrl(listId) {
+  return `https://www.youtube.com/embed/videoseries?list=${encodeURIComponent(listId)}&autoplay=1&mute=0`;
 }
 
 // Returns the playlist ID to show, or '' when the player should not appear: no saved playlist,

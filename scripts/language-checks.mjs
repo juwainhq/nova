@@ -65,8 +65,7 @@ export function verifyStartupSong(check) {
     playlistIdFromUrl('https://www.youtube.com/watch?v=abcdefghijk') === ''
     && playlistIdFromUrl('https://example.com/playlist?list=PLabc123XYZ') === ''
     && playlistIdFromUrl('not a url') === '' && playlistIdFromUrl('') === '');
-  check('player: the embed uses autoplay, controls off, and mute set from the card',
-    playerEmbedUrl('PLabc123XYZ', false) === 'https://www.youtube.com/embed/videoseries?list=PLabc123XYZ&autoplay=1&mute=0&controls=0'
-    && playerEmbedUrl('PLabc123XYZ', true).includes('mute=1'));
+  check('player: the embed uses autoplay with sound on',
+    playerEmbedUrl('PLabc123XYZ') === 'https://www.youtube.com/embed/videoseries?list=PLabc123XYZ&autoplay=1&mute=0');
   check('player: fades out after 45 seconds', PLAYER_DISMISS_MS === 45000);
 }

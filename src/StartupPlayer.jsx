@@ -1,51 +1,67 @@
 import { useEffect, useState } from 'react';
 import { PLAYER_DISMISS_MS, PLAYER_FADE_MS, playerEmbedUrl } from './startup-song.js';
 
-// A small card in the bottom-left corner. The YouTube iframe inside it is 1px and nearly
-// transparent, because a hidden iframe is blocked from playing. Closing the card removes
-// the iframe, which stops the playback.
+// The startup music card. Browsers only allow sound after a direct tap, so the card waits for
+// one: a tap anywhere on the page, or the play button, starts the playlist. The YouTube iframe
+// is 1px and nearly transparent. Closing the card or its 45-second timer removes the iframe,
+// which stops playback, and the card fades out.
 export default function StartupPlayer({ listId, onDismiss }) {
-  const [muted, setMuted] = useState(false);
-  const [fading, setFading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [closed, setClosed] = useState(false);
 
+  // Any tap outside the card starts the playlist. A tap inside the card is left to its buttons.
   useEffect(() => {
-    const fade = window.setTimeout(() => setFading(true), PLAYER_DISMISS_MS);
-    return () => window.clearTimeout(fade);
+    if (playing || closed) return undefined;
+    const onPointer = (event) => {
+      if (event.target instanceof Element && event.target.closest('.startup-player')) return;
+      setPlaying(true);
+    };
+    window.addEventListener('pointerdown', onPointer);
+    return () => window.removeEventListener('pointerdown', onPointer);
+  }, [playing, closed]);
+
+  // The card closes itself after 45 seconds, whether or not it has been tapped.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setClosed(true), PLAYER_DISMISS_MS);
+    return () => window.clearTimeout(timer);
   }, []);
 
+  // After the fade, the card leaves the page.
   useEffect(() => {
-    if (!fading) return undefined;
-    const remove = window.setTimeout(onDismiss, PLAYER_FADE_MS);
-    return () => window.clearTimeout(remove);
-  }, [fading, onDismiss]);
+    if (!closed) return undefined;
+    const timer = window.setTimeout(onDismiss, PLAYER_FADE_MS);
+    return () => window.clearTimeout(timer);
+  }, [closed, onDismiss]);
 
   return (
-    <section className={`startup-player${fading ? ' is-fading' : ''}`} role="region" aria-label="Startup music player">
+    <section className={`startup-player${closed ? ' is-closed' : ''}`} role="region" aria-label="Startup music player">
       <div className="startup-player-top">
-        <span className="startup-player-title">♪ Now Playing</span>
+        <span className="startup-player-brand">♪ NOVA</span>
+        <button className="startup-player-close" type="button" aria-label="Close music player" onClick={() => setClosed(true)}>✕</button>
       </div>
-      <div className="startup-player-controls">
-        <span className="startup-player-bar" aria-hidden="true"><i /></span>
-        <button
-          className="startup-player-button"
-          type="button"
-          aria-label={muted ? 'Unmute startup song' : 'Mute startup song'}
-          aria-pressed={muted}
-          onClick={() => setMuted((current) => !current)}
-        >
-          {muted ? '🔇' : '🔊'}
+      <p className="startup-player-name">Your Playlist</p>
+      {playing ? (
+        <button className="startup-player-play is-playing" type="button" disabled>
+          <span className="startup-player-dot" aria-hidden="true" />
+          ⏸ Playing...
         </button>
-        <button className="startup-player-button" type="button" aria-label="Close music player" onClick={() => { setFading(true); }}>✕</button>
+      ) : (
+        <button className="startup-player-play" type="button" onClick={() => setPlaying(true)}>▶ Tap to play</button>
+      )}
+      <div className="startup-player-foot">
+        <span className="startup-player-line" aria-hidden="true" />
+        <p className="startup-player-note">Auto-closes in 45s</p>
       </div>
-      <iframe
-        className="startup-player-frame"
-        title="Startup playlist"
-        src={fading ? 'about:blank' : playerEmbedUrl(listId, muted)}
-        width="1"
-        height="1"
-        allow="autoplay; encrypted-media"
-        style={{ position: 'absolute', opacity: 0.01 }}
-      />
+      {playing && !closed && (
+        <iframe
+          title="Startup playlist"
+          width="1"
+          height="1"
+          src={playerEmbedUrl(listId)}
+          allow="autoplay; encrypted-media"
+          style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0.01 }}
+        />
+      )}
     </section>
   );
 }
