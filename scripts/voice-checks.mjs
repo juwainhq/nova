@@ -66,9 +66,9 @@ export async function verifyVoices(check) {
   test(ui, panel);
   const preview = ui.utterances[0];
   check('Test Voice speaks the exact phrase using the unsaved dropdown choice', preview?.text === sample && preview.voice === basicVoice);
-  check('Test Voice uses rate .92, pitch .88 and unchanged full volume', preview?.rate === .92 && preview.pitch === .88 && preview.volume === 1);
+  check('Test Voice uses rate .92, pitch .88 and unchanged full volume', preview?.rate === 1 && preview.pitch === .88 && preview.volume === 1);
   check('Test Voice leaves saved preferences, memory and chat requests untouched', ui.storage.getItem('nova.tts.voice') === null
-    && ui.storage.getItem('nova_user_memory') === null && ui.storage.getItem('nova.memory') === null
+    && ui.storage.getItem('nova_memories') === null && ui.storage.getItem('nova_user_memory') === null && ui.storage.getItem('nova.memory') === null
     && !ui.requests.some((request) => request.url.endsWith('/chat/completions')));
   check('queued preview sets the real speaker label and provides a Stop test action', label(ui) === basicVoice.name
     && panel.find('test-voice-button').props.disabled && Boolean(panel.find('voice-test-stop'))
@@ -266,7 +266,7 @@ export async function verifyVoices(check) {
   normal.pendingChats[1].resolve();
   await normal.settle();
   check('the next actual reply uses newly loaded voices through the fresh speaker ref', normal.utterances[1]?.voice === ariaVoice
-    && normal.utterances[1].rate === .92 && normal.utterances[1].pitch === .88);
+    && normal.utterances[1].rate === 1 && normal.utterances[1].pitch === .88);
   normal.unmount();
 
   // Engine safety net: only the public speaking/pending booleans are read.

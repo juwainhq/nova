@@ -246,6 +246,7 @@ export async function createAppHarness({ continuous = true, missingRecognition =
     SpeechRecognition: missingRecognition ? undefined : recognition.Recognition,
     AudioContext: audio.AudioContext,
     localStorage: storage,
+    sessionStorage: createStorageDouble(),
     location: { origin: 'https://nova.test' },
     speechSynthesis: Object.assign(eventTarget(), {
       getVoices() {

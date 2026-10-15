@@ -176,8 +176,8 @@ export async function verifyStreaming(check) {
   let sse = web.next();
   await ask(web.ui);
   const body = JSON.parse(chats(web.ui)[0]?.options.body || '{}');
-  check('ollama: every chat request asks for at most 80 tokens (num_predict via max_tokens), temperature 0.7, top_p 0.9',
-    body.max_tokens === 80 && body.temperature === 0.7 && body.top_p === 0.9 && body.stream === true);
+  check('ollama: Fast replies ask for at most 60 tokens (num_predict via max_tokens), temperature 0.6, top_p 0.9',
+    body.max_tokens === 60 && body.temperature === 0.6 && body.top_p === 0.9 && body.stream === true);
   check('ollama: no fields the OpenAI-compatible endpoint would silently ignore', !('num_predict' in body) && !('options' in body));
 
   // Web Speech fallback, streamed.
@@ -202,7 +202,7 @@ export async function verifyStreaming(check) {
   await settle(web.ui);
   check('streaming: the reply finishes after its last sentence, with every word spoken in order', atStage(web.ui, 'ready')
     && web.ui.utterances.map((utterance) => utterance.text).join(' ') === 'Sure! Here is the rest. And more.');
-  check('streaming: Web Speech keeps the fallback rate and pitch on every sentence', web.ui.utterances.every((utterance) => utterance.rate === 0.92 && utterance.pitch === 0.88));
+  check('streaming: Web Speech keeps the fallback rate and pitch on every sentence', web.ui.utterances.every((utterance) => utterance.rate === 1 && utterance.pitch === 0.88));
 
   // Token limit: the unfinished last sentence is neither spoken nor kept.
   sse = web.next();
@@ -214,7 +214,7 @@ export async function verifyStreaming(check) {
   await settle(web.ui);
   web.ui.utterances.at(-1)?.onend?.();
   await settle(web.ui);
-  check('streaming: a reply cut off at 80 tokens drops its unfinished sentence', web.ui.utterances.at(-1)?.text === 'One idea is tea.' && atStage(web.ui, 'ready'));
+  check('streaming: a reply cut off at the token limit drops its unfinished sentence', web.ui.utterances.at(-1)?.text === 'One idea is tea.' && atStage(web.ui, 'ready'));
   sse = web.next();
   await ask(web.ui, 'and another');
   const history = JSON.parse(chats(web.ui).at(-1)?.options.body || '{}').messages || [];

@@ -122,7 +122,7 @@ How this works:
 
 ## Persistent memory
 
-NOVA saves user-provided facts across reloads and browser sessions in local storage under **`nova.memory`** (a JSON array of fact strings). Use the wake word or the mic button:
+NOVA saves user-provided facts across reloads and browser sessions in local storage under **`nova_memories`** (a JSON array of fact strings), and every chat request includes them in the system prompt. Use the wake word or the mic button:
 
 | Say | Result |
 | --- | --- |
@@ -159,7 +159,7 @@ Every normal chat request starts with that prompt, followed by the fresh quoted 
 
 | Request field | Value | Why |
 | --- | --- | --- |
-| `max_tokens` | `80` | Ollama's `num_predict`: at most ~80 tokens (about 2–3 spoken sentences) |
+| `max_tokens` | `60` | Ollama's `num_predict`: at most ~60 tokens in Fast mode (Detailed uses 150) |
 | `temperature` | `0.7` | steadier wording (Ollama's OpenAI-compatible endpoint otherwise uses 1.0) |
 | `top_p` | `0.9` | trims unlikely tokens (otherwise 1.0) |
 

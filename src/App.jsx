@@ -14,9 +14,10 @@ import {
 } from './web-browse.js';
 import { APP_NAME } from './brand.js';
 import {
-  OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT,
+  OLLAMA_REPLY_ERRORS, OLLAMA_UNREACHABLE, STATUS_TEXT, SYSTEM_PROMPT, NOVA_LANGUAGES, LANGUAGE_RECOGNITION, LANGUAGE_STORAGE_KEY, languagePrompt, normalizeLanguage,
   friendlyOllamaError, ollamaError,
 } from './personality.js';
+import { SPEED_MODES, SPEED_STORAGE_KEY, DEFAULT_SPEED, normalizeSpeed, speedMode } from './speed.js';
 import {
   MEMORY_KEY, describeMemoryFact, forgetFact, memoryName, memoryPrompt, parseMemoryIntent,
   readMemoryStore, rememberFact, writeMemoryStore,
@@ -35,23 +36,37 @@ import {
   describeVoice,
   groupVoices,
   listVoices,
+  normalizeSpeechRate,
+  BANGLA_TEXT,
+  isBanglaVoice,
   resolveVoice,
+  SPEECH_RATE,
+  SPEECH_RATE_KEY,
+  VOICE_NAME_KEY,
   voiceKey,
+  voiceListLabel,
   voiceOptionLabel,
+  voiceTiers,
 } from './speech.js';
+import { STARTUP_SOUND_KEY, armNovaStartup, previewNovaStartup, startupSoundEnabled } from './nova-startup.js';
 import {
   DEFAULT_KOKORO_VOICE, KOKORO_VOICES, KOKORO_VOICE_KEY, browserKokoroWorker, createKokoroAudio,
   createKokoroEngine, kokoroVoice, kokoroVoiceLabel, speakWithKokoro,
 } from './kokoro.js';
 import { createSpeechStream, textSpeechStream } from './speech-stream.js';
+import {
+  BACKEND_STORAGE_KEY, DEFAULT_BACKEND, GEMINI_KEY_STORAGE, GEMINI_REPLY_ERRORS, friendlyGeminiError,
+  activeGeminiModel, geminiModelLabel, normalizeBackend, probeGeminiModel, requestGeminiReply, resetGeminiModelMemory,
+} from './gemini.js';
 
 const OLLAMA_MODEL = 'mistral:7b-instruct-q4_K_M';
+const BACKEND_CHIP_LABELS = { gemini: 'GEMINI', local: 'LOCAL', offline: 'OFFLINE' };
 // Short replies for a fast first word. NOVA calls Ollama's OpenAI-compatible
 // endpoint, which has no `num_predict` field (it would be silently ignored).
 // Ollama maps `max_tokens` onto its native `num_predict` option. Without explicit
 // values that endpoint also defaults temperature and top_p to 1.0.
-const OLLAMA_NUM_PREDICT = 80;
-const OLLAMA_SAMPLING = Object.freeze({ max_tokens: OLLAMA_NUM_PREDICT, temperature: 0.7, top_p: 0.9 });
+// Reply length and temperature follow the Response speed setting.
+const ollamaSampling = (speed) => ({ max_tokens: speedMode(speed).maxTokens, temperature: speedMode(speed).temperature, top_p: 0.9 });
 
 // Safety net for engines that lose an utterance's end event, never start a queued
 // one, or wedge mid-reply (Chrome's long network-voice bug). Without it NOVA stays
@@ -142,6 +157,7 @@ function endpointWarning(value) {
 // needs a value there; a single-file copy has no proxy, so only its endpoint is
 // genuinely required. SettingsPanel flashes exactly these ids when it opens.
 function settingsAttention(draft, standalone) {
+  if (draft.backend === 'gemini') return [];
   return standalone && !String(draft.ollamaUrl || '').trim() ? ['ollama-url'] : [];
 }
 
@@ -198,6 +214,20 @@ function MoonIcon() {
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M19.6 13.4A8.2 8.2 0 1 1 10.6 4.4a6.5 6.5 0 0 0 9 9Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+// Response speed indicator next to the backend badge: a lightning bolt for Fast, a bubble for Detailed.
+function SpeedIcon({ mode }) {
+  const label = mode === 'detailed' ? 'Detailed replies' : 'Fast replies';
+  return (
+    <span className="backend-chip-speed" role="img" aria-label={label} title={label}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        {mode === 'detailed'
+          ? <path d="M4 5h16v11H9l-5 4V5Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+          : <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" fill="currentColor" />}
+      </svg>
+    </span>
   );
 }
 
@@ -328,6 +358,12 @@ function hasOllamaModel(models, model) {
 
 // Exported so scripts/verify-speech.mjs can render the panel and inspect the
 // voice selector it produces.
+const SETTINGS_TABS = [
+  { id: 'voice', label: 'Voice' },
+  { id: 'ai', label: 'AI' },
+  { id: 'memory', label: 'Memory' },
+];
+
 export function SettingsPanel({ settings, voices, connection, modelAvailable, standalone, onClose, onSave, onConnectionChange, openerRef,
   memories = [], memoryError = '', onDeleteMemory = () => {}, onClearMemory = () => false,
   onTestVoice = null, onStopVoiceTest = null, voiceTestPlaying = false, voiceTestDisabled = true, speechAvailable = false,
@@ -339,6 +375,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
   const [downloadStatus, setDownloadStatus] = useState('idle');
   const [downloadMessage, setDownloadMessage] = useState('');
   const [confirmClearMemory, setConfirmClearMemory] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('voice');
   const modelInputRef = useRef(null);
   const panelRef = useRef(null);
   const testControllerRef = useRef(null);
@@ -432,10 +469,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
     }
   };
 
-  const { natural: naturalVoices, basic: basicVoices } = groupVoices(voices);
+  const { fast: fastVoices, normal: normalVoices } = voiceTiers(voices);
   // An empty key follows the priority list, including voices arriving after load.
   const autoVoice = defaultVoice(voices);
-  const selectedKey = voiceKey(resolveVoice(voices, draft.voiceKey));
+  const speechRate = normalizeSpeechRate(draft.speechRate);
+  // Options are keyed by voice name, the same value that is saved.
+  const selectedKey = resolveVoice(voices, draft.voiceKey)?.name || '';
   const selectedVoice = resolveVoice(voices, selectedKey) || autoVoice;
   // A saved voice can vanish if the user uninstalls it; say so rather than silently
   // switching under them.
@@ -465,8 +504,78 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
           </button>
         </header>
 
+        <nav className="settings-tabs" role="tablist" aria-label="Settings sections">
+          {SETTINGS_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              id={`settings-tab-${tab.id}`}
+              className="settings-tab"
+              type="button"
+              role="tab"
+              aria-selected={settingsTab === tab.id}
+              aria-controls={`settings-panel-${tab.id}`}
+              tabIndex={settingsTab === tab.id ? 0 : -1}
+              onClick={() => setSettingsTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
         <form className="settings-form" onSubmit={handleSubmit}>
           <div className="settings-panel-content">
+            <div role="tabpanel" id="settings-panel-ai" aria-labelledby="settings-tab-ai" className="settings-tab-panel" hidden={settingsTab !== 'ai'}>
+            <fieldset className="settings-field backend-field">
+              <legend className="field-label">AI Backend</legend>
+              <div className="backend-options">
+                <label className={`backend-option${draft.backend !== 'gemini' ? ' is-selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="ai-backend"
+                    value="ollama"
+                    checked={draft.backend !== 'gemini'}
+                    onChange={() => { setDraft((current) => ({ ...current, backend: 'ollama' })); setTestStatus('idle'); setTestMessage(''); }}
+                  />
+                  <span>
+                    <strong>LOCAL</strong>
+                  </span>
+                </label>
+                <label className={`backend-option${draft.backend === 'gemini' ? ' is-selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="ai-backend"
+                    value="gemini"
+                    checked={draft.backend === 'gemini'}
+                    onChange={() => setDraft((current) => ({ ...current, backend: 'gemini' }))}
+                  />
+                  <span>
+                    <strong>GEMINI</strong>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
+            {draft.backend === 'gemini' && (
+              <div className="settings-field">
+                <label className="field-label" htmlFor="gemini-key">Gemini API key</label>
+                <input
+                  id="gemini-key"
+                  className="settings-input"
+                  type="password"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  placeholder="Paste your key"
+                  value={draft.geminiKey}
+                  onChange={(event) => setDraft((current) => ({ ...current, geminiKey: event.target.value }))}
+                />
+                <p className="field-hint">
+                  Saved only in this browser. Create a key in Google AI Studio. It is sent to Google as part of each request.
+                </p>
+              </div>
+            )}
+
+            {draft.backend !== 'gemini' && (<>
             <div className="settings-field">
               <label className="field-label" htmlFor="ollama-model">Ollama model</label>
               <input
@@ -516,9 +625,84 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               </p>
               <ConnectionHelp />
             </div>
+            </>)}
 
             <div className="settings-divider" />
 
+            {draft.backend !== 'gemini' && (
+            <div className="settings-test">
+              <div className="settings-test-heading">
+                <div>
+                  <span className="config-title">Ollama connection</span>
+                  <span className="config-detail">{connectionLabel}</span>
+                </div>
+                <button className="test-ollama-button" type="button" onClick={testOllama} disabled={testStatus === 'checking'}>
+                  {testStatus === 'checking' ? "Checking..." : 'Test Ollama'}
+                </button>
+              </div>
+              <p className={`test-result test-result-${testStatus}`} role="status" aria-live="polite">
+                <i />
+                {testMessage || "Let’s check that Ollama and your chosen model are ready."}
+              </p>
+            </div>
+            )}
+
+            <div className="settings-divider" />
+
+            <div className="settings-field">
+              <span className="field-label">Offline copy <span>OPTIONAL</span></span>
+              {standalone ? (
+                <p className="field-hint">
+                  You’re already using the single-file copy, so there’s nothing else to download.
+                  If Ollama won’t connect, the connection help above can walk you through its CORS settings.
+                </p>
+              ) : (
+                <>
+                  <button
+                    className="standalone-button"
+                    type="button"
+                    onClick={downloadStandalone}
+                    disabled={downloadStatus === 'working'}
+                  >
+                    {downloadStatus === 'working' ? "Getting it ready..." : `Download ${STANDALONE_FILENAME}`}
+                  </button>
+                  <p className={`field-hint ${downloadStatus === 'error' ? 'field-hint-error' : ''}`} role="status" aria-live="polite">
+                    {downloadMessage
+                      || "Keep a copy on your computer with no build step. Open it in Chrome to connect to Ollama directly."}
+                  </p>
+                </>
+              )}
+            </div>
+            </div>
+            <div role="tabpanel" id="settings-panel-voice" aria-labelledby="settings-tab-voice" className="settings-tab-panel" hidden={settingsTab !== 'voice'}>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="nova-language">Language</label>
+              <select
+                id="nova-language"
+                className="settings-select"
+                value={draft.language}
+                onChange={(event) => setDraft((current) => ({ ...current, language: event.target.value }))}
+              >
+                {NOVA_LANGUAGES.map((language) => <option key={language.id} value={language.id}>{language.label}</option>)}
+              </select>
+            </div>
+            <fieldset className="settings-field backend-field">
+              <legend className="field-label">Response speed</legend>
+              <div className="backend-options">
+                {Object.values(SPEED_MODES).map((mode) => (
+                  <label key={mode.id} className={`backend-option${draft.speed === mode.id ? ' is-selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="response-speed"
+                      value={mode.id}
+                      checked={draft.speed === mode.id}
+                      onChange={() => setDraft((current) => ({ ...current, speed: mode.id }))}
+                    />
+                    <span><strong>{mode.label}</strong></span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <div className="settings-field">
               <label className="field-label" htmlFor="nova-voice">{APP_NAME} Voice (Kokoro AI)</label>
               <select
@@ -545,6 +729,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 <select
                   id="nova-browser-voice"
                   className="settings-select browser-voice-select"
+                  size={8}
                   value={selectedKey}
                   disabled={!voiceCount}
                   onChange={(event) => {
@@ -554,24 +739,24 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                 >
                   <option value="">{voiceCount ? `Automatic — ${autoVoice?.name || 'browser default'}`
                     : speechAvailable ? "Voices are still loading — browser default" : "No voices here yet"}</option>
-                  {naturalVoices.length > 0 && (
-                    <optgroup label="Natural / Online">
-                      {naturalVoices.map((voice) => (
-                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                  {fastVoices.length > 0 && (
+                    <optgroup label="Fast">
+                      {fastVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voice.name}>{voiceListLabel(voice)}</option>
                       ))}
                     </optgroup>
                   )}
-                  {basicVoices.length > 0 && (
-                    <optgroup label="Basic system voices">
-                      {basicVoices.map((voice) => (
-                        <option key={voiceKey(voice)} value={voiceKey(voice)}>{voiceOptionLabel(voice)}</option>
+                  {normalVoices.length > 0 && (
+                    <optgroup label="Normal">
+                      {normalVoices.map((voice) => (
+                        <option key={voiceKey(voice)} value={voice.name}>{voiceListLabel(voice)}</option>
                       ))}
                     </optgroup>
                   )}
                 </select>
                 <p className="field-hint" aria-live="polite">
                   {voiceCount
-                    ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Natural / Online voices are at the top; “network” voices need a connection.`
+                    ? `${voiceCount} voice${voiceCount === 1 ? '' : 's'} to choose from. Fast voices are listed first, ⚡ marks the recommended ones, and “network” voices need a connection.`
                     : speechAvailable ? "Your voices are still loading. We can use the browser default for now."
                       : "I can’t find a voice to use in this browser."}
                 </p>
@@ -579,10 +764,25 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   {savedVoiceMissing && selectedVoice
                     ? `I can’t find your saved voice here, so I’m using ${describeVoice(selectedVoice)} for now.`
                     : selectedVoice
-                      ? `Your voice: ${describeVoice(selectedVoice)} · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
-                      : `Browser default · rate ${TTS.rate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
+                      ? `Your voice: ${describeVoice(selectedVoice)} · rate ${speechRate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`
+                      : `Browser default · rate ${speechRate}, pitch ${TTS.pitch}, volume ${TTS.volume}.`}
                 </p>
               </>}
+              <div className="settings-field">
+                <label className="field-label" htmlFor="nova-speech-rate">Speaking rate</label>
+                <p className="field-hint" aria-live="polite">Speed: {speechRate.toFixed(1)}×</p>
+                <input
+                  id="nova-speech-rate"
+                  className="speech-rate-slider"
+                  type="range"
+                  min={SPEECH_RATE.min}
+                  max={SPEECH_RATE.max}
+                  step={SPEECH_RATE.step}
+                  value={speechRate}
+                  onChange={(event) => setDraft((current) => ({ ...current, speechRate: normalizeSpeechRate(event.target.value) }))}
+                />
+                <p className="field-hint">Applies to browser voices. Kokoro sets its own pace.</p>
+              </div>
               <div className="voice-preview">
                 <button className="test-ollama-button test-voice-button" type="button" disabled={voiceTestDisabled || voiceTestPlaying} onClick={() => onTestVoice?.(draft.voiceKey, kokoroVoice(draft.kokoroVoice).id)}>Test Voice</button>
                 {voiceTestPlaying && <button className="text-button voice-test-stop" type="button" onClick={onStopVoiceTest}>Stop test</button>}
@@ -611,8 +811,30 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
               <span className="settings-switch" aria-hidden="true"><i /></span>
             </label>
 
+            <div className="startup-sound-row">
+              <label className="settings-toggle-row" htmlFor="startup-sound">
+                <span className="settings-toggle-copy">
+                  <span className="config-title">Startup sound</span>
+                  <span className="config-detail">A warm tone on your first click or tap</span>
+                </span>
+                <input
+                  id="startup-sound"
+                  className="settings-toggle-input"
+                  type="checkbox"
+                  checked={draft.startupSound}
+                  onChange={(event) => setDraft((current) => ({ ...current, startupSound: event.target.checked }))}
+                />
+                <span className="settings-switch" aria-hidden="true"><i /></span>
+              </label>
+              <button className="test-ollama-button test-voice-button" type="button" onClick={() => previewNovaStartup()}>Preview</button>
+            </div>
+
             <div className="settings-divider" />
 
+
+            <div className="settings-divider" />
+            </div>
+            <div role="tabpanel" id="settings-panel-memory" aria-labelledby="settings-tab-memory" className="settings-tab-panel" hidden={settingsTab !== 'memory'}>
             <section className="settings-memory" aria-labelledby="memory-title">
               <div className="settings-test-heading">
                 <h3 ref={memoryHeadingRef} id="memory-title" className="field-label" tabIndex={-1}>Memory</h3>
@@ -628,7 +850,7 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                   {memories.map((fact) => (
                     <li key={fact}>
                       <span>{fact}</span>
-                      <button className="text-button memory-delete" type="button" aria-label={`Delete memory: ${fact}`} onClick={() => { if (onDeleteMemory(fact)) memoryHeadingRef.current?.focus(); }}>Delete</button>
+                      <button className="text-button memory-delete" type="button" aria-label={`Delete memory: ${fact}`} onClick={() => { if (onDeleteMemory(fact)) memoryHeadingRef.current?.focus(); }}>✕</button>
                     </li>
                   ))}
                 </ul>
@@ -643,54 +865,12 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
                     <button className="text-button" type="button" onClick={() => { setConfirmClearMemory(false); memoryHeadingRef.current?.focus(); }}>Keep memories</button>
                   </>
                 ) : (
-                  <button className="test-ollama-button" type="button" disabled={!memories.length && !memoryError} onClick={() => setConfirmClearMemory(true)}>Clear all memory</button>
+                  <button className="test-ollama-button" type="button" disabled={!memories.length && !memoryError} onClick={() => setConfirmClearMemory(true)}>Clear all memories</button>
                 )}
               </div>
             </section>
 
             <div className="settings-divider" />
-
-            <div className="settings-test">
-              <div className="settings-test-heading">
-                <div>
-                  <span className="config-title">Ollama connection</span>
-                  <span className="config-detail">{connectionLabel}</span>
-                </div>
-                <button className="test-ollama-button" type="button" onClick={testOllama} disabled={testStatus === 'checking'}>
-                  {testStatus === 'checking' ? "Checking..." : 'Test Ollama'}
-                </button>
-              </div>
-              <p className={`test-result test-result-${testStatus}`} role="status" aria-live="polite">
-                <i />
-                {testMessage || "Let’s check that Ollama and your chosen model are ready."}
-              </p>
-            </div>
-
-            <div className="settings-divider" />
-
-            <div className="settings-field">
-              <span className="field-label">Offline copy <span>OPTIONAL</span></span>
-              {standalone ? (
-                <p className="field-hint">
-                  You’re already using the single-file copy, so there’s nothing else to download.
-                  If Ollama won’t connect, the connection help above can walk you through its CORS settings.
-                </p>
-              ) : (
-                <>
-                  <button
-                    className="standalone-button"
-                    type="button"
-                    onClick={downloadStandalone}
-                    disabled={downloadStatus === 'working'}
-                  >
-                    {downloadStatus === 'working' ? "Getting it ready..." : `Download ${STANDALONE_FILENAME}`}
-                  </button>
-                  <p className={`field-hint ${downloadStatus === 'error' ? 'field-hint-error' : ''}`} role="status" aria-live="polite">
-                    {downloadMessage
-                      || "Keep a copy on your computer with no build step. Open it in Chrome to connect to Ollama directly."}
-                  </p>
-                </>
-              )}
             </div>
           </div>
 
@@ -707,15 +887,31 @@ export function SettingsPanel({ settings, voices, connection, modelAvailable, st
 function App() {
   const [stage, setStage] = useState('ready');
   const [connection, setConnection] = useState('checking');
+  // Set when a Gemini reply fails, cleared by the next successful one. Drives the status chip.
+  const [geminiFailed, setGeminiFailed] = useState(false);
+  // The Gemini model that is answering (shown under the GEMINI badge).
+  const [geminiModel, setGeminiModel] = useState(() => activeGeminiModel());
   const [modelAvailable, setModelAvailable] = useState(null);
   const [settings, setSettings] = useState(() => ({
     model: readSetting('nova.ollama.model', OLLAMA_MODEL) || OLLAMA_MODEL,
     ollamaUrl: readSetting('nova.ollama.url', defaultOllamaUrl()),
-    voiceKey: readSetting(TTS_VOICE_KEY),
+    backend: normalizeBackend(readSetting(BACKEND_STORAGE_KEY, DEFAULT_BACKEND)),
+    geminiKey: readSetting(GEMINI_KEY_STORAGE),
+    voiceKey: readSetting(VOICE_NAME_KEY) || readSetting(TTS_VOICE_KEY),
+    speechRate: normalizeSpeechRate(readSetting(SPEECH_RATE_KEY, String(SPEECH_RATE.default))),
     kokoroVoice: kokoroVoice(readSetting(KOKORO_VOICE_KEY, DEFAULT_KOKORO_VOICE)).id,
     showTranscript: readSetting('nova.transcript.visible', 'false') === 'true',
+    language: normalizeLanguage(readSetting(LANGUAGE_STORAGE_KEY, 'en')),
+    speed: normalizeSpeed(readSetting(SPEED_STORAGE_KEY, DEFAULT_SPEED)),
+    startupSound: startupSoundEnabled(readSetting(STARTUP_SOUND_KEY, 'true')),
   }));
+  // Read by the speech recognizer at each start, so it always uses the latest saved language.
+  const languageRef = useRef(settings.language);
+  // Read by every browser utterance, so the saved rate applies to each reply.
+  const speechRateRef = useRef(settings.speechRate);
   const [avatar, setAvatar] = useState(readAvatar);
+  // NOVA's startup sound plays on the first click or tap of a session.
+  useEffect(() => { armNovaStartup(); }, []);
   // Switching appearance leaves the live recognizer, request and audio refs intact.
   // The shell paints immediately; the document attribute also themes the body blobs.
   useEffect(() => {
@@ -810,6 +1006,8 @@ function App() {
   const avatarContainerRef = useRef(null);
   const conversationRef = useRef([]);
   const memoriesRef = useRef(memoryState.facts);
+  // The last memory NOVA saved this session, so a bare "forget that" has something to point at.
+  const lastSavedMemoryRef = useRef('');
 
   const SpeechRecognition = typeof window !== 'undefined'
     ? (window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -953,6 +1151,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // Gemini is a cloud service: there is no local server to probe, so it never reads as offline.
+    if (settings.backend === 'gemini') {
+      setConnection('connected');
+      setModelAvailable(true);
+      return undefined;
+    }
     const controller = new AbortController();
     setConnection('checking');
     setModelAvailable(null);
@@ -970,7 +1174,7 @@ function App() {
     };
     checkOllama();
     return () => controller.abort();
-  }, [settings.model, settings.ollamaUrl]);
+  }, [settings.model, settings.ollamaUrl, settings.backend]);
 
   // Memory is independent of the settings draft. Persist first, then publish it;
   // never claim a fact was saved/deleted when localStorage rejected the write.
@@ -1056,6 +1260,8 @@ function App() {
 
     let speech = null;
     let stream = null;
+    // In Gemini mode replies come only from Gemini. Ollama is never used as a fallback.
+    const useGemini = settings.backend === 'gemini';
     try {
       if (closeRequest) {
         closeBrowse();
@@ -1086,15 +1292,22 @@ function App() {
         } else if (intent.type === 'remember') {
           const result = rememberFact(currentMemory.facts, intent.fact);
           if (result.status === 'error') answer = result.error;
-          else if (result.status === 'unchanged') answer = `I’ve got that in mind already: ${describeMemoryFact(intent.fact)}.`;
-          else {
+          else if (result.status === 'unchanged') {
+            lastSavedMemoryRef.current = intent.fact;
+            answer = `I’ve got that in mind already: ${describeMemoryFact(intent.fact)}.`;
+          } else {
             const saved = commitMemories(result.facts, false);
+            if (saved.ok) lastSavedMemoryRef.current = result.fact;
             answer = saved.ok
               ? `Got it! ${result.status === 'updated' ? 'I’ll remember the update' : 'I’ll keep that in mind'}: ${describeMemoryFact(result.fact)}.`
               : saved.error;
           }
         } else if (intent.type === 'forget') {
-          const result = forgetFact(currentMemory.facts, intent.query);
+          // "forget that" with no subject means the memory saved most recently, if it still exists.
+          const last = lastSavedMemoryRef.current;
+          const subject = !intent.query && last && currentMemory.facts.includes(last) ? last : intent.query;
+          const result = forgetFact(currentMemory.facts, subject);
+          if (result.status === 'removed') lastSavedMemoryRef.current = '';
           if (result.status === 'error') answer = result.error;
           else if (result.status === 'missing') answer = `I couldn’t find a saved memory about “${result.query}”. We can take a look together in Settings.`;
           else if (result.status === 'ambiguous') answer = `I found a few memories about “${result.query}”. Which one would you like me to forget?`;
@@ -1111,12 +1324,43 @@ function App() {
           { role: 'user', content: prompt },
           { role: 'assistant', content: answer },
         ].slice(-6);
-      } else if (!intent) {
+      } else if (!intent && useGemini) {
+        const conversation = conversationRef.current.slice(-6);
+        const systemText = [SYSTEM_PROMPT, languagePrompt(settings.language, prompt), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n');
+        const turns = [...conversation, { role: 'user', content: prompt }];
+        const key = settings.geminiKey.trim();
+        if (!key) throw new Error(GEMINI_REPLY_ERRORS.noKey);
+        const speedSettings = speedMode(settings.speed);
+        // Each piece of the reply is spoken as it arrives, in both modes.
+        const replyStream = createSpeechStream();
+        stream = replyStream;
+        const startSpeaking = () => {
+          if (!speech && replyStream.pending && !controller.signal.aborted) speech = speakRef.current?.(replyStream) ?? null;
+        };
+        const reply = await requestGeminiReply(key, systemText, turns, controller.signal, {
+          speed: settings.speed,
+          onDelta: speedSettings.earlySpeech ? (delta) => { replyStream.push(delta); startSpeaking(); } : undefined,
+        });
+        if (controller.signal.aborted) { replyStream.cancel(); return; }
+        if (!reply.answer) throw new Error(GEMINI_REPLY_ERRORS.noReply);
+        setGeminiFailed(false);
+        setGeminiModel(reply.model);
+        if (!speedSettings.earlySpeech) replyStream.push(reply.answer);
+        replyStream.end({ cutOff: reply.finishReason === 'MAX_TOKENS' });
+        answer = replyStream.text || reply.answer;
+        startSpeaking();
+        conversationRef.current = [
+          ...conversation,
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: answer },
+        ].slice(-6);
+      }
+      if (!browseQuery && !intent && !useGemini) {
         const conversation = conversationRef.current.slice(-6);
         const messages = [
           {
             role: 'system',
-            content: `${SYSTEM_PROMPT}\n\n${memoryPrompt(currentMemory.facts)}`,
+            content: [SYSTEM_PROMPT, languagePrompt(settings.language, prompt), memoryPrompt(currentMemory.facts)].filter(Boolean).join('\n\n'),
           },
           ...conversation,
           { role: 'user', content: prompt },
@@ -1125,7 +1369,7 @@ function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
-          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true, ...OLLAMA_SAMPLING }),
+          body: JSON.stringify({ model: settings.model || OLLAMA_MODEL, messages, stream: true, ...ollamaSampling(settings.speed) }),
         });
         if (!result.ok) {
           const payload = await result.json().catch(() => ({}));
@@ -1139,7 +1383,7 @@ function App() {
         };
         const reply = await readChatCompletionStream(result, {
           onDelta: (delta) => replyStream.push(delta),
-          onChunk: () => { replyStream.flush(); startSpeaking(); },
+          onChunk: () => { replyStream.flush(); if (speedMode(settings.speed).earlySpeech) startSpeaking(); },
         });
         if (controller.signal.aborted) { replyStream.cancel(); return; }
         // At the token limit the last sentence is unfinished: it isn't spoken or kept.
@@ -1165,6 +1409,14 @@ function App() {
       if (stream && !stream.ended) stream.cancel();
       if (controller.signal.aborted) return;
       dismissRichResponse(true);
+      // A Gemini failure says nothing about the local Ollama server, so don't probe it.
+      if (useGemini) {
+        console.error('[Gemini] reply failed', error);
+        setGeminiFailed(true);
+        setStage('ready');
+        notify(friendlyGeminiError(error));
+        return;
+      }
       try {
         const models = await fetchOllamaModels(ollamaEndpoint(settings), controller.signal);
         setConnection('connected');
@@ -1239,11 +1491,14 @@ function App() {
         if (text === null) { finishSpeech(true, true); return; }
 
         const utterance = new SpeechSynthesisUtterance(text);
-        if (voice) {
-          utterance.voice = voice;
-          if (voice.lang) utterance.lang = voice.lang;
+        // Bangla text uses a Bangla voice when one is installed.
+        const banglaVoice = BANGLA_TEXT.test(text) ? voices.find(isBanglaVoice) : null;
+        const utteranceVoice = banglaVoice || voice;
+        if (utteranceVoice) {
+          utterance.voice = utteranceVoice;
+          if (utteranceVoice.lang) utterance.lang = utteranceVoice.lang;
         }
-        utterance.rate = TTS.rate;
+        utterance.rate = speechRateRef.current;
         utterance.pitch = TTS.pitch;
         utterance.volume = TTS.volume;
         current = utterance;
@@ -1407,7 +1662,9 @@ function App() {
     const engine = kokoroRef.current;
     const audio = kokoroAudioRef.current;
     const browserVoice = typeof window.speechSynthesis?.speak === 'function' && typeof SpeechSynthesisUtterance === 'function';
-    if (engine && audio && (engine.state === 'ready' || (engine.state === 'loading' && (preview || !browserVoice)))) {
+    // Kokoro can't read Bangla, so a Bangla reply goes to the browser's Bangla voice.
+    const banglaReply = BANGLA_TEXT.test(typeof input === 'string' ? input : input.text);
+    if (!banglaReply && engine && audio && (engine.state === 'ready' || (engine.state === 'loading' && (preview || !browserVoice)))) {
       return speakKokoro(source, engine, audio, kokoroVoiceId, selectedVoiceKey, preview);
     }
     return speakBrowser(source, selectedVoiceKey, preview);
@@ -1484,6 +1741,7 @@ function App() {
   useEffect(() => {
     const listener = createVoiceListener({
       Recognition: SpeechRecognition,
+      language: () => LANGUAGE_RECOGNITION[languageRef.current] || 'en-US',
       onStandbyChange: setWakeStandby,
       onSpeechDetected: (mode) => {
         dismissRichResponse();
@@ -1629,8 +1887,13 @@ function App() {
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [settingsOpen, stage, dismissRichResponse, canInterrupt]);
 
+  // Which backend replies come from, or OFFLINE when the chosen one can't answer right now.
+  const backendChip = settings.backend === 'gemini'
+    ? (!settings.geminiKey || geminiFailed ? 'offline' : 'gemini')
+    : (connection === 'offline' ? 'offline' : 'local');
+
   const statusText = stage === 'ready' && connection === 'checking'
-    ? STATUS_TEXT.starting : STATUS_TEXT[stage];
+    ? STATUS_TEXT.starting : stage === 'speaking' ? 'Speaking…' : STATUS_TEXT[stage];
 
   const avatarActivity = { listening: 'is-listening', thinking: 'is-thinking', speaking: 'is-speaking' }[stage] || '';
   const avatarMood = stage === 'ready'
@@ -1641,21 +1904,44 @@ function App() {
     const updatedSettings = {
       model: nextSettings.model.trim() || OLLAMA_MODEL,
       ollamaUrl: trimTrailingSlashes(nextSettings.ollamaUrl || ''),
+      backend: normalizeBackend(nextSettings.backend),
+      geminiKey: (nextSettings.geminiKey || '').trim(),
       voiceKey: (nextSettings.voiceKey || '').trim(),
       kokoroVoice: kokoroVoice(nextSettings.kokoroVoice).id,
+      language: normalizeLanguage(nextSettings.language),
+      speechRate: normalizeSpeechRate(nextSettings.speechRate),
+      speed: normalizeSpeed(nextSettings.speed),
       showTranscript: Boolean(nextSettings.showTranscript),
+      startupSound: Boolean(nextSettings.startupSound),
     };
     try {
       window.localStorage.setItem('nova.ollama.model', updatedSettings.model);
       window.localStorage.setItem('nova.ollama.url', updatedSettings.ollamaUrl);
+      window.localStorage.setItem(BACKEND_STORAGE_KEY, updatedSettings.backend);
+      window.localStorage.setItem(GEMINI_KEY_STORAGE, updatedSettings.geminiKey);
       window.localStorage.setItem(TTS_VOICE_KEY, updatedSettings.voiceKey);
       window.localStorage.setItem(KOKORO_VOICE_KEY, updatedSettings.kokoroVoice);
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, updatedSettings.language);
+      window.localStorage.setItem(SPEED_STORAGE_KEY, updatedSettings.speed);
+      window.localStorage.setItem(VOICE_NAME_KEY, updatedSettings.voiceKey);
+      window.localStorage.setItem(SPEECH_RATE_KEY, String(updatedSettings.speechRate));
       window.localStorage.setItem('nova.transcript.visible', String(updatedSettings.showTranscript));
+      window.localStorage.setItem(STARTUP_SOUND_KEY, String(updatedSettings.startupSound));
     } catch {
       notify("I couldn’t save your settings just now. Check that browser storage is allowed, then try again.");
       return;
     }
     stopVoiceTest();
+    // A newly saved key starts the model choice again and looks up the best available model once.
+    if (updatedSettings.geminiKey && updatedSettings.geminiKey !== settings.geminiKey) {
+      resetGeminiModelMemory();
+      setGeminiModel(null);
+      probeGeminiModel(updatedSettings.geminiKey)
+        .then((model) => { if (model) setGeminiModel(model); })
+        .catch((error) => console.error('[Gemini] model probe failed', error));
+    }
+    languageRef.current = updatedSettings.language;
+    speechRateRef.current = updatedSettings.speechRate;
     setSettings(updatedSettings);
     setSettingsOpen(false);
     notify("All set! Your settings are saved.");
@@ -1681,7 +1967,7 @@ function App() {
           <button className="icon-button theme-toggle" type="button" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'light'} onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}>
             {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           </button>
-          <button ref={settingsTriggerRef} className="icon-button settings-trigger" type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
+          <button ref={settingsTriggerRef} className={`icon-button settings-trigger${settingsOpen ? ' is-open' : ''}`} type="button" aria-label="Open settings" aria-controls="nova-settings-panel" aria-expanded={settingsOpen} onClick={() => { dismissRichResponse(true); setSettingsOpen(true); }}>
             <SettingsIcon />
           </button>
         </div>
@@ -1733,6 +2019,21 @@ function App() {
           </div>
         )}
         {wakeMessage && <p className="wake-message" role="status" aria-live="polite">{wakeMessage}</p>}
+        <span
+          className={`backend-chip backend-chip-${backendChip}`}
+          role="status"
+          title={backendChip === 'gemini' ? 'Replies come from Google Gemini (change in Settings)'
+            : backendChip === 'local' ? 'Replies come from Ollama on this computer (change in Settings)'
+              : 'The chosen AI backend is not reachable right now'}
+        >
+          <span className="backend-chip-row">
+            <span className="backend-chip-dot" aria-hidden="true" />
+            {BACKEND_CHIP_LABELS[backendChip]}
+            {backendChip !== 'offline' && <SpeedIcon mode={settings.speed} />}
+          </span>
+          {backendChip === 'gemini' && geminiModel && <small className="backend-chip-model">{geminiModelLabel(geminiModel)}</small>}
+        </span>
+        <AvatarSwitcher avatar={avatar} onChange={selectAvatar} />
         <div className="mic-control-wrap">
           <div className={`mic-halo ${stage === 'listening' ? 'mic-halo-active' : ''}`} />
           <button
@@ -1749,7 +2050,6 @@ function App() {
             <span className="mic-button-sheen" />
           </button>
         </div>
-        <AvatarSwitcher avatar={avatar} onChange={selectAvatar} />
       </footer>
 
       {browse && <BrowsePanel browse={browse} onClose={closeBrowse} onNavigate={goBrowse} onBack={() => stepBrowse(-1)} onForward={() => stepBrowse(1)} onRefresh={refreshBrowse} />}

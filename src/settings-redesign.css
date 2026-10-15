@@ -1,0 +1,262 @@
+/* Settings redesign: settings trigger, 320px panel, tabs, pill backend choice,
+   dark inputs, and the memory chips. Visual only; no behavior changes. */
+
+/* Top-right button colors. The app already sets data-avatar and data-theme on
+   <html>, so these variables follow every avatar or theme switch automatically. */
+:root {
+  --btn-bg: rgba(249, 115, 22, 0.15);
+  --btn-border: rgba(249, 115, 22, 0.35);
+  --btn-icon: #f97316;
+  --btn-hover-bg: rgba(249, 115, 22, 0.28);
+}
+:root[data-avatar='bot'] {
+  --btn-bg: rgba(59, 130, 246, 0.15);
+  --btn-border: rgba(59, 130, 246, 0.35);
+  --btn-icon: #60a5fa;
+  --btn-hover-bg: rgba(59, 130, 246, 0.28);
+}
+:root[data-theme='light'] {
+  --btn-bg: rgba(0, 0, 0, 0.08);
+  --btn-border: rgba(0, 0, 0, 0.15);
+  --btn-icon: #1a1208;
+  --btn-hover-bg: rgba(0, 0, 0, 0.14);
+}
+
+/* Top-right controls: settings and theme toggle share one fixed flex row. */
+.topbar-actions {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 50;
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  padding: 0;
+}
+/* Keep the row inside the top bar when the browse sheet shortens it. */
+.has-browse-panel .topbar-actions {
+  top: 2px;
+}
+.icon-button.settings-trigger,
+.icon-button.theme-toggle {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--btn-border);
+  border-radius: 50%;
+  background: var(--btn-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: var(--btn-icon);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  cursor: pointer;
+  transition: all 200ms ease;
+}
+.icon-button.settings-trigger:hover,
+.icon-button.theme-toggle:hover {
+  background: var(--btn-hover-bg);
+  color: var(--btn-icon);
+  box-shadow: none;
+  transform: scale(1.05);
+}
+.icon-button.settings-trigger svg,
+.icon-button.theme-toggle svg {
+  width: 20px;
+  height: 20px;
+  color: var(--btn-icon);
+  stroke: var(--btn-icon);
+}
+.icon-button.settings-trigger svg *,
+.icon-button.theme-toggle svg * {
+  stroke: var(--btn-icon);
+}
+.icon-button.settings-trigger svg {
+  transition: transform 200ms ease;
+}
+.icon-button.settings-trigger.is-open {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+.icon-button.settings-trigger.is-open svg {
+  transform: rotate(45deg);
+}
+
+/* Panel: 320px wide, header and footer share a 20px inset. */
+.settings-panel {
+  width: min(320px, 100vw);
+  padding: 0;
+}
+.settings-panel .settings-panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--card-line);
+}
+.settings-panel .settings-panel-footer {
+  padding: 16px 20px calc(16px + env(safe-area-inset-bottom));
+}
+.settings-panel .settings-panel-content {
+  padding: 0;
+}
+
+/* Tabs: three equal columns, the active one underlined in the accent color. */
+.settings-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--card-line);
+}
+.settings-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 4px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--on-card);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.45;
+  cursor: pointer;
+  transition: opacity 200ms ease;
+}
+.settings-tab[aria-selected='true'] {
+  opacity: 1;
+  border-bottom-color: var(--accent);
+}
+.settings-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.settings-tab-panel {
+  padding: 20px;
+}
+.settings-panel .settings-tab-panel > * + * {
+  margin-top: 16px;
+}
+.settings-panel .settings-tab-panel > .settings-field + .settings-field {
+  margin-top: 16px;
+}
+
+/* Labels and inputs. */
+.settings-panel .field-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+.settings-panel .settings-input,
+.settings-panel .settings-select {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+}
+.settings-panel .settings-input:focus,
+.settings-panel .settings-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+  outline: none;
+}
+
+/* AI tab: LOCAL and GEMINI as two large pills. Radios stay focusable and keyboard-operable. */
+.settings-panel .backend-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.settings-panel .backend-option {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--on-card);
+  cursor: pointer;
+}
+.settings-panel .backend-option.is-selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.settings-panel .backend-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.settings-panel .backend-option:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.settings-panel .backend-option > span {
+  display: flex;
+  justify-content: center;
+}
+.settings-panel .backend-option strong {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Memory tab: each memory is a deletable chip with a ✕ button. */
+.settings-panel .memory-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: none;
+  margin: 0;
+  overflow: visible;
+}
+.settings-panel .memory-list li {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 6px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+.settings-panel .memory-list li > span {
+  font-size: 12px;
+}
+.settings-panel .memory-delete {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+  border-radius: 999px;
+}
+.settings-panel .memory-actions > .test-ollama-button {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+/* Browser voice list: a scrollable listbox, not a single-line dropdown. */
+.settings-panel .browser-voice-select[size] {
+  height: auto;
+  padding: 6px;
+}
+.settings-panel .browser-voice-select option {
+  padding: 4px 6px;
+}
+.settings-panel .speech-rate-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* Startup sound toggle with its Preview button. */
+.startup-sound-row { display: flex; align-items: center; gap: 12px; }
+.startup-sound-row .settings-toggle-row { flex: 1; }

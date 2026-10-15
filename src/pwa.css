@@ -3,14 +3,14 @@
    take over where appropriate; this only refines tall, narrow windows. */
 @media (max-width: 440px) and (min-height: 580px) {
   .app-shell:not(.has-browse-panel) {
-    --topbar-height: 54px;
-    --dock-height: 132px;
+    --topbar-height: 68px;
+    --dock-height: 256px;
     padding-right: 16px;
     padding-left: 16px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
   .app-shell:not(.has-browse-panel) .brand-name { font-size: 15px; letter-spacing: .2em; }
-  .app-shell:not(.has-browse-panel) .topbar-actions { gap: 6px; }
+  .app-shell:not(.has-browse-panel) .topbar-actions { gap: 12px; }
   .app-shell:not(.has-browse-panel) .topbar-actions .icon-button { width: 36px; height: 36px; }
   .app-shell:not(.has-browse-panel) .avatar-container { --avatar-size: 152px; height: 190px; }
   .app-shell:not(.has-browse-panel) .avatar-container-bot { height: calc(var(--avatar-size) * 1.52); }
@@ -24,19 +24,19 @@
     text-wrap: balance;
   }
   .app-shell:not(.has-browse-panel) .avatar-offline-display { max-width: 100%; padding: 10px 12px; }
-  .app-shell:not(.has-browse-panel) .response-transcript { width: 100%; max-width: 100%; }
-  .app-shell:not(.has-browse-panel) .control-dock { gap: 4px; padding-bottom: 26px; }
+  .app-shell:not(.has-browse-panel) .response-transcript { width: 100%; max-width: 480px; }
+  .app-shell:not(.has-browse-panel) .control-dock { gap: 0; padding-bottom: 32px; }
   .app-shell:not(.has-browse-panel) .mic-control-wrap { width: 64px; height: 64px; flex-shrink: 0; }
   .app-shell:not(.has-browse-panel) .mic-button { width: 52px; height: 52px; }
   .app-shell:not(.has-browse-panel) .mic-halo { width: 62px; height: 62px; }
-  .app-shell:not(.has-browse-panel) .avatar-switcher { padding: 1px; }
+  .app-shell:not(.has-browse-panel) .avatar-switcher { padding: 8px 16px; }
   .app-shell:not(.has-browse-panel) .avatar-choice { width: 34px; height: 34px; padding: 4px; }
   .app-shell:not(.has-browse-panel) .avatar-choice svg { width: 23px; height: 26px; }
   /* Tooltips sit beside the compact picker, not over the microphone. */
   .app-shell:not(.has-browse-panel) .avatar-choice-name { bottom: 50%; left: calc(100% + 10px); transform: translateY(50%); }
   .app-shell:not(.has-browse-panel) .avatar-choice[data-avatar-choice='orb'] .avatar-choice-name { right: calc(100% + 10px); left: auto; }
   .settings-panel { max-width: 100%; }
-  .settings-panel-header, .settings-panel-content, .settings-panel-footer { padding-right: 16px; padding-left: 16px; }
+  .settings-panel-header, .settings-panel-content, .settings-panel-footer { padding-right: 28px; padding-left: 28px; }
   .settings-toggle-copy { min-width: 0; }
   .voice-preview, .memory-actions { flex-wrap: wrap; }
   .rich-content-panel { padding: 12px; }

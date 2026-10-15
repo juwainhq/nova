@@ -111,7 +111,15 @@ export const WAKE_GREET_MS = 700;
 // onWake is called with why: 'question' (the request came in the same breath, so the app must
 // not greet over it), 'wake' (a bare wake phrase, finalized), 'partial' (heard mid-word, and a
 // question may still follow).
-const wakePattern = new RegExp(`\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b[\\s,.!?:;—-]*`, 'i');
+// Bangla wake phrases: "এই নোভা", "হেই নোভা" and "নোভা" on its own. Bengali letters are not word
+// characters, so these use lookarounds instead of \\b. Bare "nova" is also accepted, since Bangla
+// speakers often say the English name.
+const wakePhrases = `\\bhey[\\s,]+${APP_NAME.toLowerCase()}\\b|(?:এই|হেই)[\\s,]+নোভা(?![\\u0980-\\u09FF])`;
+const wakePattern = new RegExp(`(?:${wakePhrases}|(?<![\\u0980-\\u09FF])নোভা(?![\\u0980-\\u09FF])|\\b${APP_NAME.toLowerCase()}\\b)[\\s,.!?:;—।-]*`, 'i');
+// Interrupts keep the stricter phrases: a bare name is too likely to be part of a reply NOVA is speaking.
+const interruptWakePattern = new RegExp(`(?:${wakePhrases})[\\s,.!?:;—।-]*`, 'i');
+// Any Bengali character: the reply is Bangla, so it is spoken with a Bangla voice.
+export const BANGLA_TEXT = /[\u0980-\u09FF]/;
 
 // Speech recognition hears the user's own name as ordinary English, so "my name is
 // Juwain" arrives as "join hug" and the fact is saved (or greeted) wrong. Every
@@ -130,8 +138,8 @@ export function correctTranscript(text) {
 
 // Keep the user's question, including its punctuation, but never send the wake
 // phrase or unrelated standby transcripts to Ollama.
-export function parseWakeWord(text) {
-  const match = wakePattern.exec(text || '');
+export function parseWakeWord(text, pattern = wakePattern) {
+  const match = pattern.exec(text || '');
   return match ? { question: text.slice(match.index + match[0].length).trim() } : null;
 }
 
@@ -150,7 +158,7 @@ export function isSameSpeech(left, right) {
 export function parseInterrupt(transcript, { final = false, spoken = '' } = {}) {
   const heard = spokenWords(transcript).trim();
   if (!heard) return null;
-  const wake = parseWakeWord(transcript);
+  const wake = parseWakeWord(transcript, interruptWakePattern);
   const command = wake ? WAKE_WORD : /(?:^|\s)(stop|wait)(?:\s+(?:it|please|nova|now))*$/.exec(heard)?.[1];
   if (!command) return null;
   const alone = heard === WAKE_WORD || /^(?:(?:hey\s+)?nova\s+)?(?:(?:stop|wait)\s*)+(?:\s*(?:it|please|nova|now))*$/.test(heard);
@@ -180,6 +188,8 @@ export function createVoiceListener({
   onError = () => {},
   timers = globalThis,
   now = () => Date.now(),
+  // The recognition language is read before each start, so a new Language setting applies next time.
+  language = () => 'en-US',
 }) {
   let recognition;
   let wakeSupported = false;
@@ -246,6 +256,11 @@ export function createVoiceListener({
     try {
       if (wakeSupported) recognition.continuous = true;
       recognition.interimResults = true;
+      try {
+        recognition.lang = language();
+      } catch {
+        // Keep the language already set on the recognizer.
+      }
       recognition.start();
     } catch (error) {
       const failedMode = activeMode;
@@ -522,4 +537,46 @@ export function createWakeChime(AudioContext) {
       try { context?.close()?.catch(() => {}); } catch { /* Audio is optional. */ }
     },
   };
+}
+
+// Speaking rate for browser voices (Kokoro sets its own pace) and the saved voice name.
+export const SPEECH_RATE_KEY = 'nova_speech_rate';
+export const VOICE_NAME_KEY = 'nova_voice_name';
+export const SPEECH_RATE = Object.freeze({ min: 0.8, max: 1.6, step: 0.1, default: 1 });
+
+export function normalizeSpeechRate(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return SPEECH_RATE.default;
+  const rounded = Math.round(number * 10) / 10;
+  return Math.min(SPEECH_RATE.max, Math.max(SPEECH_RATE.min, rounded));
+}
+
+// Voices recommended for speed and clarity. Any name containing "Online" or "Natural" also counts.
+const RECOMMENDED_VOICE_NAMES = [
+  'Google UK English Female',
+  'Google US English',
+  'Microsoft Aria Online (Natural)',
+  'Microsoft Jenny Online (Natural)',
+];
+export function isFastVoice(voice) {
+  const name = voice?.name || '';
+  return RECOMMENDED_VOICE_NAMES.some((known) => name.includes(known)) || /\b(?:Online|Natural)\b/i.test(name);
+}
+
+export function isBanglaVoice(voice) {
+  return /^bn(?:-|_|$)/i.test(voice?.lang || '');
+}
+
+// Every voice the browser offers, in two speed tiers.
+export function voiceTiers(voices) {
+  const list = (voices || []).filter(Boolean);
+  return { fast: list.filter(isFastVoice), normal: list.filter((voice) => !isFastVoice(voice)) };
+}
+
+// "⚡ Microsoft Aria Online (Natural) · en-US · offline" and "🇧🇩 Bangla · …" for Bangla voices.
+export function voiceListLabel(voice) {
+  const parts = [`${isFastVoice(voice) ? '⚡ ' : ''}${voice.name}`, voice.lang || 'unknown'];
+  if (isBanglaVoice(voice)) parts.push('🇧🇩 Bangla');
+  parts.push(voice.localService ? 'offline' : 'network');
+  return parts.join(' · ');
 }
